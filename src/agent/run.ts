@@ -187,7 +187,11 @@ export async function runTurn(
       const slip =
         detectToolDenial(text) ??
         (deniedCalls === 0 ? detectPermissionRequest(text) : null) ??
-        (executedCalls === 0 ? detectFabrication(text) : null);
+        (executedCalls === 0 ? detectFabrication(text) : null) ??
+        // Held back after a denial for the same reason as the permission
+        // check: "I'll wait to hear how you want to proceed" is the correct
+        // way to end a turn that was refused, not a slip.
+        (deniedCalls === 0 ? detectAbandonedTurn(text) : null);
       if (slip && protocolCorrections < MAX_PROTOCOL_CORRECTIONS) {
         protocolCorrections++;
         events.onNotice?.(`Protocol slip — ${slip}. Asking for a retry.`);
@@ -497,6 +501,39 @@ function detectPermissionRequest(raw: string): string | null {
     return "you asked the user for permission instead of emitting the tool call — OnFlip handles approval itself, so nothing ran and the turn ended";
   }
   return null;
+}
+
+/**
+ * The model announcing its next move instead of making it.
+ *
+ * A turn ends the moment a reply carries no tool call, so "I'll restore the
+ * file and rebuild" is not a plan — it is the session stopping with the work
+ * half done, and the user typing "continue" to do by hand what the loop should
+ * have done itself.
+ *
+ * Neither of the other detectors sees it. Nothing false was claimed, so it is
+ * not fabrication; nothing was asked for, so it is not a permission slip. And
+ * it happens *after* tools have run, which is precisely where fabrication
+ * detection stops looking.
+ */
+function detectAbandonedTurn(raw: string): string | null {
+  const text = straighten(raw).trim();
+  // A closing report may reasonably mention what happens next. This is aimed
+  // at the one-line "here is what I am about to do" that ends a working turn.
+  if (!text || text.length > 400) return null;
+
+  // Handing the work back is a legitimate way to finish.
+  if (/\bi'?ll (leave|let you|let the|need you|wait|stop|hold|defer)\b/i.test(text)) return null;
+  if (/\byou'?ll need to\b|\bover to you\b/i.test(text)) return null;
+
+  const announcesNextStep =
+    /\b(i'?ll|i will|i'?m going to|i am going to|let me|next,? i'?ll)\b[^.]{0,40}\b(restore|rebuild|re-?read|read|run|fix|patch|apply|edit|update|write|create|add|remove|delete|check|verify|inspect|search|look|build|test|install|revert|continue|implement|refactor|rename|move|open|list|grep|start|try)\b/i;
+  if (!announcesNextStep.test(text)) return null;
+
+  return (
+    "you ended the turn by saying what you would do next instead of doing it — " +
+    "a reply with no tool call *is* the end of the turn, so emit the call now rather than describing it"
+  );
 }
 
 function detectFabrication(raw: string): string | null {
