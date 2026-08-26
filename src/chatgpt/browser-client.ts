@@ -1222,41 +1222,11 @@ export function browserIsOpen(): boolean {
  * requires it and cookies alone are not enough.
  */
 export async function fetchModelsViaBrowser(cookies: SessionCookie[]): Promise<Record<string, unknown>> {
-  const p = await ensurePage(cookies);
-
-  if (!/chatgpt\.com/.test(p.url())) {
-    await p.goto(`${CHAT_URL}/`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  }
-  await assertLoggedIn(p);
-
-  const result = await p.evaluate(async () => {
-    const fail = (stage: string, detail: string) => ({ __error: `${stage}: ${detail}` });
-    let token = "";
-    try {
-      const sessionRes = await fetch("/api/auth/session", { credentials: "include" });
-      if (!sessionRes.ok) return fail("session", `HTTP ${sessionRes.status}`);
-      const session = (await sessionRes.json()) as { accessToken?: string };
-      token = session.accessToken ?? "";
-    } catch (e) {
-      return fail("session", String(e));
-    }
-    if (!token) return { __error: SIGNED_OUT_MESSAGE };
-
-    try {
-      const res = await fetch("/backend-api/models", {
-        headers: { authorization: `Bearer ${token}` },
-        credentials: "include",
-      });
-      if (!res.ok) return fail("models", `HTTP ${res.status}`);
-      return (await res.json()) as Record<string, unknown>;
-    } catch (e) {
-      return fail("models", String(e));
-    }
-  });
-
-  const error = (result as { __error?: string }).__error;
-  if (error) throw new ChatGPTBrowserError(error);
-  return result as Record<string, unknown>;
+  // This used to be its own copy of the session-token dance, complete with the
+  // same reference to a Node constant from inside the page. One request path,
+  // one place for it to be wrong.
+  const p = await pageOnChatGpt(cookies);
+  return (await backendApi(p, "/backend-api/models")) as Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -1433,6 +1403,10 @@ export async function openConversation(
   // The retry therefore throws the browser away and starts again, which is
   // slow enough to be worth avoiding and reliable enough to be worth doing.
   let p = await ensurePage(cookies);
+  // Spend a throwaway page on establishing the session first. A page that
+  // navigates before the app has one bounces straight back to a new chat,
+  // which is indistinguishable from the conversation not existing.
+  const signedIn = await warmSession();
   let turnCount = 0;
   let landed = false;
   for (let attempt = 0; attempt < 2 && !landed; attempt++) {
@@ -1465,9 +1439,20 @@ export async function openConversation(
 
   if (!landed) {
     inConversation = false;
-    logger.warn("browser", "conversation would not open", { id, url: p.url(), turns: turnCount });
+    logger.warn("browser", "conversation would not open", {
+      id,
+      url: p.url(),
+      turns: turnCount,
+      signedIn,
+    });
+    // The two things this failure can mean need different things done about
+    // them, and telling someone their conversation may have been deleted when
+    // the session simply was not ready sends them to look in the one place
+    // the answer is not.
     throw new ChatGPTBrowserError(
-      "ChatGPT would not open that conversation — the page kept returning to a new chat. It may have been deleted, or it may belong to another account."
+      signedIn
+        ? "ChatGPT would not open that conversation — the page kept returning to a new chat. It may have been deleted, or it may belong to another account."
+        : "ChatGPT would not open that conversation: the browser session was not ready. Try again — if it keeps happening, `onflip login` picks up a fresh session."
     );
   }
   // The role is read off each node directly. An earlier version collected them
@@ -1523,6 +1508,82 @@ export function getActiveProject(): RemoteProject | null {
 }
 
 /**
+ * The page's own access token, waited for rather than sampled once.
+ *
+ * `/api/auth/session` answers 200 with an empty body while the app is still
+ * settling, and an empty body is not the same thing as being signed out.
+ * Measured on a working account: the first call or two after a browser launch
+ * come back with nothing and the one after that carries a token — which is
+ * why `/chats` needed two or three goes before it worked, and why restarting
+ * the CLI appeared to fix it.
+ *
+ * Runs from Node so it can wait and retry. Reading it inside the page, as the
+ * requests below used to, means one sample and no second chance.
+ *
+ * Exported for tests: the retry is the whole fix, and it only shows itself
+ * against a page that answers empty before it answers properly.
+ */
+export async function pageAccessToken(p: Page, attempts = 5): Promise<string> {
+  let detail = "";
+  for (let attempt = 1; attempt <= attempts; attempt++) {
+    const result = (await p.evaluate(async () => {
+      try {
+        const res = await fetch("/api/auth/session", { credentials: "include" });
+        if (!res.ok) return { token: "", detail: `HTTP ${res.status}` };
+        const json = (await res.json()) as { accessToken?: string };
+        return { token: json.accessToken ?? "", detail: json.accessToken ? "" : "no token in the session" };
+      } catch (e) {
+        return { token: "", detail: String(e).slice(0, 140) };
+      }
+    })) as { token: string; detail: string };
+
+    if (result.token) {
+      if (attempt > 1) logger.debug("browser", "access token arrived late", { attempt });
+      return result.token;
+    }
+    detail = result.detail;
+    if (attempt === attempts) break;
+
+    await p.waitForTimeout(400 * attempt);
+    // Two different failures need two different remedies: a slow start wants
+    // the wait above, a page that loaded before its cookies were in place
+    // wants a reload. Do one of each rather than guessing which it is.
+    if (attempt === 2) {
+      await p.reload({ waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
+      await assertLoggedIn(p).catch(() => {});
+    }
+  }
+  logger.warn("browser", "the page never produced an access token", { attempts, detail });
+  return "";
+}
+
+/**
+ * Establish the session on a throwaway page.
+ *
+ * A conversation only opens on a page's *first* navigation, so the session
+ * cannot be checked on that page beforehand — checking it means navigating,
+ * and that navigation is the one good one. A second page in the same context
+ * shares the cookies and warms the same session, leaving the real page
+ * pristine for the conversation itself.
+ */
+async function warmSession(): Promise<boolean> {
+  if (!context) return false;
+  const scratch = await context.newPage().catch(() => null);
+  if (!scratch) return false;
+  try {
+    await scratch.goto(`${CHAT_URL}/`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    return Boolean(await pageAccessToken(scratch));
+  } catch (e) {
+    logger.debug("browser", "could not warm the session", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  } finally {
+    await scratch.close().catch(() => {});
+  }
+}
+
+/**
  * Run a `/backend-api` request from inside the logged-in page.
  *
  * The page already holds the session cookie and Cloudflare clearance, so the
@@ -1533,23 +1594,21 @@ async function backendApi(
   path: string,
   init?: { method?: string; body?: unknown }
 ): Promise<unknown> {
+  // Fetched out here, where an empty answer can be waited out. It also has to
+  // be: the page has no access to this module's constants, so the signed-out
+  // message it used to return by name was a ReferenceError that masked every
+  // real diagnosis with a stack trace.
+  const token = await pageAccessToken(p);
+  if (!token) throw new ChatGPTBrowserError(SIGNED_OUT_MESSAGE);
+
   const result = await p.evaluate(
-    async (args: { path: string; method: string; body: string | null }) => {
+    async (args: { path: string; method: string; body: string | null; token: string }) => {
       const fail = (stage: string, detail: string) => ({ __error: `${stage}: ${detail}` });
-      let token = '';
-      try {
-        const sessionRes = await fetch('/api/auth/session', { credentials: 'include' });
-        if (!sessionRes.ok) return fail('session', `HTTP ${sessionRes.status}`);
-        token = ((await sessionRes.json()) as { accessToken?: string }).accessToken ?? '';
-      } catch (e) {
-        return fail('session', String(e));
-      }
-      if (!token) return { __error: SIGNED_OUT_MESSAGE };
       try {
         const res = await fetch(args.path, {
           method: args.method,
           credentials: 'include',
-          headers: { authorization: 'Bearer ' + token, 'content-type': 'application/json' },
+          headers: { authorization: 'Bearer ' + args.token, 'content-type': 'application/json' },
           body: args.body ?? undefined,
         });
         const text = await res.text();
@@ -1567,6 +1626,7 @@ async function backendApi(
       path,
       method: init?.method ?? 'GET',
       body: init?.body === undefined ? null : JSON.stringify(init.body),
+      token,
     }
   );
 
@@ -1671,18 +1731,15 @@ export async function checkSignedIn(
 ): Promise<{ signedIn: boolean; reachable: boolean; detail: string }> {
   try {
     const p = await pageOnChatGpt(cookies);
-    const result = await p.evaluate(async () => {
-      try {
-        const res = await fetch('/api/auth/session', { credentials: 'include' });
-        if (!res.ok) return { ok: false, token: false, detail: `HTTP ${res.status}` };
-        const json = (await res.json()) as { accessToken?: string };
-        return { ok: true, token: Boolean(json.accessToken), detail: '' };
-      } catch (e) {
-        return { ok: false, token: false, detail: String(e).slice(0, 120) };
-      }
-    });
-    const { ok, token, detail } = result as { ok: boolean; token: boolean; detail: string };
-    return { signedIn: token, reachable: ok, detail };
+    // Through the same waiting reader the requests use. Sampling the endpoint
+    // once here reported a signed-in account as signed out on startup, which
+    // is when the token is least likely to have arrived yet.
+    const token = await pageAccessToken(p);
+    return {
+      signedIn: Boolean(token),
+      reachable: true,
+      detail: token ? '' : 'the page produced no access token',
+    };
   } catch (e) {
     return {
       signedIn: false,
