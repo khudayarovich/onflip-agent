@@ -429,7 +429,7 @@ export class Repl {
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
       signal: this.abort.signal,
       compactAfterMessages: this.config.compactAfter ?? 60,
-      compactAfterChars: this.config.compactAfterChars ?? 120_000,
+      compactAfterChars: this.config.compactAfterChars ?? 60_000,
       events: {
         onThinking: (iteration) => {
           ui.startSpinner(iteration === 1 ? "thinking" : `thinking (step ${iteration})`);
@@ -481,7 +481,7 @@ export class Repl {
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
       signal: this.abort.signal,
       compactAfterMessages: this.config.compactAfter ?? 60,
-      compactAfterChars: this.config.compactAfterChars ?? 120_000,
+      compactAfterChars: this.config.compactAfterChars ?? 60_000,
       events: {
         onToolStart: (call) => {
           const args = JSON.stringify(call.arguments);

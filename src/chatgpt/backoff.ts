@@ -76,6 +76,35 @@ export function classifyFailure(message: string): Classification {
   return { kind: "retry", seconds: 0, reason: m };
 }
 
+/**
+ * Is this ChatGPT talking, rather than the model answering?
+ *
+ * Image moderation, rate limits and error pages all come back through the same
+ * channel as a reply, and they are not replies. This lives here rather than in
+ * the agent loop because the transport has to know first: a thread that
+ * answered "Something went wrong" never received what was sent, and marking
+ * that payload as delivered is what turns a transient error into a session
+ * that has permanently lost its system prompt.
+ *
+ * Gated on a short reply, because a long answer quoting one of these phrases
+ * is discussing it, not being it.
+ */
+export function serviceMessage(text: string): string | null {
+  const t = (text ?? "").trim();
+  if (!t || t.length > 400) return null;
+
+  if (/image we created may violate|content polic/i.test(t)) {
+    return "That message came from ChatGPT's image moderation, not from OnFlip — the picture was generated and then blocked. Rewording the prompt usually clears it; brand and game names are a common trigger. OnFlip has no image tool, so a generated image stays in the web chat rather than being saved to your project.";
+  }
+  if (/you'?ve (reached|hit) (your|the) .{0,30}(limit|cap)|rate limit|usage limit/i.test(t)) {
+    return "ChatGPT is rate-limiting this account, so that was its message rather than an answer. Waiting, or switching model with /model, is what clears it.";
+  }
+  if (/^(something went wrong|an error occurred|there was an error)\b/i.test(t)) {
+    return "ChatGPT returned an error page instead of a reply, so nothing of what OnFlip sent reached the model. This is usually an oversized message — /compact shrinks the conversation, and /new starts a fresh one.";
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // the cooldown itself
 // ---------------------------------------------------------------------------

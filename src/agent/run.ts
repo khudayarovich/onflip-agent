@@ -9,6 +9,7 @@ import {
   startCooldown,
   clearCooldown,
   describeWait,
+  serviceMessage,
 } from "../chatgpt/backoff";
 
 /**
@@ -507,20 +508,14 @@ function detectToolDenial(text: string): string | null {
   );
 }
 
+/**
+ * The browser transport already refuses to accept one of these as a reply, so
+ * by the time the loop sees one it came through a path that does not — the API
+ * transport, or a message too long for the transport's own check. Still worth
+ * attributing rather than rendering as the agent's answer.
+ */
 function detectServiceMessage(text: string): string | null {
-  const t = text.trim();
-  if (!t || t.length > 400) return null;
-
-  if (/image we created may violate|content polic/i.test(t)) {
-    return "That message came from ChatGPT's image moderation, not from OnFlip — the picture was generated and then blocked. Rewording the prompt usually clears it; brand and game names are a common trigger. OnFlip has no image tool, so a generated image stays in the web chat rather than being saved to your project.";
-  }
-  if (/you'?ve (reached|hit) (your|the) .{0,30}(limit|cap)|rate limit|usage limit/i.test(t)) {
-    return "ChatGPT is rate-limiting this account, so that was its message rather than an answer. Waiting, or switching model with /model, is what clears it.";
-  }
-  if (/^(something went wrong|an error occurred|there was an error)\b/i.test(t)) {
-    return "ChatGPT returned an error page instead of a reply. Try the turn again; if it keeps happening, `onflip login --headed` shows what the page is doing.";
-  }
-  return null;
+  return serviceMessage(text);
 }
 
 function detectPermissionRequest(raw: string): string | null {

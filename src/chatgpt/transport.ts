@@ -13,6 +13,7 @@ import { logger } from "../log";
 import {
   assertNotCoolingDown,
   paceSend,
+  serviceMessage,
 } from "./backoff";
 
 /**
@@ -75,10 +76,18 @@ export interface TransportReply {
 }
 
 /**
- * Hard ceiling on one outbound message. The web composer rejects very large
- * pastes, and an oversized tool result is better truncated than dropped.
+ * Hard ceiling on one outbound message.
+ *
+ * Measured against the real composer: 60,831 characters went in and answered
+ * normally; 112,586 could not be typed at all ("0 of 1016 lines arrived"), and
+ * when a retry did get it in, ChatGPT answered "Something went wrong". The
+ * ceiling sits between the two, nearer the end that is known to work.
+ *
+ * This is a backstop, not the plan. Compaction is what should keep a
+ * transcript small enough that a full replay never comes near it — see
+ * `compactAfterChars`.
  */
-const MAX_PAYLOAD_CHARS = 120_000;
+const MAX_PAYLOAD_CHARS = 80_000;
 
 function clampPayload(text: string): string {
   if (text.length <= MAX_PAYLOAD_CHARS) return text;
@@ -130,6 +139,23 @@ export class BrowserTransport implements Transport {
       signal: opts.signal,
       timeoutMs: replyTimeoutMs(),
     });
+
+    // ChatGPT's own error page arrives through the reply channel and looks
+    // like a successful send. It is not one: the model never saw the payload,
+    // so advancing `sentThrough` past it marks a system prompt as delivered to
+    // a thread that never received it — and every turn afterwards is answered
+    // by a ChatGPT that has never heard of OnFlip. Measured: one oversized
+    // message did exactly that, and the session spent the next four turns
+    // offering to format a Word document if the user would kindly upload it.
+    const service = serviceMessage(content);
+    if (service) {
+      logger.warn("transport", "chatgpt answered with a service message", {
+        chars: content.length,
+        sent: body.length,
+        text: content.trim().slice(0, 200),
+      });
+      throw new ChatGPTBrowserError(service);
+    }
 
     this.sentThrough = history.length;
     this.needsSystemPrompt = false;
