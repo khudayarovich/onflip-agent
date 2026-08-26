@@ -175,6 +175,91 @@ export const writeTool: ToolDefinition = {
 // edit
 // ---------------------------------------------------------------------------
 
+/**
+ * Where each occurrence of `needle` starts, as 1-based line numbers.
+ *
+ * "matches 16 places" tells the model that its string is ambiguous and nothing
+ * about how to disambiguate it. The line numbers turn that into a lookup: read
+ * around one of them, take a neighbouring line as context, done.
+ */
+export function occurrenceLines(haystack: string, needle: string, limit = 8): number[] {
+  const lines: number[] = [];
+  let index = haystack.indexOf(needle);
+  while (index !== -1 && lines.length < limit) {
+    lines.push(haystack.slice(0, index).split("\n").length);
+    index = haystack.indexOf(needle, index + needle.length);
+  }
+  return lines;
+}
+
+/**
+ * Lines where `needle` would have matched but for its indentation.
+ *
+ * Almost every "not found" is this: the model reproduced spaces where the file
+ * has tabs, or dropped a leading tab entirely. Measured on a Go file, four
+ * edits in a row failed this way and the model had no way to tell whether the
+ * text was wrong or merely differently indented. Naming the line turns a
+ * guessing game into a one-line fix.
+ */
+export function indentInsensitiveMatches(haystack: string, needle: string, limit = 4): number[] {
+  const want = needle.split("\n").map((line) => line.trim());
+  while (want.length && want[want.length - 1] === "") want.pop();
+  while (want.length && want[0] === "") want.shift();
+  if (!want.length) return [];
+
+  const lines = haystack.split("\n").map((line) => line.trim());
+  const hits: number[] = [];
+  for (let i = 0; i + want.length <= lines.length && hits.length < limit; i++) {
+    let matched = true;
+    for (let j = 0; j < want.length; j++) {
+      if (lines[i + j] !== want[j]) {
+        matched = false;
+        break;
+      }
+    }
+    if (matched) hits.push(i + 1);
+  }
+  return hits;
+}
+
+/** What this file indents with, so the advice can name it. */
+export function indentStyle(text: string): "tabs" | "spaces" | "tabs and spaces" | "" {
+  let tabs = 0;
+  let spaces = 0;
+  for (const line of text.split("\n")) {
+    if (/^\t/.test(line)) tabs++;
+    else if (/^ /.test(line)) spaces++;
+  }
+  if (!tabs && !spaces) return "";
+  if (tabs && spaces) return tabs > spaces * 4 ? "tabs" : spaces > tabs * 4 ? "spaces" : "tabs and spaces";
+  return tabs ? "tabs" : "spaces";
+}
+
+/** The message for a string that is in the file, but not the way it was typed. */
+function notFoundAdvice(haystack: string, needle: string, where: string): string {
+  const near = indentInsensitiveMatches(haystack, needle);
+  if (!near.length) {
+    return `\`old_string\` not found in ${where}. Read the file again — whitespace and indentation must match exactly.`;
+  }
+  const style = indentStyle(haystack);
+  const lines = near.length === 1 ? `line ${near[0]}` : `lines ${near.join(", ")}`;
+  return (
+    `\`old_string\` not found in ${where}, but the same text with different indentation is at ${lines}. ` +
+    (style ? `This file indents with ${style}. ` : "") +
+    "Read those lines and copy them exactly as they come back — leading whitespace included."
+  );
+}
+
+/** The message for a string that is in the file more than once. */
+function ambiguousAdvice(haystack: string, needle: string, count: number, where: string): string {
+  const at = occurrenceLines(haystack, needle);
+  const shown = at.length < count ? `${at.join(", ")}, …` : at.join(", ");
+  return (
+    `\`old_string\` matches ${count} places in ${where} (lines ${shown}). ` +
+    "Extend it with the lines above or below the one you mean until it is unique, or pass replace_all: true."
+  );
+}
+
 export const editTool: ToolDefinition = {
   name: "edit",
   description:
@@ -202,15 +287,11 @@ export const editTool: ToolDefinition = {
 
     const occurrences = before.split(oldStr).length - 1;
     if (occurrences === 0) {
-      return err(
-        `\`old_string\` not found in ${relative(ctx.cwd, file)}. Read the file again — whitespace and indentation must match exactly.`
-      );
+      return err(notFoundAdvice(before, oldStr, relative(ctx.cwd, file)));
     }
     const replaceAll = asBool(args.replace_all);
     if (occurrences > 1 && !replaceAll) {
-      return err(
-        `\`old_string\` matches ${occurrences} places in ${relative(ctx.cwd, file)}. Add surrounding context to make it unique, or pass replace_all: true.`
-      );
+      return err(ambiguousAdvice(before, oldStr, occurrences, relative(ctx.cwd, file)));
     }
 
     const after = replaceAll ? before.split(oldStr).join(newStr) : before.replace(oldStr, newStr);
@@ -284,15 +365,15 @@ export const multiEditTool: ToolDefinition = {
       const newStr = String(e.new_string ?? "");
       if (!oldStr) return err(`edits[${i}]: \`old_string\` must be non-empty`);
       const count = working.split(oldStr).length - 1;
+      // The same advice as `edit` gives, against the working copy: after an
+      // earlier edit in the batch the file on disk is no longer what a line
+      // number would be counted against.
+      const where = `${relative(ctx.cwd, file)}${applied ? " (after the preceding edits)" : ""}`;
       if (count === 0) {
-        return err(
-          `edits[${i}]: \`old_string\` not found${applied ? " after the preceding edits were applied" : ""}. No changes were written.`
-        );
+        return err(`edits[${i}]: ${notFoundAdvice(working, oldStr, where)} No changes were written.`);
       }
       if (count > 1 && !asBool(e.replace_all)) {
-        return err(
-          `edits[${i}]: \`old_string\` matches ${count} places. Add context or set replace_all. No changes were written.`
-        );
+        return err(`edits[${i}]: ${ambiguousAdvice(working, oldStr, count, where)} No changes were written.`);
       }
       working = asBool(e.replace_all) ? working.split(oldStr).join(newStr) : working.replace(oldStr, newStr);
       applied += count;

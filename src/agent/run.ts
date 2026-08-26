@@ -86,6 +86,8 @@ export async function runTurn(
   let executedCalls = 0;
   /** Tool calls the policy refused this turn; gates permission-slip detection. */
   let deniedCalls = 0;
+  /** Identical calls that have already failed, so a repeat can be named as one. */
+  const failedCalls = new Map<string, number>();
 
   // A non-numeric budget would make `iteration <= budget` false on the first
   // comparison, so the loop would fall straight through and report a turn that
@@ -239,7 +241,19 @@ export async function runTurn(
       executedCalls++;
       if (result.denied) deniedCalls++;
 
-      resultBlocks.push(formatToolResult(call, result.output, Boolean(result.error)));
+      // Watching a model send the same failing call four times in a row is
+      // watching it spend the step budget on a result it has already been
+      // given. The tool's own message clearly is not landing by repetition, so
+      // say plainly that it is a repetition.
+      let output = result.output;
+      if (result.error && !result.denied) {
+        const signature = `${call.tool}:${JSON.stringify(call.arguments ?? {})}`;
+        const attempts = (failedCalls.get(signature) ?? 0) + 1;
+        failedCalls.set(signature, attempts);
+        if (attempts > 1) output = `${output}\n\n${repeatedCallAdvice(call.tool, attempts)}`;
+      }
+
+      resultBlocks.push(formatToolResult(call, output, Boolean(result.error)));
     }
 
     history.push(
@@ -385,6 +399,31 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
       { once: true }
     );
   });
+}
+
+/**
+ * Said back to a model that has just re-sent a call it already knows fails.
+ *
+ * Byte-identical arguments, byte-identical failure. The generic tool error is
+ * already in the transcript and did not change anything, so this names the
+ * loop itself and gives the tool's own way out.
+ */
+function repeatedCallAdvice(tool: string, attempts: number): string {
+  const lead =
+    `[OnFlip] That is attempt ${attempts} at this exact ${tool} call, with the same arguments, ` +
+    "and it has failed identically every time. Sending it again will fail again.";
+
+  if (tool === "edit" || tool === "multi_edit") {
+    return [
+      lead,
+      "Change the call, not the intent: extend `old_string` with the lines above or below it until it is unique, or pass `replace_all: true` if every occurrence should change.",
+      "If the file will not match at all, `read` it first — the copy you are editing from is out of date, and any line numbers in the error above tell you where to look.",
+    ].join(" ");
+  }
+  if (tool === "bash") {
+    return `${lead} Read the error output above and change the command, or find out why it fails before running it again.`;
+  }
+  return `${lead} Change the arguments, use a different tool, or tell the user what is blocking you.`;
 }
 
 /**
