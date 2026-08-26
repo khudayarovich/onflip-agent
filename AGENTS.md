@@ -151,6 +151,10 @@ This split matters. An earlier version reference-counted raw mode alongside hand
 
 **Warming the session costs a page, not the good navigation.** `openConversation` depends on `/c/<id>` being a page's *first* navigation, so the session cannot be checked on that page beforehand — checking it means navigating. `warmSession` opens a throwaway page in the same context, which shares the cookies and establishes the same session, and closes it again. The failure message then distinguishes the two things a bounce can mean: without that, a session that was not ready yet was reported as a conversation that may have been deleted.
 
+**A tool error has to be actionable, or it gets sent again unchanged.** "`old_string` matches 16 places" says the string is ambiguous and nothing about how to disambiguate it; "not found — whitespace must match exactly" does not say whether the text is wrong or merely indented differently. Both were re-sent verbatim, repeatedly, against a tab-indented Go file. `edit` and `multi_edit` now name the line numbers of every occurrence, and — the useful half — a string that fails to match is checked again with indentation ignored, so the error can say which line it is really on and what the file indents with. `indentInsensitiveMatches` is that check. A genuinely absent string still gets the plain message, because there is nothing better to say about it.
+
+**Identical failing calls need naming as repetition.** The tool's own message is already in the transcript by the time the call is re-sent, so repeating it changes nothing. `runTurn` keeps a signature of every failed call — tool name plus arguments — and appends `repeatedCallAdvice` from the second attempt: it counts the attempts and gives the way out for that specific tool. Denied calls are excluded, because a refusal is the user's decision rather than a model loop, and the denial message already says what to do about it.
+
 **Diagnose from the log, not the terminal.** `src/log.ts` writes JSONL to `~/.onflip/logs/`: outgoing payload shape, the raw reply verbatim, parse outcome, and every tool call. Every hard bug in this project has been a transit problem invisible in the rendered output — a prompt flattened on the way out, a fence eaten on the way back, a placeholder mistaken for an answer. Failed parses log at *warn* with the full reply so a normal run leaves enough behind; `--debug` adds everything and echoes to stderr. When something misbehaves, read `onflip logs --full` before touching code.
 
 **The model drops the fence and batches blocks.** Live behaviour, not theory: replies arrive as several unfenced `tool:` blocks separated by a bare `onflip` line the renderer left behind. `parseUnfencedBlocks` splits on each line-initial `tool:`; an unparseable line *ends* a block rather than voiding it. Anchoring on the first `tool:` and running to the end of the reply silently drops every call after the first.
@@ -167,7 +171,7 @@ This split matters. An earlier version reference-counted raw mode alongside hand
 - `strict` TypeScript. No `any` unless genuinely unavoidable; prefer `unknown` plus a narrowing check.
 - Tool arguments arrive from a language model, so validate before use — never trust a shape.
 - Comments explain *why*, not *what*. Prefer one paragraph above a subtle function over line-by-line narration.
-- Errors returned to the model should say what to do next ("Read the file again — whitespace must match exactly"), not just what failed.
+- Errors returned to the model should say what to do next, and *where* — not just what failed. "Whitespace must match exactly" was the old advice here and it was not enough; see the note above about naming the line.
 - Nothing user-facing goes through `console.log`; use the helpers in `ui/render.ts` so theming and width handling apply.
 - Persistence is always best-effort: a read-only home directory must never take down a live session.
 
