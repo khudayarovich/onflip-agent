@@ -10,10 +10,12 @@ import { FS_TOOLS } from "./fs";
 import { SHELL_TOOLS } from "./shell";
 import { TODO_TOOLS } from "./todo";
 import { WEB_TOOLS } from "./web";
+import { BROWSER_TOOLS } from "./browser";
 import { err } from "./util";
 
 export { getShellCwd, setShellCwd, resetShellCwd, killAllJobs, listJobs } from "./shell";
 export { globToRegExp } from "./fs";
+export { closeAutomationBrowser, automationBrowserOpen } from "./browser";
 
 export function createSessionState(): SessionState {
   return { todos: [], snapshots: [], readFiles: new Map() };
@@ -50,7 +52,9 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
 
   let tools: ToolDefinition[] = [...FS_TOOLS, ...TODO_TOOLS];
   if (!opts.disableShell) tools = [...tools, ...SHELL_TOOLS];
-  if (!opts.disableNetwork) tools = [...tools, ...WEB_TOOLS];
+  // Browsing is network access with a mouse attached, so it goes out with
+  // the network tools rather than getting a switch of its own.
+  if (!opts.disableNetwork) tools = [...tools, ...WEB_TOOLS, ...BROWSER_TOOLS];
   if (opts.readOnly) tools = tools.filter((t) => !t.mutates);
 
   const byName = new Map(tools.map((t) => [t.name, t]));

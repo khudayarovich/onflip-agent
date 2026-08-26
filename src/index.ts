@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { main } from "./cli";
 import { closeBrowser } from "./chatgpt/browser-client";
-import { killAllJobs } from "./tools";
+import { killAllJobs, closeAutomationBrowser } from "./tools";
 import { releaseRaw } from "./ui/keys";
 import * as ui from "./ui/render";
 import * as screen from "./ui/screen";
@@ -24,6 +24,9 @@ async function cleanup(code: number): Promise<never> {
   releaseRaw();
   killAllJobs();
   await closeBrowser().catch(() => {});
+  // The agent's own browser is a second one, and an orphaned window
+  // outlives the process just as readily as the transport's does.
+  await closeAutomationBrowser().catch(() => {});
   process.exit(code);
 }
 

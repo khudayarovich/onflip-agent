@@ -28,6 +28,13 @@ export interface OnFlipConfig {
   shell?: boolean;
   /** Network tool available at all. */
   network?: boolean;
+  /**
+   * Run the agent's own browser without a window.
+   *
+   * Off by default: watching it click through a page is most of the point,
+   * and a browser that works invisibly is hard to trust or debug.
+   */
+  browserHeadless?: boolean;
   maxIterations?: number;
   /** Compact the transcript once it exceeds this many messages. */
   compactAfter?: number;

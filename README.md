@@ -305,6 +305,15 @@ The footer says which of the two `enter` will do, so it's never a guess.
 | `job_output` | read output from a backgrounded command |
 | `todo_write` / `todo_read` | the task list you see rendered in the transcript |
 | `web_fetch` | fetch a URL **from your machine**, so localhost and internal hosts work |
+| `browser_open` / `browser_snapshot` | open a page in the agent's own browser · re-read it |
+| `browser_click` / `browser_type` / `browser_key` | act on the page by element ref |
+| `browser_screenshot` / `browser_close` | save a PNG for you · close the window |
+
+### The agent's browser
+
+The `browser_*` tools drive a real browser the agent can click around in — a page opens on your screen and you watch it work. It reads pages through the accessibility tree rather than pixels: every action returns the page's interactive elements, numbered, plus the visible text, and the agent acts on those numbers. Each navigation, click and keystroke goes through the same approval layer as every other tool.
+
+This browser is **separate from everything else**: it is not your browser, and it is not the one that talks to ChatGPT. It keeps its own profile in `~/.onflip/browser-automation`, so a site you sign into there stays signed in for next time — sign in yourself when a task needs it; the agent is told never to enter credentials you did not hand it for that purpose. Screenshots land in `~/.onflip/screenshots`. Run it windowless with `onflip config browserHeadless true`.
 
 `bash` uses PowerShell on Windows and `/bin/sh` (or bash) elsewhere. `cd` carries across calls the way it does in a real terminal, and `background: true` returns a job id for dev servers and watchers.
 

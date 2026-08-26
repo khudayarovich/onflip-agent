@@ -117,6 +117,25 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     ].join("\n")
   );
 
+  // -- the agent's own browser ----------------------------------------------
+  if (tools.some((t) => t.name === "browser_open")) {
+    sections.push(
+      [
+        "## Browsing",
+        "",
+        "The browser_* tools drive a real browser on the user's machine — separate from your own browsing, which runs on the wrong computer and must not be used.",
+        "",
+        "You cannot see the page; you read it. Every action returns a snapshot: the URL, the interactive elements each tagged [ref_N], and the visible text. Work the loop: snapshot, act on a ref, read the new snapshot.",
+        "- Refs describe one snapshot. After the page changes, use refs from the newest snapshot only.",
+        "- browser_type fills a field by ref; submit: true presses Enter after.",
+        "- If an element is not listed, it may be below the fold — browser_key with PageDown or End, then read the fresh snapshot.",
+        "- browser_screenshot saves a PNG for the user. You cannot see it; never claim to.",
+        "- Never enter real credentials unless the user gave them for exactly this purpose. If a login is needed, say so and let the user sign in — the browser keeps its logins between runs.",
+        "- Close with browser_close when the browsing part of the task is done.",
+      ].join("\n")
+    );
+  }
+
   // -- working style --------------------------------------------------------
   sections.push(
     [
