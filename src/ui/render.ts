@@ -68,6 +68,39 @@ export function blank(): void {
   out("\n");
 }
 
+/**
+ * Write already-rendered text through the same funnel as everything else.
+ *
+ * Exported for the modal prompts. They compose their own blocks, but writing
+ * those straight to stdout puts them behind the back of whichever component
+ * owns the screen — which is how the approval prompt ended up being erased by
+ * the next frame in full-screen mode.
+ */
+export function emit(text: string): void {
+  out(text);
+}
+
+/**
+ * Lift the inline composer out of the way for a prompt drawn at the cursor,
+ * and put it back when the returned function runs.
+ *
+ * Detaching rather than merely clearing is the point: `out()` schedules a
+ * redraw of its own, which would otherwise repaint the box underneath the
+ * prompt half a tick later. Full-screen paints the composer as part of the
+ * frame and has nothing to move, so this is a no-op there.
+ */
+export function pauseComposer(): () => void {
+  const hook = composer;
+  if (!hook || screen.isActive()) return () => {};
+  composer = null;
+  redrawScheduled = false;
+  hook.clear();
+  return () => {
+    composer = hook;
+    hook.redraw();
+  };
+}
+
 // ---------------------------------------------------------------------------
 // banner
 // ---------------------------------------------------------------------------

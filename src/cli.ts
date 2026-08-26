@@ -365,6 +365,12 @@ function doStatus(): void {
         : chalk.hex("#e06c75")("missing — run `onflip login`"),
     },
     { label: "profile", value: config.persistProfile === false ? "disposable" : "persistent" },
+    {
+      label: "browser",
+      value: config.headed
+        ? "visible window (onflip config headed false to hide)"
+        : "headless",
+    },
     { label: "terminal", value: describeTerminal() },
     { label: "approved", value: `${(config.allowedCommands ?? []).length} commands, ${(config.allowedWriteDirs ?? []).length} directories` },
     { label: "last chat", value: sessions[0] ? `${sessions[0].title} (${relativeTime(sessions[0].updatedAt)})` : "none" },

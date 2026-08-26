@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to release, e.g. v0.2.0"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    env:
+      ONFLIP_SKIP_BROWSER_DOWNLOAD: "1"
+      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      # Read here so the publish step can ask whether it exists at all. A
+      # secrets lookup is not available to a step's `if`, an env var is.
+      NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          registry-url: https://registry.npmjs.org
+
+      - run: npm ci
+
+      # A tag that disagrees with package.json ships a build reporting the
+      # wrong version of itself, which is only ever discovered from a bug
+      # report. Refusing here is much cheaper.
+      - name: tag agrees with package.json
+        run: |
+          PKG="v$(node -p "require('./package.json').version")"
+          echo "tag=$TAG  package.json=$PKG"
+          test "$TAG" = "$PKG"
+          npm run check-version
+
+      - run: npm run typecheck
+      - run: npm run build
+      - name: the CLI actually starts
+        run: node dist/index.js --version
+
+      - name: build the tarball
+        run: npm pack --silent
+
+      - name: publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notes.md <<'NOTES'
+          ## Install
+
+          **Windows (PowerShell)**
+
+          ```powershell
+          irm https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.ps1 | iex
+          ```
+
+          **macOS / Linux**
+
+          ```bash
+          curl -fsSL https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.sh | bash
+          ```
+
+          **From the tarball attached below**
+
+          ```bash
+          npm install -g ./onflip-VERSION.tgz
+          ```
+
+          Node.js 20 or newer. Then `onflip login` once, `cd` into a project, and run `onflip`.
+          NOTES
+          sed -i "s/onflip-VERSION.tgz/$(ls onflip-*.tgz)/" notes.md
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release edit "$TAG" --title "OnFlip $TAG" --notes-file notes.md
+          else
+            gh release create "$TAG" --title "OnFlip $TAG" --notes-file notes.md
+          fi
+          gh release upload "$TAG" onflip-*.tgz install.ps1 install.sh --clobber
+
+      # Publishing to npm is opt-in: it happens only once an NPM_TOKEN secret
+      # exists, so the GitHub release works from day one without an npm
+      # account and starts publishing the moment one is added.
+      - name: publish to npm
+        if: ${{ env.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public

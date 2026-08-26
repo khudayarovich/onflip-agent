@@ -22,6 +22,7 @@ import {
   closeBrowser,
   configureBrowser,
   takeComposerWarning,
+  takeProjectWarning,
   listConversations,
   listProjectConversations,
   openConversation,
@@ -249,6 +250,13 @@ export class Repl {
     if (!this.shellEnabled) {
       ui.notice("Shell is disabled — the agent cannot run commands. Enable it with /shell on.");
     }
+    // The window is about to appear on its own; better to have said so.
+    if (this.config.headed) {
+      ui.notice(
+        "The automation browser opens a visible window (headed). Hide it with: onflip config headed false"
+      );
+      ui.blank();
+    }
     if (this.history.filter((m) => m.role !== "system").length > 0) {
       ui.info(
         `Resumed session ${this.session.id} with ${this.history.filter((m) => m.role !== "system").length} messages.`
@@ -289,7 +297,7 @@ export class Repl {
         ? "OnFlip's browser profile is not signed in to ChatGPT, so nothing can be sent yet."
         : `ChatGPT could not be reached (${state.detail}).`
     );
-    ui.info('Run `onflip login --headed` and sign in once in the window that opens.');
+    ui.info('Sign in to ChatGPT in your normal browser (Chrome, Edge or Firefox), then run `onflip login` to pick the session up.');
     ui.blank();
   }
 
@@ -569,6 +577,10 @@ export class Repl {
       // replies that come back malformed for no visible reason.
       const composerWarning = takeComposerWarning();
       if (composerWarning) ui.notice(composerWarning);
+      // Same shape: a project that could not be opened changes where the work
+      // ended up, so it has to be said rather than quietly worked around.
+      const projectWarning = takeProjectWarning();
+      if (projectWarning) ui.notice(projectWarning);
       this.busy = false;
       this.saveNow();
       if (this.exitAfterTurn) {

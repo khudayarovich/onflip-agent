@@ -121,15 +121,23 @@ function extractFirefox(loc: BrowserCookieLocation): ExtractedToken | null {
  * trying Firefox. A machine with a signed-in Firefox looked like a machine
  * with no session at all.
  */
-export function extractSessionTokenFromBrowser(): ExtractedToken | null {
+/** Read one location. Injectable so the search itself can be tested. */
+export type CookieReader = (loc: BrowserCookieLocation) => ExtractedToken | null;
+
+const defaultReader: CookieReader = (loc) =>
+  loc.browser === "Firefox" ? extractFirefox(loc) : extractChromium(loc);
+
+export function extractSessionTokenFromBrowser(
+  locations: BrowserCookieLocation[] = allCookieLocations(),
+  read: CookieReader = defaultReader
+): ExtractedToken | null {
   const tried: string[] = [];
   let appBound: CryptoError | null = null;
 
-  for (const loc of allCookieLocations()) {
+  for (const loc of locations) {
     if (!tried.includes(loc.browser)) tried.push(loc.browser);
     try {
-      const result =
-        loc.browser === "Firefox" ? extractFirefox(loc) : extractChromium(loc);
+      const result = read(loc);
       if (result) return result;
     } catch (e) {
       if (e instanceof CryptoError && e.message.includes("v20")) {
@@ -145,7 +153,7 @@ export function extractSessionTokenFromBrowser(): ExtractedToken | null {
       `No ChatGPT session could be read from any browser (tried ${tried.join(
 )}). ` +
         `Chrome-family cookies use app-bound encryption, which cannot be decrypted. ` +
-        `Sign in through OnFlip's own browser with \`onflip login --headed\`, ` +
+        `Sign in to ChatGPT in Firefox, which OnFlip can read, ` +
         `or pass a token with --token.`
     );
   }

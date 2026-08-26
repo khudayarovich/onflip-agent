@@ -3,20 +3,14 @@
   "version": "0.2.0",
   "description": "OnFlip — an autonomous coding agent CLI driven by your ChatGPT web session",
   "license": "MIT",
-  "bin": {
-    "onflip": "dist/index.js"
+  "author": "Farrukh Khudayarovich Yuldashev",
+  "homepage": "https://github.com/khudayarovich/onflip-agent#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/khudayarovich/onflip-agent.git"
   },
-  "main": "dist/index.js",
-  "files": [
-    "dist",
-    "README.md"
-  ],
-  "scripts": {
-    "build": "tsc",
-    "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
-    "typecheck": "tsc --noEmit",
-    "prepare": "npm run build"
+  "bugs": {
+    "url": "https://github.com/khudayarovich/onflip-agent/issues"
   },
   "keywords": [
     "ai",
@@ -24,13 +18,35 @@
     "cli",
     "chatgpt",
     "coding-agent",
-    "tui"
+    "tui",
+    "pair-programming"
   ],
+  "bin": {
+    "onflip": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "scripts/postinstall.js",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc --noEmit",
+    "browser": "playwright install chromium",
+    "check-version": "node scripts/sync-version.js --check",
+    "version": "node scripts/sync-version.js && git add src/repl.ts",
+    "prepare": "npm run build",
+    "postinstall": "node scripts/postinstall.js"
+  },
   "engines": {
-    "node": ">=18.18.0"
+    "node": ">=20.0.0"
   },
   "dependencies": {
-    "better-sqlite3": "^11.7.0",
+    "better-sqlite3": "^12.11.1",
     "chalk": "^4.1.2",
     "playwright": "^1.49.0"
   },

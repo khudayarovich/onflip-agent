@@ -1,5 +1,9 @@
 # OnFlip
 
+[![CI](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/khudayarovich/onflip-agent?sort=semver)](https://github.com/khudayarovich/onflip-agent/releases)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 An autonomous coding agent that runs in your terminal and is driven by your **ChatGPT web session** — no API key, no per-token billing. It reads and writes files, runs shell commands, searches the codebase, and verifies its own work, behind an approval layer you control.
 
 ```
@@ -9,31 +13,84 @@ An autonomous coding agent that runs in your terminal and is driven by your **Ch
 
 ## Install
 
-```bash
-npm install && npm run build && npm link
+**Windows** — in PowerShell:
+
+```powershell
+irm https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.ps1 | iex
 ```
 
-Playwright needs a browser binary the first time:
+**macOS or Linux**:
 
 ```bash
+curl -fsSL https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.sh | bash
+```
+
+Either one checks your Node version, installs the latest release, fetches the browser OnFlip drives, and — on Windows — leaves an **OnFlip** shortcut on the Desktop that opens a session in one click. Nothing is compiled: the release ships already built.
+
+<details>
+<summary>Install the tarball yourself</summary>
+
+Download `onflip-<version>.tgz` from the [Releases page](https://github.com/khudayarovich/onflip-agent/releases), then:
+
+```bash
+npm install -g ./onflip-0.2.0.tgz
 npx playwright install chromium
 ```
 
+</details>
+
+<details>
+<summary>Install from source</summary>
+
+```bash
+git clone https://github.com/khudayarovich/onflip-agent.git
+cd onflip-agent
+npm install
+npm run build
+npm link
+```
+
+`npm install` builds and fetches Chromium on its own; set `ONFLIP_SKIP_BROWSER_DOWNLOAD=1` to skip the browser.
+
+</details>
+
+**Node.js 20 or newer**, and about 200 MB for the browser. Settings, sessions and logs live in `~/.onflip`. To remove it: `npm uninstall -g onflip`.
+
+## Quick start
+
+Three steps, once:
+
+```bash
+onflip login                # picks up the ChatGPT session from your browser
+cd ~/code/my-project
+onflip                      # opens the session
+```
+
+Then just say what you want:
+
+```
+› add a --json flag to the status command and make the tests pass
+```
+
+It reads the files it needs, makes the change, runs your build, and reports back — asking before each write and each command until you tell it not to. `esc` interrupts, `/exit` quits.
+
+On Windows, the **OnFlip** shortcut the installer leaves on your Desktop does the third step for you: double-click it, then `/open` the folder you want to work in.
+
 ## Sign in
 
-OnFlip reuses the ChatGPT session already in your browser. Log in at <https://chatgpt.com>, then:
+OnFlip reuses the ChatGPT session already in your browser — **Chrome, Edge, Brave, Chromium, Vivaldi, Arc or Firefox**, every profile of each, whichever it finds one in first. Log in at <https://chatgpt.com>, then:
 
 ```bash
 onflip login
 ```
 
-If your browser encrypts cookies in a way OnFlip cannot read (Chrome's app-bound encryption, v20), sign in through OnFlip's own persistent browser profile instead:
+Chrome-family browsers on recent Windows use app-bound cookie encryption (v20), which cannot be decrypted — those are skipped and the search moves on to the next browser. **Firefox is the reliable one**: sign in to ChatGPT there and `onflip login` will find it.
 
-```bash
-onflip login --headed
-```
+Only the session cookies are carried across. Cloudflare's own cookies (`cf_clearance`, `__cf_bm`) and the edge ones are deliberately left behind — they are issued against one specific browser, so replaying another's is useless and looks like exactly the thing an anti-bot check is watching for. OnFlip's browser earns its own in seconds.
 
-## Use
+`onflip login --headed` exists for signing in through OnFlip's own browser, but expect Google's OAuth to refuse an automated browser — the cookie path above is the one to rely on.
+
+## Running OnFlip
 
 ```bash
 onflip
@@ -56,6 +113,22 @@ Continue where you left off:
 ```bash
 onflip --continue
 ```
+
+## Which browser does what
+
+Two different browsers are involved, and it is worth knowing which is which.
+
+**Your browser** is only read, once, for its ChatGPT cookies — Chrome, Edge, Brave, Chromium, Vivaldi, Arc or Firefox, whichever has a session.
+
+**OnFlip's browser** is your real installed **Chrome**, driven by Playwright, and it is the one that actually talks to ChatGPT. Playwright's bundled Chromium is the fallback when Chrome is not installed — but Cloudflare challenges that build, and its challenge cannot be completed by hand, which is why the real browser is preferred. Override with `ONFLIP_BROWSER_CHANNEL=chromium` (or `msedge`). The cookies from your browser are injected into it. So a session found in Firefox is still driven through Chromium — Playwright cannot drive your own Firefox profile, and OnFlip never touches your real browser windows.
+
+It runs headless by default. If a browser window appears on every run, that is `headed` being on:
+
+```bash
+onflip config headed false
+```
+
+`onflip status` shows which mode you are in. Turning it *on* is useful when something is going wrong and you want to watch the page.
 
 ## Projects
 
@@ -95,9 +168,11 @@ Every turn OnFlip runs starts a chat on chatgpt.com, and by default those pile u
 onflip projects       list them
 ```
 
-From then on every new chat is created inside that project, which is where ChatGPT's own sidebar files it — out of your main list, still there when you want it. The setting is remembered, and applies from the very first chat of a session rather than the second.
+Every chat OnFlip starts is moved into that project as soon as it exists, which is where ChatGPT's own sidebar files it — out of your main list, still there when you want it. The setting is remembered.
 
-Chats already open are unaffected; this changes where the *next* one is created. A project carries its own model, so `/model` applies to chats started outside one.
+The chat is *started* on the ordinary page and filed afterwards, rather than being started inside the project: project pages require a full sign-in that a session read out of your browser does not satisfy. Filing needs nothing but the session already in use, so this works whichever way you signed in.
+
+Chats already open are unaffected; this changes where the *next* one is filed. If filing ever fails, the chat still happens and lands in the main list, and OnFlip says so.
 
 ## Continuing a ChatGPT conversation
 
@@ -314,6 +389,7 @@ Any slug the backend accepts works whether or not it is listed — `--model gpt-
 | `ONFLIP_TRANSPORT` | force `browser` or `api` |
 | `ONFLIP_MAX_ITERATIONS` | step budget per turn |
 | `ONFLIP_REPLY_TIMEOUT` | seconds allowed for one reply |
+| `ONFLIP_BROWSER_CHANNEL` | `chrome` (default), `msedge`, or `chromium` |
 | `ONFLIP_DEBUG` | print stack traces on error |
 
 ## Rate limits
@@ -344,6 +420,40 @@ onflip --debug -p "check my disk space"
 ```
 
 Logs stay on your machine and the newest 20 are kept. They contain your prompts, the model's replies and tool output, so treat them like a shell history.
+
+## Troubleshooting
+
+**`onflip: command not found` straight after installing.** The shell is holding an older PATH — open a new terminal. If it still cannot find it, `npm prefix -g` prints where npm put the shim; add that directory to PATH.
+
+**`onflip login` finds no session.** Sign in at <https://chatgpt.com> first, and prefer **Firefox**. Chrome-family browsers on recent Windows encrypt cookies in a way that cannot be read (app-bound, "v20"), so those profiles are skipped with a note rather than used.
+
+**"Could not find the ChatGPT message box", or a missing browser executable.** Playwright needs a browser binary: `npx playwright install chromium`. If Chrome is installed, OnFlip drives that instead — `onflip status` shows what it picked.
+
+**Cloudflare is challenging the browser.** It usually clears itself within a few minutes. If it does not, `onflip logout` then `onflip login` picks up a fresh session.
+
+**A turn ends with "the reply budget ran out".** Reasoning models can think for minutes before the first token: `onflip config replyTimeout 900`.
+
+**Anything else.** `onflip logs --full` prints exactly what was sent and exactly what came back, which is usually the whole answer; `onflip status` shows the configuration it is actually running with.
+
+## Updating and uninstalling
+
+Re-run the installer to update — it always fetches the latest release:
+
+```powershell
+irm https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.ps1 | iex
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.sh | bash
+```
+
+To remove it:
+
+```bash
+npm uninstall -g onflip
+```
+
+That leaves `~/.onflip` — config, sessions and logs — alone. Delete the folder too if you want a clean slate.
 
 ## How it works
 
@@ -382,10 +492,13 @@ Sessions are JSON under `~/.onflip/sessions/`. Resuming replays the transcript i
 ## Development
 
 ```bash
+npm install
 npm run typecheck
 npm run build
-npm run dev -- "your task"
+npm run dev -- "your task"      # runs from src, no build step
 ```
+
+[`AGENTS.md`](AGENTS.md) is the architecture guide — what each module owns, and the non-obvious reasons things are the way they are. [`RELEASING.md`](RELEASING.md) covers cutting a release.
 
 ## License
 

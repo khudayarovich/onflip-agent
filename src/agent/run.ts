@@ -112,7 +112,20 @@ export async function runTurn(
 
     history.push(newMessage("assistant", reply));
 
-    const { text, calls, malformed } = parseTurn(reply);
+    let { text, calls, malformed } = parseTurn(reply);
+
+    // A reply carrying our own instructions is the page handing back what
+    // we sent. Its 'tool calls' are the worked examples out of the prompt,
+    // and running them writes files nobody asked for.
+    if (calls.length > 0 && looksLikeOwnPayload(reply)) {
+      logger.warn("protocol", "reply contained our own prompt", {
+        chars: reply.length,
+        calls: calls.map((c) => c.tool),
+      });
+      calls = [];
+      malformed =
+        "the reply came back containing OnFlip's own instructions rather than an answer.";
+    }
     logger.info("agent", `iteration ${iteration} parsed`, {
       calls: calls.map((c) => c.tool),
       proseChars: text.length,
@@ -154,6 +167,7 @@ export async function runTurn(
       // proceed, so correcting it for doing exactly that is a contradiction —
       // and an expensive one, since each correction costs a round trip.
       const slip =
+        detectToolDenial(text) ??
         (deniedCalls === 0 ? detectPermissionRequest(text) : null) ??
         (executedCalls === 0 ? detectFabrication(text) : null);
       if (slip && protocolCorrections < MAX_PROTOCOL_CORRECTIONS) {
@@ -224,7 +238,7 @@ async function sendWithRetry(
     thinking: opts.thinking,
     signal: opts.signal,
     onDelta: events.onDelta,
-    reminder: turnReminder(opts.shellEnabled),
+    reminder: turnReminder(opts.shellEnabled, opts.tools.list.map((t) => t.name)),
   };
 
   let lastError: unknown;
@@ -312,6 +326,64 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
  * answer that happens to quote one of these phrases is discussing it, not
  * being it.
  */
+/**
+ * Does this text carry the instructions OnFlip sends, rather than a reply?
+ *
+ * Two independent markers, both of which ride on every payload and neither
+ * of which a model would write unprompted.
+ */
+function looksLikeOwnPayload(text: string): boolean {
+  const markers = [
+    "[OnFlip protocol reminder]",
+    "Never invent file contents, directory listings, or command output",
+  ];
+  return markers.some((m) => text.includes(m));
+}
+
+/** Replace typographic quotes with their ASCII equivalents. */
+function straighten(text: string): string {
+  return text.replace(/[‘’ʼ]/g, "'").replace(/[“”]/g, '"');
+}
+
+/**
+ * Is the model claiming it cannot reach the tools?
+ *
+ * It says this while sitting in a thread that was handed the whole tool
+ * list, so it is a misreading of the protocol rather than a fact — and one
+ * worth correcting, because the alternative is a turn that does nothing and
+ * a user who is told their agent has no tools.
+ */
+function detectToolDenial(text: string): string | null {
+  // ChatGPT renders apostrophes as U+2019, so a pattern written with the
+  // typewriter apostrophe matches nothing it actually says.
+  const t = straighten(text.trim());
+  if (!t || t.length > 600) return null;
+  const denies =
+    /\b(do ?n'?t|cannot|can'?t|no|not) (have|see|access|reach|use)\b[^.]{0,40}\btools?\b/i.test(t) ||
+    // "I'm sorry, but I can't execute the local file-editing tool in this
+    // turn." Live, and missed by everything else here: the verb is `execute`,
+    // it names one tool rather than the set, and it claims nothing about
+    // availability — so the refusal went to the user as the answer to "update
+    // the game name", with no correction and nothing run.
+    /\b(cannot|can'?t|unable to|not able to|won'?t be able to)\b[^.]{0,60}\b(tools?|tool calls?|onflip blocks?)\b/i.test(t) ||
+    // "I can't edit … from this chat", said without naming the tools at all.
+    // "in this turn" belongs with it: the tools are attached to the
+    // conversation, so no turn of it is one where they are missing.
+    /\b(do ?n'?t|cannot|can'?t|unable to)\b[^.]{0,60}\b(from|in|within|during|on) (this|the) (chat|conversation|session|runtime|environment|turn|message|thread|context)\b/i.test(t) ||
+    // "aren't *actually* exposed", "is not currently available" — the hedge
+    // between the negation and the adjective is where these replies live.
+    /\btools?\b[^.]{0,40}\b(aren'?t|are not|is not|isn'?t|not)( \w+){0,2} (available|exposed|attached|accessible|enabled)\b/i.test(t) ||
+    /\bno (onflip )?tools? (are )?(available|exposed)\b/i.test(t) ||
+    // "I don't have the ability to edit files here."
+    /\b(do ?n'?t|does ?n'?t) have (the )?(ability|capability|permission|means)\b[^.]{0,60}\b(edit|writ|read|run|execut|modif|chang|creat|access|open|list|search)/i.test(t);
+  if (!denies) return null;
+  return (
+    "you said you could not run a tool, but the tools are attached to this " +
+    "conversation and callable on every turn of it, this one included — emit " +
+    "an onflip block instead of describing what you cannot do"
+  );
+}
+
 function detectServiceMessage(text: string): string | null {
   const t = text.trim();
   if (!t || t.length > 400) return null;
@@ -328,7 +400,8 @@ function detectServiceMessage(text: string): string | null {
   return null;
 }
 
-function detectPermissionRequest(text: string): string | null {
+function detectPermissionRequest(raw: string): string | null {
+  const text = straighten(raw);
   if (!text.trim()) return null;
 
   const asksToRun =
@@ -346,7 +419,8 @@ function detectPermissionRequest(text: string): string | null {
   return null;
 }
 
-function detectFabrication(text: string): string | null {
+function detectFabrication(raw: string): string | null {
+  const text = straighten(raw);
   if (!text.trim()) return "the reply was empty";
 
   const claimsExecution =

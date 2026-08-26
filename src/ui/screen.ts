@@ -46,6 +46,16 @@ let caretRow = 0;
 let caretCol = 0;
 /** One transient line above the composer — the spinner lives here. */
 let status: string | null = null;
+/**
+ * A modal block pinned above the composer — the approval prompt lives here.
+ *
+ * It has to be part of the frame rather than drawn at the cursor. Anything
+ * written into the alternate buffer behind the frame owner's back survives
+ * only until the next repaint, and a repaint is never more than a keystroke
+ * away: the prompt appeared to arrive late, then vanish the moment an arrow
+ * key was pressed.
+ */
+let overlay: string[] = [];
 /** Lines scrolled up from the bottom. Zero means pinned to the latest. */
 let scrollOffset = 0;
 let frameScheduled = false;
@@ -85,6 +95,7 @@ export function leave(): void {
   transcript = [];
   chrome = [];
   header = [];
+  overlay = [];
   status = null;
   partial = "";
 }
@@ -164,6 +175,12 @@ export function setStatus(line: string | null): void {
   scheduleFrame();
 }
 
+/** Show a modal block above the composer. An empty array takes it down. */
+export function setOverlay(lines: string[]): void {
+  overlay = lines;
+  scheduleFrame();
+}
+
 /** Scroll the transcript. Positive scrolls back through history. */
 export function scrollBy(delta: number): void {
   const total = transcript.length + (partial ? 1 : 0);
@@ -187,7 +204,7 @@ export function atBottom(): boolean {
 }
 
 function chromeHeight(): number {
-  return chrome.length + (status ? 1 : 0);
+  return chrome.length + overlay.length + (status ? 1 : 0);
 }
 
 function headerHeight(): number {
@@ -263,6 +280,10 @@ export function render(): void {
   }
 
   let row = top + viewH + hintH;
+  for (const line of overlay) {
+    out.push(`[${row};1H${erase.line}${truncate(line, width)}`);
+    row++;
+  }
   if (status) {
     out.push(`[${row};1H${erase.line}${truncate(status, width)}`);
     row++;
@@ -274,7 +295,8 @@ export function render(): void {
   out.push(erase.down);
 
   // Park the caret inside the composer.
-  const caretScreenRow = top + viewH + hintH + (status ? 1 : 0) + caretRow;
+  const caretScreenRow =
+    top + viewH + hintH + overlay.length + (status ? 1 : 0) + caretRow;
   out.push(`[${Math.min(height, caretScreenRow)};${Math.max(1, caretCol + 1)}H`);
   out.push(cursor.show);
 

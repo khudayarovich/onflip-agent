@@ -24,11 +24,19 @@ const COMPOSER_SELECTORS = [
   "div.ProseMirror[contenteditable='true']",
   "form textarea",
 ];
+/**
+ * Where an assistant reply lives on the page.
+ *
+ * Every one of these has to be unable to match the *user's* turn. The
+ * looser ones used to match any conversation turn's `.markdown`, so before
+ * the assistant had rendered a word the newest turn was the message OnFlip
+ * had just sent — and it was read back and parsed as a reply.
+ */
 const ASSISTANT_SELECTORS = [
   "[data-message-author-role='assistant']",
-  "article[data-testid^='conversation-turn'] .markdown",
+  "article[data-testid^='conversation-turn'] [data-message-author-role='assistant']",
+  ".agent-turn [data-message-author-role='assistant']",
   ".agent-turn .markdown",
-  ".markdown.prose",
 ];
 const STOP_SELECTORS = [
   "button[data-testid='stop-button']",
@@ -77,6 +85,23 @@ function profileDir(): string {
   return dir;
 }
 
+/**
+ * Cookies that belong to the browser that earned them, not to the session.
+ *
+ * Three kinds, all carried in with the login and all wrong to replay:
+ *
+ *  - Cloudflare's clearance and bot-management cookies are bound to one
+ *    browser and address, so another's is useless and looks like the exact
+ *    thing an anti-bot check watches for;
+ *  - the edge cookies pin a backend that has nothing to do with us;
+ *  - the model-config cookies carry the *other* browser's last-used model,
+ *    and ChatGPT honours them over the `?model=` OnFlip asks for — which is
+ *    how a session set to one model answered as another, unfixable by
+ *    /model because the preference was arriving with the cookies.
+ */
+const NOT_OURS_TO_REPLAY =
+  /^(cf_clearance|__cf_bm|__cflb|_cfuvid|GCLB|__oailb|oai-last-model-config|oai-default-model-config)$/i;
+
 function toPlaywrightCookies(cookies: SessionCookie[]) {
   const out: {
     name: string;
@@ -87,7 +112,16 @@ function toPlaywrightCookies(cookies: SessionCookie[]) {
     secure: boolean;
     sameSite: "None" | "Lax" | "Strict";
   }[] = [];
-  for (const c of cookies) {
+  const carried = cookies.filter((c) => !NOT_OURS_TO_REPLAY.test(c.name));
+  const dropped = cookies.length - carried.length;
+  if (dropped > 0) {
+    logger.debug("browser", "left the other browser's edge cookies behind", {
+      dropped,
+      carried: carried.length,
+    });
+  }
+
+  for (const c of carried) {
     for (const domain of [".chatgpt.com", ".openai.com"]) {
       out.push({
         name: c.name,
@@ -106,8 +140,61 @@ function toPlaywrightCookies(cookies: SessionCookie[]) {
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
+/**
+ * Prefer the real installed Chrome over Playwright's bundled Chromium.
+ *
+ * Cloudflare challenges the bundled build, and its challenge cannot be
+ * completed by hand — which breaks signing in precisely when someone needs
+ * to. Chrome is the same engine wearing a fingerprint the internet already
+ * trusts. When it is not installed, the bundled build still works for
+ * everything except the challenge.
+ */
+/** Is this failure the profile being held by another browser? */
+function isProfileInUse(e: unknown): boolean {
+  const m = e instanceof Error ? e.message : String(e);
+  return /ProcessSingleton|profile.*in use|SingletonLock|already running/i.test(m);
+}
+
+async function launchWithFallback<T>(
+  launch: (channel?: string) => Promise<T>
+): Promise<T> {
+  const preferred = process.env.ONFLIP_BROWSER_CHANNEL ?? "chrome";
+  if (preferred !== "chromium") {
+    try {
+      const result = await launch(preferred);
+      logger.debug("browser", "launched", { channel: preferred });
+      return result;
+    } catch (e) {
+      // A held profile fails identically on the bundled build, so retrying
+      // there only starts a second browser before failing again.
+      if (isProfileInUse(e)) {
+        throw new ChatGPTBrowserError(
+          "OnFlip's browser profile is already open — another OnFlip is running, or one did not shut down cleanly. Close it, or end any leftover browser using ~/.onflip/browser-profile, then try again."
+        );
+      }
+      logger.debug("browser", "channel unavailable, using bundled chromium", {
+        channel: preferred,
+        error: e instanceof Error ? e.message.slice(0, 160) : String(e),
+      });
+    }
+  }
+  try {
+    return await launch(undefined);
+  } catch (e) {
+    if (isProfileInUse(e)) {
+      throw new ChatGPTBrowserError(
+        "OnFlip's browser profile is already open — another OnFlip is running, or one did not shut down cleanly. Close it, or end any leftover browser using ~/.onflip/browser-profile, then try again."
+      );
+    }
+    throw e;
+  }
+}
+
 async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
   if (page && !page.isClosed()) return page;
+  // Diagnostic: a browser relaunching mid-session resets the conversation,
+  // which shows up as "it starts a new chat every time".
+  logger.debug("browser", "launching a browser", { hadPage: Boolean(page) });
 
   const headless = !browserOptions.headed;
   const launchArgs = [
@@ -117,20 +204,25 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
     "--no-default-browser-check",
   ];
 
+  const shared = {
+    args: launchArgs,
+    userAgent: UA,
+    viewport: { width: 1280, height: 900 },
+    locale: "en-US",
+    timezoneId: Intl.DateTimeFormat().resolvedOptions().timeZone,
+  };
+
   if (browserOptions.persistProfile) {
     // A persistent profile keeps Cloudflare clearance and the login between
     // runs, which materially reduces how often a session goes stale.
-    context = await chromium.launchPersistentContext(profileDir(), {
-      headless,
-      args: launchArgs,
-      userAgent: UA,
-      viewport: { width: 1280, height: 900 },
-      locale: "en-US",
-      timezoneId: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    });
+    context = await launchWithFallback((channel) =>
+      chromium.launchPersistentContext(profileDir(), { headless, channel, ...shared })
+    );
     browser = null;
   } else {
-    browser = await chromium.launch({ headless, args: launchArgs });
+    browser = await launchWithFallback((channel) =>
+      chromium.launch({ headless, channel, args: launchArgs })
+    );
     context = await browser.newContext({
       userAgent: UA,
       viewport: { width: 1280, height: 900 },
@@ -191,19 +283,19 @@ export class ChatGPTBrowserError extends Error {}
  * verbatim tells the user nothing they can act on.
  */
 const SIGNED_OUT_MESSAGE =
-  "OnFlip's browser profile is not signed in to ChatGPT. Run `onflip login --headed` and sign in once in the window that opens.";
+  "No ChatGPT session. Sign in to ChatGPT in your normal browser (Chrome, Edge or Firefox), then run `onflip login` to pick the session up.";
 
 async function assertLoggedIn(p: Page): Promise<void> {
   const url = p.url();
   if (/\/auth\/login|\/auth\/signin|openai\.com\/auth/.test(url)) {
     throw new ChatGPTBrowserError(
-      "ChatGPT is asking you to log in. Sign in at https://chatgpt.com in your browser, then run `onflip login`. If it keeps happening, run `onflip login --headed` to sign in through OnFlip's own browser profile."
+      "ChatGPT is asking you to log in — the stored session has expired. Sign in to ChatGPT in your normal browser (Chrome, Edge or Firefox), then run `onflip login` to pick the session up."
     );
   }
   const body = await p.locator("body").innerText().catch(() => "");
   if (/just a moment|checking your browser|verify you are human/i.test(body.slice(0, 400))) {
     throw new ChatGPTBrowserError(
-      "Cloudflare is challenging the automated browser. Run `onflip login --headed` once to clear the check against a persistent profile."
+      "Cloudflare is challenging the browser OnFlip drives. It usually clears on its own within a few minutes; if it does not, `onflip logout` then `onflip login` picks up a fresh session from your browser."
     );
   }
 }
@@ -211,22 +303,48 @@ async function assertLoggedIn(p: Page): Promise<void> {
 /**
  * Where a new chat is started.
  *
- * A project keeps every chat OnFlip opens out of the main sidebar, which is
- * the difference between using this alongside ChatGPT and having it bury your
- * own conversations. The short-url form is the one that renders a composer —
- * the bare id loads a project page without one — and a project URL takes no
- * `?model=`, so a chat started there uses the project's own model.
+ * Always the ordinary chat page, even when a project is set. Starting a chat
+ * *inside* a project needs a full sign-in that a session read out of someone
+ * else's browser does not satisfy; the chat is moved into the project once it
+ * exists instead, which needs nothing but the session already in use.
  */
-export function newChatUrl(project: RemoteProject | null, model?: string): string {
-  if (project) return `${CHAT_URL}/g/${project.shortUrl}/project`;
+export function newChatUrl(model?: string): string {
   if (model && model !== "auto") return `${CHAT_URL}/?model=${encodeURIComponent(model)}`;
   return `${CHAT_URL}/`;
 }
 
+/** One wording for every way a chat can end up outside its project. */
+function projectUnavailable(name: string, why: string): string {
+  return (
+    `This chat could not be filed into your "${name}" project — ${why} — so it is in the main list. ` +
+    "The chat itself is fine; only where ChatGPT lists it went wrong."
+  );
+}
+
+/** Set when a project had to be abandoned; surfaced once, then cleared. */
+let lastProjectWarning: string | null = null;
+/** Filing is retried every turn, so the complaint about it is not. */
+let projectWarningShown = false;
+
+function warnProjectUnavailable(name: string, why: string): void {
+  if (projectWarningShown) return;
+  projectWarningShown = true;
+  lastProjectWarning = projectUnavailable(name, why);
+}
+
+export function takeProjectWarning(): string | null {
+  const w = lastProjectWarning;
+  lastProjectWarning = null;
+  return w;
+}
+
 async function openNewChat(p: Page, model?: string): Promise<void> {
-  const url = newChatUrl(activeProject, model);
-  await p.goto(url, { waitUntil: "domcontentloaded", timeout: 45_000 });
+  await p.goto(newChatUrl(model), {
+    waitUntil: "domcontentloaded",
+    timeout: 45_000,
+  });
   await assertLoggedIn(p);
+
   const composer = await firstVisible(p, COMPOSER_SELECTORS, 30_000);
   if (!composer) {
     await assertLoggedIn(p);
@@ -236,6 +354,206 @@ async function openNewChat(p: Page, model?: string): Promise<void> {
   }
   await p.waitForTimeout(600);
   priorTurnCount = 0;
+  filedConversation = null;
+  projectWarningShown = false;
+  // Taken while the chat is still empty, so whatever the account gains from
+  // here is this chat. Only worth a request when there is a project to file
+  // into.
+  conversationsBeforeChat = activeProject ? await snapshotConversations(p) : null;
+  logger.info("browser", "opened a new chat", { url: p.url() });
+}
+
+/** The conversation id in a `/c/<id>` URL, when the page is on one. */
+function conversationIdFromUrl(url: string): string | null {
+  const m = /\/c\/([0-9a-f-]{16,})/i.exec(url);
+  return m ? m[1] : null;
+}
+
+/** The conversation id, waiting briefly for the SPA to put it in the URL. */
+async function waitForConversationId(p: Page, timeout = 8_000): Promise<string | null> {
+  const deadline = Date.now() + timeout;
+  for (;;) {
+    const id = conversationIdFromUrl(p.url());
+    if (id) return id;
+    if (Date.now() > deadline) return null;
+    await p.waitForTimeout(250);
+  }
+}
+
+/** The account's most recent conversation ids, newest first. */
+async function recentConversationIds(p: Page, limit = 20): Promise<string[]> {
+  const json = (await backendApi(
+    p,
+    `/backend-api/conversations?offset=0&limit=${limit}&order=updated`
+  )) as { items?: { id?: unknown }[] };
+  const out: string[] = [];
+  for (const item of json.items ?? []) {
+    if (typeof item?.id === "string" && item.id) out.push(item.id);
+  }
+  return out;
+}
+
+/** What the account already had when the current chat was opened. */
+let conversationsBeforeChat: Set<string> | null = null;
+
+/**
+ * The newest conversation the account has gained since the snapshot.
+ *
+ * Exported because this is the whole of the reasoning that decides which
+ * conversation gets moved into someone's project, and getting it wrong moves
+ * the wrong one. No snapshot means no answer — never a guess.
+ */
+export function newestUnseen(recent: string[], before: Set<string> | null): string | null {
+  if (!before) return null;
+  return recent.find((id) => !before.has(id)) ?? null;
+}
+
+async function snapshotConversations(p: Page): Promise<Set<string> | null> {
+  try {
+    return new Set(await recentConversationIds(p));
+  } catch (e) {
+    // Best effort. Without it a chat whose id the URL withholds cannot be
+    // identified, which costs the filing — not the turn.
+    logger.warn("browser", "could not snapshot the conversation list", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return null;
+  }
+}
+
+/**
+ * Which conversation this page is in.
+ *
+ * The URL is the cheap answer and not a dependable one: over twenty-five
+ * chats in the logs, seven never showed `/c/<id>` at all — and every one of
+ * those went unfiled, in a session that reported filing them. So when the URL
+ * will not say, the chat is identified as the one the account has gained
+ * since it was opened, which is exact and needs nothing from the page.
+ */
+async function resolveConversationId(p: Page): Promise<string | null> {
+  // The URL is the free answer, so it gets a moment — a longer one when
+  // there is no snapshot behind it, because then it is the only answer
+  // there is.
+  const fromUrl = await waitForConversationId(p, conversationsBeforeChat ? 4_000 : 8_000);
+  if (fromUrl) return fromUrl;
+
+  // With no snapshot there is nothing to tell this chat from an older one,
+  // and moving somebody else's conversation into a project is a good deal
+  // worse than leaving this one out of it.
+  const before = conversationsBeforeChat;
+  if (!before) return null;
+  try {
+    const fresh = newestUnseen(await recentConversationIds(p), before);
+    if (fresh) {
+      logger.info("browser", "identified the chat from the conversation list", {
+        conversation: fresh,
+      });
+      return fresh;
+    }
+  } catch (e) {
+    logger.warn("browser", "could not read the conversation list", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+  return null;
+}
+
+/** Conversations already filed, so a multi-turn chat is only moved once. */
+let filedConversation: string | null = null;
+
+/**
+ * Move a conversation into a project.
+ *
+ * This is how the sidebar grouping actually happens: the chat is created on
+ * the ordinary page and moved afterwards, because the project page itself is
+ * behind a sign-in a transplanted session cannot pass.
+ */
+async function fileIntoProject(p: Page, conversationId: string, project: RemoteProject): Promise<void> {
+  try {
+    // `gizmo_id` is the field that moves it. `conversation_template_id` is
+    // accepted with a 200 and silently ignored — which is how this reported
+    // success for every chat while leaving them all outside the project.
+    await backendApi(p, `/backend-api/conversation/${conversationId}`, {
+      method: "PATCH",
+      body: { gizmo_id: project.id },
+    });
+
+    // Trust the read, not the status code.
+    const after = (await backendApi(p, `/backend-api/conversation/${conversationId}`)) as {
+      gizmo_id?: string | null;
+    };
+    if (after?.gizmo_id !== project.id) {
+      throw new Error(`the chat is still outside the project (gizmo_id: ${after?.gizmo_id ?? "null"})`);
+    }
+
+    filedConversation = conversationId;
+    logger.info("browser", "filed chat into project", {
+      conversation: conversationId,
+      project: project.id,
+    });
+  } catch (e) {
+    // The chat itself is fine; only where it is listed went wrong.
+    logger.warn("browser", "could not file chat into project", {
+      conversation: conversationId,
+      project: project.id,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    warnProjectUnavailable(project.name, e instanceof Error ? e.message : String(e));
+  }
+}
+
+/**
+ * File the current chat into the active project, and say which chat it was.
+ *
+ * The id comes back whether or not the filing worked, because the log wants
+ * it either way; null is this turn admitting it does not know where it
+ * landed. Retried every turn until it sticks — a chat sitting in the main
+ * list is the entire complaint the project setting exists to answer.
+ */
+async function groupInProject(p: Page): Promise<string | null> {
+  if (!activeProject) return conversationIdFromUrl(p.url());
+  if (filedConversation) return filedConversation;
+
+  try {
+    const conversationId = await resolveConversationId(p);
+    if (!conversationId) {
+      logger.warn("browser", "could not tell which conversation this is", {
+        url: p.url(),
+        project: activeProject.id,
+      });
+      warnProjectUnavailable(
+        activeProject.name,
+        "ChatGPT never said which conversation this is"
+      );
+      return null;
+    }
+    await fileIntoProject(p, conversationId, activeProject);
+    return conversationId;
+  } catch (e) {
+    // The reply is already in hand. Where the chat is listed must never be
+    // able to take a completed turn down with it.
+    logger.warn("browser", "filing the chat into its project failed", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return null;
+  }
+}
+/**
+ * Exposed for tests: filing a chat into a project is the part with the
+ * interesting behaviour, and it only happens inside a full send.
+ */
+export async function __sendForTest(
+  p: Page,
+  message: string,
+  opts: BrowserSendOptions
+): Promise<string> {
+  inConversation = true;
+  return sendOn(p, message, opts);
+}
+
+export function __resetFiledForTest(): void {
+  filedConversation = null;
+  conversationsBeforeChat = null;
 }
 
 /** Dispatch a real paste event, which is how ProseMirror best accepts text. */
@@ -415,6 +733,15 @@ const IS_COMPOSER_FOCUSED = `(selectors) => {
   });
 }`;
 
+/** How many user turns the conversation shows. */
+async function userTurnCount(p: Page): Promise<number> {
+  try {
+    return await p.locator("[data-message-author-role='user']").count();
+  } catch {
+    return 0;
+  }
+}
+
 /** Is the caret actually in the message box? */
 async function composerFocused(p: Page): Promise<boolean> {
   try {
@@ -517,6 +844,11 @@ export interface BrowserSendOptions {
   signal?: AbortSignal;
   /** Overall ceiling for one reply, in milliseconds. */
   timeoutMs?: number;
+  /**
+   * What was just sent. Any candidate reply matching it is the page
+   * showing OnFlip its own message rather than the model's answer.
+   */
+  sent?: string;
 }
 
 /**
@@ -583,6 +915,15 @@ export async function sendViaBrowser(
     inConversation = true;
   }
 
+  return sendOn(p, message, opts);
+}
+
+/** Everything after the page is open and pointed at a chat. */
+async function sendOn(
+  p: Page,
+  message: string,
+  opts?: BrowserSendOptions
+): Promise<string> {
   const directive = thinkingDirective(opts?.thinking);
   const payload = directive ? `${directive}\n\n${message.trim()}` : message.trim();
 
@@ -597,13 +938,23 @@ export async function sendViaBrowser(
   await submitMessage(p);
 
   const sentAt = Date.now();
-  const reply = await waitForReply(p, priorTurnCount, opts);
+  const reply = await waitForReply(p, priorTurnCount, { ...opts, sent: payload });
+
+  // Group it in the sidebar now that the conversation exists.
+  const conversationId = await groupInProject(p);
+
   // Timing belongs in the log: "it hung" and "it took four minutes" are the
   // same picture from the terminal, and they need different fixes.
   logger.info("browser", "reply received", {
     ...shapeOf(reply),
     composeMs: sentAt - typedAt,
     replyMs: Date.now() - sentAt,
+    // Which conversation this landed in, and whether it was grouped. `filed`
+    // has to mean the move happened: an unknown id compares equal to an
+    // unfiled chat, so every skipped filing used to be logged as a success.
+    conversation: conversationId,
+    project: activeProject?.id ?? null,
+    filed: Boolean(conversationId) && filedConversation === conversationId,
   });
   logger.debug("browser", "raw reply", { reply });
   return reply;
@@ -615,10 +966,31 @@ export async function sendViaBrowser(
  * working. It is stable for many seconds at a time, so a completion rule based
  * on "the text stopped changing" will happily accept it as the whole reply.
  */
+/**
+ * Is this the message we just sent, rather than a reply to it?
+ *
+ * Compared on squashed whitespace and only over the opening stretch: the
+ * page re-wraps what it renders, and a long payload need not match to the
+ * last character to be obviously the same message.
+ */
+export function isEcho(candidate: string, sent: string | undefined): boolean {
+  if (!sent) return false;
+  const squash = (t: string) => t.replace(/\s+/g, " ").trim();
+  const a = squash(candidate);
+  const b = squash(sent);
+  if (!a || !b) return false;
+  // A short reply that happens to repeat a short prompt is a normal answer.
+  if (b.length < 120) return false;
+  const head = b.slice(0, 200);
+  return a.startsWith(head) || b.startsWith(a.slice(0, 200));
+}
+
 function looksLikePlaceholder(text: string): boolean {
   const t = text.trim();
   if (t.length > 60) return false;
-  return /^(working|thinking|analy[sz]ing|searching|reading|browsing|reasoning|planning|thought for [\w\s.]+|done thinking)[.…]*$/i.test(t);
+  // The optional prefix is the model badge the UI puts in front of its status
+  // on some plans — "Pro thinking" is the label, not the answer.
+  return /^(pro |auto |instant |[\w.-]*gpt[\w.-]* )?(working|thinking|analy[sz]ing|searching|reading|browsing|reasoning|planning|thought for [\w\s.]+|done thinking)[.…]*$/i.test(t);
 }
 
 export async function waitForReply(
@@ -660,6 +1032,9 @@ export async function waitForReply(
   let sawGeneration = false;
   let lastSignAt = started;
   let warnedNeverSent = false;
+  let warnedEcho = false;
+  let sendLanded = false;
+  const userTurnsBefore = await userTurnCount(p).catch(() => 0);
   let loggedPlaceholder = "";
   let notedLongThink = false;
 
@@ -678,6 +1053,13 @@ export async function waitForReply(
     } catch {
       /* page busy — fall through to the text checks, which do not need it */
     }
+    // Our message being in the thread means the send landed, so something
+    // is going to come back; only the deadline should end the wait.
+    if (!sendLanded) {
+      sendLanded = await userTurnCount(p).then((n) => n > userTurnsBefore).catch(() => false);
+      if (sendLanded) lastSignAt = now;
+    }
+
     if (generating) {
       sawGeneration = true;
       lastSignAt = now;
@@ -690,12 +1072,28 @@ export async function waitForReply(
       continue;
     }
 
+    let candidate = text;
     if (turns.length > before) {
-      text = turns[turns.length - 1] ?? "";
+      candidate = turns[turns.length - 1] ?? "";
     } else if (turns.length === before && before > 0 && sawGeneration) {
       // Some layouts reuse the last node rather than appending one.
-      text = turns[turns.length - 1] ?? "";
+      candidate = turns[turns.length - 1] ?? "";
     }
+
+    // The page showing us our own message is not the model answering it.
+    // This happened for real: a fallback selector matched the user's turn,
+    // the whole payload came back as the reply, and the protocol examples
+    // inside the system prompt were parsed and run as tool calls.
+    if (candidate && isEcho(candidate, opts?.sent)) {
+      if (!warnedEcho) {
+        warnedEcho = true;
+        logger.warn("browser", "read our own message back; still waiting", {
+          chars: candidate.length,
+        });
+      }
+      continue;
+    }
+    text = candidate;
 
     if (text.length !== lastLength) {
       lastLength = text.length;
@@ -756,7 +1154,9 @@ export async function waitForReply(
         deadlineMs: timeout,
       });
     }
-    if (now - lastSignAt > NO_SIGN_MS) break;
+    // Only give up on silence when there is no evidence anything is under
+    // way at all. A landed message is evidence.
+    if (!sendLanded && now - lastSignAt > NO_SIGN_MS) break;
   }
 
   // Falling out of the loop with only a placeholder means generation stalled.
@@ -799,6 +1199,9 @@ async function stopGeneration(p: Page): Promise<void> {
 export function resetBrowserChat(): void {
   inConversation = false;
   priorTurnCount = 0;
+  filedConversation = null;
+  conversationsBeforeChat = null;
+  projectWarningShown = false;
 }
 
 /** True while a live ChatGPT conversation is open and being appended to. */
@@ -1307,5 +1710,8 @@ export async function closeBrowser(): Promise<void> {
     browser = null;
     inConversation = false;
     priorTurnCount = 0;
+    filedConversation = null;
+    conversationsBeforeChat = null;
+    projectWarningShown = false;
   }
 }

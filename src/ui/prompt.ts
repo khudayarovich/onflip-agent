@@ -5,12 +5,21 @@ import { termWidth, truncate, wrap, isInteractive, erase, cursor } from "./ansi"
 import { highlightLine } from "./markdown";
 import { renderTextDiff, formatStats } from "./diff";
 import { captureKeys, Key, supportsRaw } from "./keys";
+import { emit, pauseComposer } from "./render";
+import * as screen from "./screen";
 import { PermissionRequest, PermissionDecision } from "../types";
 
 const GUTTER = "  ";
 
+/**
+ * Everything printed here goes through the same funnel as the rest of the UI.
+ *
+ * Writing straight to stdout is what broke this prompt: in full-screen mode
+ * the frame owner repaints every row it knows about, so a block drawn behind
+ * its back lasts until the next repaint and no longer.
+ */
 function out(s: string): void {
-  process.stdout.write(s);
+  emit(s);
 }
 
 export interface Choice<T> {
@@ -82,15 +91,15 @@ export async function select<T>(
 
   let index = 0;
   let drawnLines = 0;
+  // Full-screen owns the screen, so the selector is handed to the frame as a
+  // block to paint on every pass rather than drawn at the cursor. Inline mode
+  // still draws at the cursor, with the composer lifted out of the way for as
+  // long as the question is up.
+  const framed = screen.isActive();
+  const restoreComposer = framed ? () => {} : pauseComposer();
 
-  const draw = () => {
-    if (drawnLines > 0) {
-      out(cursor.up(drawnLines));
-      out(erase.down);
-    }
-    let lines = 0;
-    out(`${GUTTER}${chalk.hex(t.text).bold(question)}\n`);
-    lines++;
+  const block = (): string[] => {
+    const rows = [`${GUTTER}${chalk.hex(t.text).bold(question)}`];
     choices.forEach((c, i) => {
       const active = i === index;
       const marker = active ? chalk.hex(t.accent)("❯") : " ";
@@ -98,10 +107,40 @@ export async function select<T>(
       const colour = c.danger ? t.error : active ? t.text : t.muted;
       const label = active ? chalk.hex(colour).bold(c.label) : chalk.hex(colour)(c.label);
       const hint = c.hint ? chalk.hex(t.border)(`  ${c.hint}`) : "";
-      out(`${GUTTER}${marker} ${keyHint} ${label}${hint}\n`);
-      lines++;
+      rows.push(`${GUTTER}${marker} ${keyHint} ${label}${hint}`);
     });
-    drawnLines = lines;
+    return rows;
+  };
+
+  const draw = () => {
+    const rows = block();
+    if (framed) {
+      screen.setOverlay(rows);
+      return;
+    }
+    // The cursor is ours for the duration here, so this writes directly
+    // rather than through the transcript funnel: a block that is about to be
+    // erased and redrawn must not be committed to the scrollback each time.
+    if (drawnLines > 0) {
+      process.stdout.write(cursor.up(drawnLines));
+      process.stdout.write(erase.down);
+    }
+    for (const row of rows) process.stdout.write(`${row}\n`);
+    drawnLines = rows.length;
+  };
+
+  /** Take the question down, however it was answered. */
+  const done = () => {
+    if (framed) {
+      screen.setOverlay([]);
+      return;
+    }
+    if (drawnLines > 0) {
+      process.stdout.write(cursor.up(drawnLines));
+      process.stdout.write(erase.down);
+      drawnLines = 0;
+    }
+    restoreComposer();
   };
 
   draw();
@@ -120,8 +159,7 @@ export async function select<T>(
       }
       if (key.name === "return" || key.name === "enter") {
         release();
-        out(cursor.up(drawnLines));
-        out(erase.down);
+        done();
         resolve(choices[index].value);
         return;
       }
@@ -129,8 +167,7 @@ export async function select<T>(
       // callers order as the safe/decline option.
       if (key.name === "escape" || (key.ctrl && key.name === "c")) {
         release();
-        out(cursor.up(drawnLines));
-        out(erase.down);
+        done();
         resolve(choices[choices.length - 1].value);
         return;
       }
@@ -138,8 +175,7 @@ export async function select<T>(
       const direct = choices.findIndex((c) => c.key && c.key.toLowerCase() === typed);
       if (direct !== -1) {
         release();
-        out(cursor.up(drawnLines));
-        out(erase.down);
+        done();
         resolve(choices[direct].value);
       }
     });
@@ -171,7 +207,7 @@ export async function askPermission(
   const t = theme();
   const width = termWidth();
 
-  process.stdout.write("\n");
+  out("\n");
   const heading = opts.dangerous
     ? chalk.hex(t.error).bold("  Approval required")
     : chalk.hex(t.warning).bold("  Approval required");
@@ -213,12 +249,22 @@ export async function askPermission(
       ? `Yes, and don't ask again for "${commandLabel(req.subject)}"`
       : "Yes, and don't ask again for this directory";
 
-  const answer = await select<Answer>("Allow this?", [
+  const options: Choice<Answer>[] = [
     { label: "Yes, once", value: "once", key: "y" },
     { label: rememberLabel, value: "always", key: "a" },
     { label: "No, and tell the agent what to do instead", value: "no", key: "n" },
     { label: "No, stop this turn", value: "abort", key: "esc", danger: true },
-  ]);
+  ];
+
+  const answer = await select<Answer>("Allow this?", options);
+
+  // The question is taken down as soon as it is answered, so without this the
+  // transcript keeps the command and loses what was decided about it.
+  const chosen = options.find((o) => o.value === answer);
+  const tint = answer === "once" || answer === "always" ? t.accent : t.muted;
+  out(
+    `${GUTTER}${chalk.hex(tint)("❯")} ${chalk.hex(t.muted)(chosen?.label ?? answer)}\n\n`
+  );
 
   switch (answer) {
     case "once":

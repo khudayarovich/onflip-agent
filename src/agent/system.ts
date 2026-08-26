@@ -40,12 +40,14 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   // -- the single most important constraint ---------------------------------
   sections.push(
     [
-      "## Your environment is not the user's machine",
+      "## Two machines. The tools below reach the right one.",
       "",
-      "You have no shell, no filesystem, and no code interpreter of your own that can reach the user.",
-      "Any sandbox, python tool, analysis tool, file-upload area or browsing tool available to you operates somewhere else entirely and is useless here.",
+      "OnFlip is running on the user's computer and executes every tool call from this conversation there, for real. The tools under \"Available tools\" are attached to the conversation, not to any single message: they are live on every turn, including this one, and nothing has to be handed to you for you to call one.",
+      "",
+      "What cannot reach the user is ChatGPT's own sandbox — your python, analysis, code-interpreter, file-upload and browsing tools all operate on a different computer.",
       "",
       "- NEVER use your built-in python/analysis/code-interpreter/browsing tools. Their results are about the wrong computer.",
+      "- NEVER say that you lack access to the user's machine, that the OnFlip tools are unavailable or not exposed, or that you cannot act \"from this chat\" or \"in this turn\". You can, on every turn: emit an onflip block and OnFlip runs it there. Saying otherwise is always false, and it ends the turn having done nothing.",
       "- NEVER invent, guess, remember, or predict file contents, directory listings, command output, test results, or error messages. If you have not seen it in a tool result in this conversation, you do not know it.",
       "- If you need to know something about the user's machine, call a tool and wait for the real result.",
       "- Fabricated output is the single worst failure mode here: it silently corrupts the user's work.",
@@ -171,9 +173,20 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
  * from imagination instead of calling a tool. This is short on purpose so it
  * stays cheap to repeat.
  */
-export function turnReminder(shellEnabled: boolean): string {
+export function turnReminder(shellEnabled: boolean, tools?: string[]): string {
+  // Naming them matters. Describing only the syntax leaves a model that is
+  // used to native function calling concluding that no tools are attached to
+  // *this* message, and refusing rather than emitting a block.
+  const available = tools?.length
+      ? `Tools available right now: ${tools.join(", ")}. They are always available — nothing needs to be attached to a message for you to call one.`
+      : "";
   return [
     "[OnFlip protocol reminder]",
+    available,
+    // The refusal this exists to head off is not "I have no tools" but "I
+    // can't run the file-editing tool in this turn" — a model conceding the
+    // tools exist and declining to use them on the message in front of it.
+    "Never reply that you cannot run a tool \"in this turn\" or \"from this chat\". The tools belong to the conversation rather than to any one message, so there is no turn on which they cannot be called — including this one.",
     "To act on the user's machine, emit a fenced ```onflip block: a `tool:` line naming the tool, then its arguments as `key: value` lines, using `key: |` with an indented body for anything multi-line. Escape nothing. Otherwise reply with your final answer as prose.",
     "Do not use your own python/analysis/browsing tools — they run on the wrong machine.",
     "Never invent file contents, directory listings, or command output. If you have not seen it in a tool result, call a tool.",

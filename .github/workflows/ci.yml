@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# The browser download is the slowest part of an install and nothing here
+# drives a browser, so it is skipped everywhere in this workflow.
+env:
+  ONFLIP_SKIP_BROWSER_DOWNLOAD: "1"
+
+jobs:
+  build:
+    name: node ${{ matrix.node }} on ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # Windows is a first-class target here — the shell tool runs PowerShell
+        # and cookie decryption uses DPAPI — so it is built, not assumed.
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: ["20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+
+      - run: npm ci
+
+      - name: version constants agree
+        run: npm run check-version
+
+      - run: npm run typecheck
+
+      - run: npm run build
+
+      - name: the CLI actually starts
+        run: node dist/index.js --version
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      # Proves the tarball carries dist — `files` has to win over .gitignore,
+      # and a release that ships an empty package is only noticed by the
+      # person who installs it.
+      - name: pack and inspect
+        run: |
+          npm pack --silent
+          tar -tzf onflip-*.tgz | sort | tee contents.txt
+          grep -q 'package/dist/index.js' contents.txt
+          grep -q 'package/scripts/postinstall.js' contents.txt
+          grep -q 'package/LICENSE' contents.txt
