@@ -1,7 +1,5 @@
 # OnFlip
 
-[![CI](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/khudayarovich/onflip-agent?sort=semver)](https://github.com/khudayarovich/onflip-agent/releases)
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
 An autonomous coding agent that runs in your terminal and is driven by your **ChatGPT web session** — no API key, no per-token billing. It reads and writes files, runs shell commands, searches the codebase, and verifies its own work, behind an approval layer you control.
@@ -13,37 +11,59 @@ An autonomous coding agent that runs in your terminal and is driven by your **Ch
 
 ## Install
 
-**Windows** — in PowerShell:
+OnFlip is in a **private repository**, so installing it needs a GitHub account that has been given access. Ask the owner to add you as a collaborator first — you should be able to open <https://github.com/khudayarovich/onflip-agent> in a browser before you start.
+
+### With GitHub CLI
+
+The short path. Install [GitHub CLI](https://cli.github.com) (`winget install GitHub.cli`, `brew install gh`, or your package manager), sign in once, and the whole install is one line.
+
+```bash
+gh auth login
+```
+
+Windows, in PowerShell:
 
 ```powershell
-irm https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.ps1 | iex
+gh api repos/khudayarovich/onflip-agent/contents/install.ps1 -H "Accept: application/vnd.github.raw" | iex
 ```
 
-**macOS or Linux**:
+macOS or Linux:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.sh | bash
+gh api repos/khudayarovich/onflip-agent/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
 ```
 
-Either one checks your Node version, installs the latest release, fetches the browser OnFlip drives, and — on Windows — leaves an **OnFlip** shortcut on the Desktop that opens a session in one click. Nothing is compiled: the release ships already built.
+### With a token
+
+If you would rather not install GitHub CLI, create a token with read access to the repository at <https://github.com/settings/tokens> and hand it to the same installer.
+
+Windows:
+
+```powershell
+$env:GITHUB_TOKEN = "ghp_yourtoken"
+$h = @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github.raw" }
+Invoke-RestMethod "https://api.github.com/repos/khudayarovich/onflip-agent/contents/install.ps1" -Headers $h | iex
+```
+
+macOS or Linux:
+
+```bash
+export GITHUB_TOKEN=ghp_yourtoken
+API=https://api.github.com/repos/khudayarovich/onflip-agent/contents/install.sh
+curl -fsSL -H "Authorization: Bearer $GITHUB_TOKEN" -H "Accept: application/vnd.github.raw" "$API" | bash
+```
+
+### What the installer does
+
+Checks your Node version, downloads the latest release, installs it globally with npm, fetches the browser OnFlip drives, and — on Windows — leaves an **OnFlip** shortcut on the Desktop that opens a session in one click. Nothing is compiled: the release ships already built.
 
 <details>
-<summary>Install the tarball yourself</summary>
+<summary>Build from a checkout instead</summary>
 
-Download `onflip-<version>.tgz` from the [Releases page](https://github.com/khudayarovich/onflip-agent/releases), then:
-
-```bash
-npm install -g ./onflip-0.2.0.tgz
-npx playwright install chromium
-```
-
-</details>
-
-<details>
-<summary>Install from source</summary>
+Useful before the first release exists, or to run an unreleased branch. Add `-FromSource` (PowerShell) or `--from-source` (bash) to either command above, or do it by hand:
 
 ```bash
-git clone https://github.com/khudayarovich/onflip-agent.git
+gh repo clone khudayarovich/onflip-agent
 cd onflip-agent
 npm install
 npm run build
@@ -51,6 +71,17 @@ npm link
 ```
 
 `npm install` builds and fetches Chromium on its own; set `ONFLIP_SKIP_BROWSER_DOWNLOAD=1` to skip the browser.
+
+</details>
+
+<details>
+<summary>Install a release tarball by hand</summary>
+
+```bash
+gh release download --repo khudayarovich/onflip-agent --pattern "onflip-*.tgz"
+npm install -g ./onflip-*.tgz
+npx playwright install chromium
+```
 
 </details>
 
@@ -440,11 +471,11 @@ Logs stay on your machine and the newest 20 are kept. They contain your prompts,
 Re-run the installer to update — it always fetches the latest release:
 
 ```powershell
-irm https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.ps1 | iex
+gh api repos/khudayarovich/onflip-agent/contents/install.ps1 -H "Accept: application/vnd.github.raw" | iex
 ```
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.sh | bash
+gh api repos/khudayarovich/onflip-agent/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
 ```
 
 To remove it:

@@ -2,7 +2,16 @@
 #
 # Install OnFlip on macOS or Linux.
 #
-#   curl -fsSL https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.sh | bash
+# OnFlip lives in a private repository, so this needs a GitHub identity that
+# has been given access to it. Either works:
+#
+#   * GitHub CLI  - install it, run `gh auth login` once, and you are done.
+#   * A token     - set GITHUB_TOKEN (or GH_TOKEN) to a personal access token
+#                   with read access to the repository.
+#
+# With GitHub CLI signed in, the whole install is one line:
+#
+#   gh api repos/khudayarovich/onflip-agent/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
 #
 # Environment:
 #   ONFLIP_REPO    owner/repo to install from  (default khudayarovich/onflip-agent)
@@ -44,7 +53,8 @@ printf '\n  %sOnFlip%s\n' "$MAGENTA" "$OFF"
 printf '  %sa coding agent driven by your ChatGPT web session%s\n\n' "$DIM" "$OFF"
 
 # -- prerequisites ----------------------------------------------------------
-# Checked up front so a missing one costs a message rather than half an install.
+# All checked up front, so a missing one costs a message rather than half an
+# install.
 command -v node >/dev/null 2>&1 ||
   die "Node.js is required. Install the LTS build from https://nodejs.org, then run this again."
 
@@ -56,6 +66,31 @@ good "Node.js $NODE_VERSION"
 
 command -v npm >/dev/null 2>&1 ||
   die "npm is required and normally ships with Node.js."
+
+# -- who are you ------------------------------------------------------------
+# The repository is private, so every download below is authenticated. GitHub
+# CLI is preferred because it already knows how to hold a credential; a token
+# in the environment is the escape hatch for machines without it.
+TOKEN="${GITHUB_TOKEN:-${GH_TOKEN:-}}"
+GH_READY=0
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+  GH_READY=1
+fi
+
+if [ "$GH_READY" -eq 0 ] && [ -z "$TOKEN" ]; then
+  die "This repository is private, so the install needs a GitHub identity with access to it.
+
+  Easiest - GitHub CLI:
+      brew install gh          # or your package manager
+      gh auth login
+    then run this installer again.
+
+  Or a token:
+      Create one at https://github.com/settings/tokens with read access to
+      $REPO, then:  export GITHUB_TOKEN=ghp_yourtoken"
+fi
+
+if [ "$GH_READY" -eq 1 ]; then good "GitHub CLI is signed in"; else good "using GITHUB_TOKEN"; fi
 
 # npm 11.17 stopped running a package's install scripts on a global install
 # unless the package is named. Older npm warns about a flag it does not know,
@@ -77,8 +112,8 @@ trap cleanup EXIT
 export ONFLIP_SKIP_BROWSER_DOWNLOAD=1
 
 npm_global() {
-  # A global prefix owned by root is the single most common install failure on
-  # Linux, and "try sudo" is more useful advice after the fact than before it.
+  # A global prefix owned by root is the most common install failure on Linux,
+  # and "try sudo" is more useful advice after the fact than before it.
   if npm install -g "$@" --no-audit --no-fund; then
     return 0
   fi
@@ -87,10 +122,15 @@ npm_global() {
 
 if [ "$FROM_SOURCE" -eq 1 ]; then
   # ---- build from a checkout ----------------------------------------------
-  command -v git >/dev/null 2>&1 || die "git is required to install from source."
   step "cloning $REPO ($BRANCH)"
-  git clone --depth 1 --branch "$BRANCH" "https://github.com/$REPO.git" "$TMP/src" >/dev/null 2>&1 ||
-    die "git could not clone https://github.com/$REPO."
+  if [ "$GH_READY" -eq 1 ]; then
+    gh repo clone "$REPO" "$TMP/src" -- --depth 1 --branch "$BRANCH" >/dev/null 2>&1 ||
+      die "Could not clone $REPO. Check that your GitHub account has access to it."
+  else
+    command -v git >/dev/null 2>&1 || die "git is required to install from source."
+    git clone --depth 1 --branch "$BRANCH" "https://github.com/$REPO.git" "$TMP/src" >/dev/null 2>&1 ||
+      die "Could not clone $REPO. Check that your git credentials have access to it."
+  fi
   (
     cd "$TMP/src"
     step "installing dependencies"
@@ -100,24 +140,51 @@ if [ "$FROM_SOURCE" -eq 1 ]; then
   ) || die "the build failed in the checkout."
   step "installing onflip globally"
   npm_global "$TMP/src" "${ALLOW[@]+"${ALLOW[@]}"}"
+
+elif [ "$GH_READY" -eq 1 ]; then
+  # ---- release, via GitHub CLI --------------------------------------------
+  # `gh release download` handles the private-asset redirect dance on its own,
+  # which is the main reason it is the preferred path.
+  step "downloading the latest release"
+  gh release download ${TAG:+"$TAG"} --repo "$REPO" --pattern "onflip-*.tgz" --dir "$TMP" ||
+    die "No release with an onflip-*.tgz was found in $REPO. Build from a checkout instead: re-run with --from-source."
+  TARBALL="$(ls "$TMP"/onflip-*.tgz | head -1)"
+  step "installing it globally"
+  npm_global "$TARBALL" "${ALLOW[@]+"${ALLOW[@]}"}"
+
 else
-  # ---- install the published release ---------------------------------------
-  # The release tarball already carries the built dist, so this needs no git,
-  # no compiler and no TypeScript.
+  # ---- release, via the API and a token ------------------------------------
   step "looking up the latest release"
   API="https://api.github.com/repos/$REPO/releases/latest"
   [ -z "$TAG" ] || API="https://api.github.com/repos/$REPO/releases/tags/$TAG"
 
-  ASSET_URL="$(curl -fsSL "$API" 2>/dev/null |
-    sed -n 's/.*"browser_download_url": *"\([^"]*onflip-[^"]*\.tgz\)".*/\1/p' | head -1 || true)"
+  RELEASE="$(curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" "$API" 2>/dev/null || true)"
+  [ -n "$RELEASE" ] ||
+    die "Could not read the releases of $REPO. The token may lack access, or there is no release yet - re-run with --from-source to build from a checkout."
 
-  if [ -z "$ASSET_URL" ]; then
-    die "No published release with an onflip-*.tgz was found for $REPO. Install from a checkout instead: curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | bash -s -- --from-source"
-  fi
+  # The API asset url, not browser_download_url: that one needs the token too,
+  # and this form is the documented way to fetch a private asset. Parsed with
+  # node rather than sed, because a release carries several assets and only one
+  # of them is the package - a regex over the whole document picks whichever
+  # happens to come first.
+  ASSET_URL="$(printf '%s' "$RELEASE" | node -e '
+    let raw = "";
+    process.stdin.on("data", (d) => (raw += d)).on("end", () => {
+      try {
+        const assets = JSON.parse(raw).assets || [];
+        const asset = assets.find((a) => /^onflip-.*\.tgz$/.test(a.name));
+        if (asset) process.stdout.write(asset.url);
+      } catch (e) { /* an unparseable body is an empty answer */ }
+    });
+  ')"
+  [ -n "$ASSET_URL" ] || die "That release has no onflip-*.tgz attached to it."
 
-  TARBALL="$TMP/$(basename "$ASSET_URL")"
-  step "downloading $(basename "$ASSET_URL")"
-  curl -fsSL "$ASSET_URL" -o "$TARBALL" || die "could not download $ASSET_URL"
+  TARBALL="$TMP/onflip.tgz"
+  step "downloading the release tarball"
+  # curl drops the Authorization header when the asset URL redirects to
+  # storage on another host, which is exactly what that storage requires.
+  curl -fsSL -H "Authorization: Bearer $TOKEN" -H "Accept: application/octet-stream" -o "$TARBALL" "$ASSET_URL" ||
+    die "Could not download the release tarball."
 
   step "installing it globally"
   npm_global "$TARBALL" "${ALLOW[@]+"${ALLOW[@]}"}"

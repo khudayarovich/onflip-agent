@@ -21,6 +21,38 @@ commit `vX.Y.Z`. Pushing the tag starts `.github/workflows/release.yml`, which
 Re-running the workflow by hand (Actions → Release → Run workflow) against an
 existing tag updates that release rather than creating a second one.
 
+## Who can install it
+
+The repository is private, and stays that way: access is granted per person
+rather than by publishing. **Settings → Collaborators and teams → Add people**,
+with **Read** permission — that is enough to clone, to download release assets
+and to fetch the installers.
+
+Everything a collaborator installs with is authenticated, which rules out the
+usual public tricks:
+
+- **`raw.githubusercontent.com` URLs return 404** for a private repo, so
+  `irm ... | iex` and `curl ... | bash` against raw cannot work. The installers
+  are fetched through the API instead, which does accept a credential:
+  `gh api repos/OWNER/REPO/contents/install.sh -H "Accept: application/vnd.github.raw"`.
+- **Release assets need a token too**, and the `browser_download_url` redirects
+  to storage that rejects a request still carrying an `Authorization` header.
+  `gh release download` handles that; the token path in the installers uses the
+  API asset URL with `Accept: application/octet-stream` and `curl`, which drops
+  the header across hosts by default.
+- **Dynamic badges break.** GitHub proxies README images anonymously, so an
+  Actions or release badge for a private repo renders as broken for everyone.
+  Only the static licence badge is left in the README.
+
+Collaborators need either GitHub CLI signed in (`gh auth login`) or a token with
+read access in `GITHUB_TOKEN`. The installers accept both and say so plainly
+when neither is present.
+
+If this ever outgrows collaborator-by-collaborator access, the next step is
+GitHub Packages: publish the tarball to `npm.pkg.github.com` under a scope, and
+people install it with a token in their `.npmrc`. That is more setup for them,
+not less, which is why it is not the default here.
+
 ## What people actually download
 
 The tarball is the release. It carries `dist/` already built, so installing it
@@ -54,6 +86,7 @@ macOS.
 
 ## Publishing to npm
 
-Optional and off by default. Create an automation token on npmjs.com, add it as
-the repository secret `NPM_TOKEN`, and the next release publishes. Until then
-the GitHub Release is the whole distribution.
+Off by default, and it should stay off while the project is private — the
+public registry is exactly the thing being avoided. The workflow only publishes
+if an `NPM_TOKEN` secret exists, so nothing leaks by accident; the GitHub
+Release is the whole distribution.

@@ -59,27 +59,33 @@ jobs:
           cat > notes.md <<'NOTES'
           ## Install
 
+          This repository is private, so installing needs a GitHub account with
+          access to it, and [GitHub CLI](https://cli.github.com) signed in
+          (`gh auth login`).
+
           **Windows (PowerShell)**
 
           ```powershell
-          irm https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.ps1 | iex
+          gh api repos/khudayarovich/onflip-agent/contents/install.ps1 -H "Accept: application/vnd.github.raw" | iex
           ```
 
           **macOS / Linux**
 
           ```bash
-          curl -fsSL https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.sh | bash
+          gh api repos/khudayarovich/onflip-agent/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
           ```
 
-          **From the tarball attached below**
+          **By hand, from the tarball below**
 
           ```bash
-          npm install -g ./onflip-VERSION.tgz
+          gh release download TAGNAME --repo khudayarovich/onflip-agent --pattern "onflip-*.tgz"
+          npm install -g ./onflip-*.tgz
+          npx playwright install chromium
           ```
 
           Node.js 20 or newer. Then `onflip login` once, `cd` into a project, and run `onflip`.
           NOTES
-          sed -i "s/onflip-VERSION.tgz/$(ls onflip-*.tgz)/" notes.md
+          sed -i "s/TAGNAME/$TAG/" notes.md
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release edit "$TAG" --title "OnFlip $TAG" --notes-file notes.md
           else

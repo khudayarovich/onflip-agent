@@ -3,18 +3,23 @@
     Install OnFlip on Windows.
 
 .DESCRIPTION
-    Downloads the latest release from GitHub, installs it globally with npm,
-    fetches the browser it drives, and leaves a one-click shortcut on the
-    Desktop. Run it straight from the web:
+    OnFlip lives in a private repository, so this needs a GitHub identity that
+    has been given access to it. Either works:
 
-        irm https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/install.ps1 | iex
+      * GitHub CLI  - install it, run `gh auth login` once, and you are done.
+      * A token     - set GITHUB_TOKEN (or GH_TOKEN) to a personal access
+                      token with read access to the repository.
+
+    With GitHub CLI signed in, the whole install is one line:
+
+        gh api repos/khudayarovich/onflip-agent/contents/install.ps1 -H "Accept: application/vnd.github.raw" | iex
 
 .PARAMETER Tag
-    Release tag to install. Defaults to the latest published release.
+    Release tag to install. Defaults to the latest release.
 
 .PARAMETER FromSource
-    Clone and build instead of using a release. Needed only before the first
-    release is published, or to install an unreleased branch.
+    Clone and build instead of using a release. Needed before the first
+    release exists, or to install an unreleased branch.
 
 .PARAMETER NoShortcut
     Skip the Desktop shortcut.
@@ -46,7 +51,7 @@ Write-Host "  a coding agent driven by your ChatGPT web session" -ForegroundColo
 Write-Host ""
 
 # -- prerequisites ----------------------------------------------------------
-# Checked before anything is installed, so a missing one costs a message
+# All checked before anything is installed, so a missing one costs a message
 # rather than a half-finished install.
 if (-not (Get-Command node -ErrorAction SilentlyContinue)) {
     Die "Node.js is required. Install the LTS build from https://nodejs.org, then run this again."
@@ -61,9 +66,41 @@ if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
     Die "npm is required and normally ships with Node.js. Reinstall Node from https://nodejs.org."
 }
 
+# -- who are you --------------------------------------------------------------
+# The repository is private, so every download below is authenticated. GitHub
+# CLI is preferred because it already knows how to hold a credential; a token
+# in the environment is the escape hatch for machines without it.
+$gh = Get-Command gh -ErrorAction SilentlyContinue
+$token = $env:GITHUB_TOKEN
+if (-not $token) { $token = $env:GH_TOKEN }
+$ghReady = $false
+
+if ($gh) {
+    & gh auth status *> $null
+    if ($LASTEXITCODE -eq 0) { $ghReady = $true }
+}
+
+if (-not $ghReady -and -not $token) {
+    Die @"
+This repository is private, so the install needs a GitHub identity with access to it.
+
+  Easiest - GitHub CLI:
+      winget install --id GitHub.cli
+      gh auth login
+    then run this installer again.
+
+  Or a token:
+      Create one at https://github.com/settings/tokens with read access to
+      $Repo, then:
+      `$env:GITHUB_TOKEN = "ghp_yourtoken"
+"@
+}
+
+if ($ghReady) { Good "GitHub CLI is signed in" } else { Good "using GITHUB_TOKEN" }
+
 # npm 11.17 stopped running a package's install scripts on a global install
-# unless the package is named. Older npm has no such flag and warns about one
-# it does not know, so it is only passed where it means something.
+# unless the package is named. Older npm warns about a flag it does not know,
+# so it is only passed where it means something.
 $npmParts = (& npm -v).Split(".")
 $allowScripts = @()
 if ([int]$npmParts[0] -gt 11 -or ([int]$npmParts[0] -eq 11 -and [int]$npmParts[1] -ge 17)) {
@@ -72,19 +109,25 @@ if ([int]$npmParts[0] -gt 11 -or ([int]$npmParts[0] -eq 11 -and [int]$npmParts[1
 
 $temp = Join-Path ([IO.Path]::GetTempPath()) ("onflip-install-" + [Guid]::NewGuid().ToString("N").Substring(0, 8))
 New-Item -ItemType Directory -Path $temp | Out-Null
-# The package's own postinstall would fetch Chromium mid-install, which npm
-# may decline to run at all. It is done explicitly further down instead.
+# The package's own postinstall would fetch Chromium mid-install, which npm may
+# decline to run at all. It is done explicitly further down instead.
 $env:ONFLIP_SKIP_BROWSER_DOWNLOAD = "1"
 
 try {
     if ($FromSource) {
         # ---- build from a checkout ----------------------------------------
-        if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-            Die "git is required to install from source. Get it from https://git-scm.com/download/win."
-        }
         Step "cloning $Repo ($Branch)"
-        & git clone --depth 1 --branch $Branch "https://github.com/$Repo.git" "$temp\src" 2>&1 | Out-Null
-        if ($LASTEXITCODE -ne 0) { Die "git could not clone https://github.com/$Repo." }
+        if ($ghReady) {
+            & gh repo clone $Repo "$temp\src" -- --depth 1 --branch $Branch 2>&1 | Out-Null
+        } else {
+            if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+                Die "git is required to install from source. Get it from https://git-scm.com/download/win."
+            }
+            & git clone --depth 1 --branch $Branch "https://github.com/$Repo.git" "$temp\src" 2>&1 | Out-Null
+        }
+        if ($LASTEXITCODE -ne 0) {
+            Die "Could not clone $Repo. Check that your GitHub account has access to it."
+        }
 
         Push-Location "$temp\src"
         try {
@@ -100,27 +143,49 @@ try {
         } finally {
             Pop-Location
         }
+    } elseif ($ghReady) {
+        # ---- release, via GitHub CLI --------------------------------------
+        # `gh release download` handles the private-asset redirect dance on its
+        # own, which is the main reason it is the preferred path.
+        Step "downloading the latest release"
+        $which = if ($Tag) { @($Tag) } else { @() }
+        & gh release download @which --repo $Repo --pattern "onflip-*.tgz" --dir $temp
+        if ($LASTEXITCODE -ne 0) {
+            Die "No release with an onflip-*.tgz was found in $Repo. Install from a checkout instead: re-run with -FromSource."
+        }
+        $tarball = (Get-ChildItem -Path $temp -Filter "onflip-*.tgz" | Select-Object -First 1).FullName
+        Step "installing it globally"
+        & npm install -g $tarball @allowScripts --no-audit --no-fund
+        if ($LASTEXITCODE -ne 0) {
+            Die "npm could not install OnFlip. The output above says why - a permissions problem on the global prefix is the usual culprit."
+        }
     } else {
-        # ---- install the published release --------------------------------
-        # The release tarball already carries the built dist, so this needs no
-        # git, no compiler and no TypeScript.
+        # ---- release, via the API and a token ------------------------------
         Step "looking up the latest release"
-        $url = "https://api.github.com/repos/$Repo/releases/latest"
-        if ($Tag) { $url = "https://api.github.com/repos/$Repo/releases/tags/$Tag" }
+        $api = "https://api.github.com/repos/$Repo/releases/latest"
+        if ($Tag) { $api = "https://api.github.com/repos/$Repo/releases/tags/$Tag" }
+        $headers = @{
+            Authorization = "Bearer $token"
+            Accept        = "application/vnd.github+json"
+            "User-Agent"  = "onflip-installer"
+        }
 
         $release = $null
         try {
-            $release = Invoke-RestMethod -Uri $url -Headers @{ "User-Agent" = "onflip-installer" }
+            $release = Invoke-RestMethod -Uri $api -Headers $headers
         } catch {
-            Die "No published release found for $Repo. Install from a checkout instead - see the README, or re-run this script with -FromSource."
+            Die "Could not read the releases of $Repo. The token may lack access, or there is no release yet - re-run with -FromSource to build from a checkout."
         }
-
         $asset = $release.assets | Where-Object { $_.name -like "onflip-*.tgz" } | Select-Object -First 1
         if (-not $asset) { Die "Release $($release.tag_name) has no onflip-*.tgz attached to it." }
 
         $tarball = Join-Path $temp $asset.name
         Step "downloading $($asset.name) ($($release.tag_name))"
-        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $tarball -UseBasicParsing
+        # curl.exe, not Invoke-WebRequest: a private asset URL redirects to
+        # storage that rejects the request if the Authorization header comes
+        # along, and curl drops that header across hosts by default.
+        & curl.exe -fsSL -H "Authorization: Bearer $token" -H "Accept: application/octet-stream" -o $tarball $asset.url
+        if ($LASTEXITCODE -ne 0 -or -not (Test-Path $tarball)) { Die "Could not download $($asset.name)." }
 
         Step "installing it globally"
         & npm install -g $tarball @allowScripts --no-audit --no-fund
