@@ -32,6 +32,14 @@ export interface OnFlipConfig {
   /** Compact the transcript once it exceeds this many messages. */
   compactAfter?: number;
   /**
+   * Compact once the transcript exceeds this many characters.
+   *
+   * The trigger that actually fires in practice. Tool output is what fills a
+   * conversation — a build log or a file read is worth twenty exchanges — so a
+   * message count reaches its limit long after the model has reached its own.
+   */
+  compactAfterChars?: number;
+  /**
    * How long to let one reply take, in seconds.
    *
    * Reasoning effort and output size both push this up: a full-file rewrite at

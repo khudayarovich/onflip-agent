@@ -47,6 +47,15 @@ export interface AgentOptions {
   events?: AgentEvents;
   /** Compact the conversation once it grows past this many messages. */
   compactAfterMessages?: number;
+  /**
+   * Compact once the transcript grows past this many characters.
+   *
+   * The better of the two triggers by a wide margin. A message count says
+   * nothing about what is in the messages: one session ran 98 tool calls
+   * carrying 127k characters between them, and a single file read outweighs
+   * twenty short exchanges.
+   */
+  compactAfterChars?: number;
 }
 
 export interface AgentTurnResult {
@@ -88,14 +97,23 @@ export async function runTurn(
     );
   }
 
-  if (opts.compactAfterMessages && history.length > opts.compactAfterMessages) {
-    events.onNotice?.("Context is getting long — compacting.");
-    await compact(history, opts);
-  }
+  // Set when a compaction failed to shrink anything, so a transcript that is
+  // over budget for some other reason cannot put the turn in a loop.
+  let compactionExhausted = false;
 
   for (let iteration = 1; iteration <= budget; iteration++) {
     if (opts.signal.aborted) {
       return { finalAnswer: "", iterations: iteration - 1, exhausted: false, interrupted: true };
+    }
+
+    // Checked before every send, not once per user turn. A single turn can run
+    // dozens of iterations and add a hundred messages, and that long turn is
+    // exactly the one that needs compacting — the old check ran before the
+    // first send and could not see the turn grow underneath it. Measured on a
+    // session that ran out of room mid-task: 53 iterations, 219k characters
+    // sent, not one compaction.
+    if (!compactionExhausted) {
+      compactionExhausted = (await compactIfLarge(history, opts, events)) === "no-gain";
     }
 
     events.onThinking?.(iteration);
@@ -226,6 +244,68 @@ export async function runTurn(
   }
 
   return { finalAnswer: "", iterations: budget, exhausted: true, interrupted: false };
+}
+
+/**
+ * Size of the transcript, in characters.
+ *
+ * A stand-in for how full the model's context is. Rough — characters are not
+ * tokens — but it moves with the thing that actually fills a conversation up,
+ * which a message count does not.
+ */
+export function transcriptChars(history: ChatMessage[]): number {
+  let chars = 0;
+  for (const message of history) chars += message.content.length;
+  return chars;
+}
+
+/** Why this transcript should be compacted, or null to leave it alone. */
+export function compactionReason(
+  history: ChatMessage[],
+  limits: { compactAfterChars?: number; compactAfterMessages?: number }
+): string | null {
+  const chars = transcriptChars(history);
+  if (limits.compactAfterChars && chars > limits.compactAfterChars) {
+    return `${Math.round(chars / 1000)}k characters`;
+  }
+  if (limits.compactAfterMessages && history.length > limits.compactAfterMessages) {
+    return `${history.length} messages`;
+  }
+  return null;
+}
+
+/**
+ * Compact the transcript if it has grown past either budget.
+ *
+ * Returns what happened, because "it did not shrink" has to stop the caller
+ * asking again: a summary that is somehow larger than what it replaced would
+ * otherwise trigger on every single pass and spend the whole step budget
+ * summarising.
+ */
+async function compactIfLarge(
+  history: ChatMessage[],
+  opts: AgentOptions,
+  events: AgentEvents
+): Promise<"skipped" | "compacted" | "no-gain"> {
+  const reason = compactionReason(history, opts);
+  if (!reason) return "skipped";
+
+  const before = transcriptChars(history);
+  logger.info("agent", "compacting", { reason, messages: history.length, chars: before });
+  events.onNotice?.(`Context is getting long (${reason}) — compacting.`);
+  await compact(history, opts);
+
+  const after = transcriptChars(history);
+  logger.info("agent", "compacted", {
+    messages: history.length,
+    chars: after,
+    saved: before - after,
+  });
+  if (after >= before) {
+    logger.warn("agent", "compaction did not shrink the transcript", { before, after });
+    return "no-gain";
+  }
+  return "compacted";
 }
 
 async function sendWithRetry(

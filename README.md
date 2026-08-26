@@ -392,9 +392,12 @@ onflip config approvalMode auto-edit
 onflip config theme nord
 onflip config maxIterations 60
 onflip config replyTimeout 900
+onflip config compactAfterChars 120000
 ```
 
 `replyTimeout` is how many seconds one reply may take, default 600. Reasoning effort and output size both push this up — a full-file rewrite at high effort can spend minutes thinking before the first token. Esc cancels a turn at any point, so a generous budget costs nothing but patience.
+
+`compactAfterChars` is when the transcript gets summarised into a fresh ChatGPT thread — 120,000 characters by default, checked before *every* message rather than once per prompt. A single task can run dozens of steps and pull in more file and build output than twenty ordinary exchanges, and that long run is exactly the one that needs it. Lower it if replies start coming back truncated; `/compact` does it on demand, and `compactAfter` sets a message-count limit alongside it.
 
 Themes: `opencode`, `onflip`, `nord`, `gruvbox`, `dracula`, `mono`.
 
