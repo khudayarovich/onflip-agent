@@ -546,6 +546,8 @@ export class Engine {
     this.saveNow();
 
     try {
+      // Before anything can open a chat: the project the chat files into.
+      await this.ensureOnFlipProject();
       const result = await runTurn(this.history, this.agentOptions());
       if (result.interrupted) {
         this.notice("Interrupted. The work done so far is kept — say what to do next.");
@@ -1098,6 +1100,8 @@ export class Engine {
     // the turn events keep the working indicator up for the duration.
     this.peer.emit("turn", { state: "start" });
     try {
+      // Compaction opens a fresh chat, which must be filed like any other.
+      await this.ensureOnFlipProject();
       await compactNow(this.history, this.agentOptions());
       this.notice("Transcript compacted into a fresh conversation.");
       this.pushTranscript();
@@ -1275,6 +1279,50 @@ export class Engine {
     });
     this.config = loadConfig();
     this.pushStatus();
+  }
+
+  /** Set once the project has been verified this run, so later sends are free. */
+  private projectEnsured = false;
+
+  /**
+   * Every chat OnFlip opens must land inside a ChatGPT project — never the
+   * user's main list. With nothing configured, an existing "OnFlip" project
+   * on the account is adopted, or one is created on the spot. Runs before
+   * the first send of the process, so even the very first chat is filed;
+   * failure is retried on the next turn rather than remembered.
+   */
+  private async ensureOnFlipProject(): Promise<void> {
+    if (this.projectEnsured) return;
+    if (!this.transport || this.transport.name !== "browser") {
+      this.projectEnsured = true;
+      return;
+    }
+    if (this.currentProject()) {
+      this.projectEnsured = true;
+      return;
+    }
+    try {
+      const projects = await listProjects(this.auth.cookies).catch(() => [] as RemoteProject[]);
+      const existing = projects.find((p) => p.name.trim().toLowerCase() === "onflip") ?? null;
+      const project = existing ?? (await createProject(this.auth.cookies, "OnFlip"));
+      saveConfig({
+        projectId: project.id,
+        projectShortUrl: project.shortUrl,
+        projectName: project.name,
+      });
+      setActiveProject(project);
+      this.projectEnsured = true;
+      this.notice(
+        existing
+          ? `Linked your existing "${project.name}" ChatGPT project — every OnFlip chat is filed there.`
+          : `Created an "OnFlip" project in ChatGPT — every OnFlip chat is filed there.`
+      );
+      this.pushStatus();
+    } catch (e) {
+      this.notice(
+        `Could not prepare the OnFlip ChatGPT project (${e instanceof Error ? e.message : String(e)}) — this chat may land in your main list. Retrying next turn.`
+      );
+    }
   }
 
   private currentProject(): RemoteProject | null {
