@@ -19,7 +19,7 @@ import {
   ThinkingLevel,
 } from "onflip/dist/models";
 import { resolveAuth, ResolvedAuth } from "onflip/dist/auth/resolve";
-import { takeExtractError } from "onflip/dist/auth/extract";
+import { spawnExtractToken, takeExtractError } from "onflip/dist/auth/extract";
 import { chooseTransport, Transport } from "onflip/dist/chatgpt/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import {
@@ -908,6 +908,30 @@ export class Engine {
     this.notice("Signed in to ChatGPT — the session is saved and ready to use.");
     this.pushStatus();
     return { ok: true };
+  }
+
+  /**
+   * Sign in by importing a session already open in Chrome, Edge or Firefox.
+   *
+   * The same reader `onflip login` uses, run on demand rather than at
+   * startup — so it works even while the app is signed out, which is
+   * exactly when someone reaches for it. What it cannot do is decrypt
+   * Chrome-family cookies on current Windows: those use app-bound
+   * encryption, and the reader says so rather than pretending the account
+   * was not found.
+   */
+  async importBrowserSession(): Promise<{ ok: boolean; source?: string; reason?: string }> {
+    const extracted = spawnExtractToken();
+    if (extracted?.cookies.length) {
+      await this.applySignIn(extracted.cookies);
+      return { ok: true, source: extracted.source };
+    }
+    return {
+      ok: false,
+      reason:
+        takeExtractError() ??
+        "No signed-in ChatGPT session was found in Chrome, Edge or Firefox.",
+    };
   }
 
   /**

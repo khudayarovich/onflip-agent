@@ -85,6 +85,8 @@ peer.onRequest = async (method, rawParams) => {
       return engine.removeSession(String(params.id));
     case "rollback":
       return engine.rollbackMessage(String(params.messageId));
+    case "importBrowserSession":
+      return engine.importBrowserSession();
     case "applySignOut":
       return engine.applySignOut();
     case "applySignIn":

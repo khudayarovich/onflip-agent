@@ -29,6 +29,9 @@ export const api = {
   resumeSession: (id: string) => call<EngineStatus>("resumeSession", { id }),
   deleteSession: (id: string) => call<{ ok: boolean }>("deleteSession", { id }),
   rollback: (messageId: string) => call<{ text: string }>("rollback", { messageId }),
+  /** Try Chrome, Edge and Firefox for a session already signed in. */
+  importBrowserSession: () =>
+    call<{ ok: boolean; source?: string; reason?: string }>("importBrowserSession"),
   /** Sign in with a session cookie the user pasted; same path as the window. */
   signInWithToken: (token: string) =>
     call<{ ok: boolean }>("applySignIn", {

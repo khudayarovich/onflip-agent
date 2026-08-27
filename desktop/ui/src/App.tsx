@@ -915,6 +915,11 @@ export function App(): React.ReactElement {
       {modal === "cookie" && (
         <CookieSignInModal
           onClose={() => setModal(null)}
+          onImported={() => {
+            refreshStatus();
+            refreshLists();
+          }}
+          onNotice={notify}
           onSubmit={(token) => {
             setModal(null);
             void api
@@ -1043,13 +1048,47 @@ function TodoPanel({ items }: { items: TodoItemDTO[] }): React.ReactElement | nu
 function CookieSignInModal({
   onClose,
   onSubmit,
+  onImported,
+  onNotice,
 }: {
   onClose: () => void;
   onSubmit: (token: string) => void;
+  onImported: () => void;
+  onNotice: (text: string) => void;
 }): React.ReactElement {
   const t = useT();
   const [token, setToken] = useState("");
+  // Detection runs first: pasting a cookie by hand is the fallback for when
+  // no browser here has a session OnFlip can read, not the starting point.
+  const [detecting, setDetecting] = useState(true);
+  const [reason, setReason] = useState<string | null>(null);
   const ready = token.trim().length >= 20;
+
+  useEffect(() => {
+    let live = true;
+    void api
+      .importBrowserSession()
+      .then((r) => {
+        if (!live) return;
+        if (r.ok) {
+          onNotice(t("cookieFound", { browser: r.source ?? "your browser" }));
+          onImported();
+          onClose();
+          return;
+        }
+        setReason(r.reason ?? null);
+        setDetecting(false);
+      })
+      .catch((e: Error) => {
+        if (!live) return;
+        setReason(e.message);
+        setDetecting(false);
+      });
+    return () => {
+      live = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   return (
     <Modal
       title={t("cookieTitle")}
@@ -1059,18 +1098,34 @@ function CookieSignInModal({
           <button className="btn" onClick={onClose}>
             {t("cancel")}
           </button>
-          <button
-            className="btn primary"
-            disabled={!ready}
-            onClick={() => onSubmit(token.trim())}
-          >
-            {t("cookieAction")}
-          </button>
+          {!detecting && (
+            <button
+              className="btn primary"
+              disabled={!ready}
+              onClick={() => onSubmit(token.trim())}
+            >
+              {t("cookieAction")}
+            </button>
+          )}
         </>
       }
     >
-      <div className="modal-note">{t("cookieHelp")}</div>
-      <input
+      {detecting ? (
+        <div className="content-loading" style={{ padding: "26px 0" }}>
+          <span className="spinner big" />
+          <span>{t("cookieDetecting")}</span>
+        </div>
+      ) : (
+        <>
+          {reason && (
+            <div className="modal-note" style={{ color: "var(--yellow)" }}>
+              {reason}
+            </div>
+          )}
+          <div className="modal-note" style={{ marginTop: reason ? 10 : 0 }}>
+            {t("cookieFallback")} {t("cookieHelp")}
+          </div>
+          <input
         className="skill-input"
         style={{ width: "100%", marginTop: 12 }}
         type="password"
@@ -1078,11 +1133,13 @@ function CookieSignInModal({
         spellCheck={false}
         placeholder={t("cookiePlaceholder")}
         value={token}
-        onChange={(e) => setToken(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && ready) onSubmit(token.trim());
-        }}
-      />
+            onChange={(e) => setToken(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && ready) onSubmit(token.trim());
+            }}
+          />
+        </>
+      )}
     </Modal>
   );
 }
