@@ -409,7 +409,10 @@ function registerIpc(): void {
     const result = await runSignIn(win);
     if (result.ok && result.cookies?.length && peer) {
       try {
-        await peer.request("applySignIn", { cookies: result.cookies });
+        await peer.request("applySignIn", {
+          cookies: result.cookies,
+          account: result.account,
+        });
       } catch (e) {
         return { ok: false, reason: e instanceof Error ? e.message : String(e) };
       }

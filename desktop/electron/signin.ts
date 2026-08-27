@@ -1,4 +1,4 @@
-import { BrowserWindow, session, shell } from "electron";
+import { BrowserWindow, session, shell, Session } from "electron";
 
 /**
  * Signing in to ChatGPT, in a browser ChatGPT will actually accept.
@@ -53,6 +53,8 @@ export interface HarvestedCookie {
 export interface SignInResult {
   ok: boolean;
   cookies?: HarvestedCookie[];
+  /** Who signed in, read from the session that just authenticated. */
+  account?: { name?: string; email?: string };
   /** Why it did not succeed: "cancelled" | "timeout" | an error message. */
   reason?: string;
 }
@@ -84,6 +86,29 @@ function isAuthUrl(url: string): boolean {
 /** A value of a few characters is a leftover, not a session token. */
 function looksLikeToken(value: string | undefined): value is string {
   return typeof value === "string" && value.trim().length >= 20;
+}
+
+/**
+ * Who just signed in, asked of the session itself.
+ *
+ * The alternative was waiting for the automation browser to answer the same
+ * question after the first turn, which leaves the account panel saying
+ * "ChatGPT account" until then — and says nothing at all if that browser is
+ * having a bad day. This session has just authenticated, so it knows.
+ */
+async function readAccount(ses: Session): Promise<{ name?: string; email?: string } | undefined> {
+  try {
+    // Session.fetch carries this partition's cookies; net.fetch would not.
+    const res = await ses.fetch("https://chatgpt.com/api/auth/session");
+    if (!res.ok) return undefined;
+    const json = (await res.json()) as { user?: { name?: string; email?: string } };
+    const user = json?.user;
+    if (!user?.name && !user?.email) return undefined;
+    return { name: user.name || undefined, email: user.email || undefined };
+  } catch {
+    // Cosmetic: a missing name never blocks a working sign-in.
+    return undefined;
+  }
 }
 
 let openWindow: BrowserWindow | null = null;
@@ -173,7 +198,7 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
           const cookies = mine
             .filter((c) => looksLikeToken(c.value) || c.name === "oai-did")
             .map((c) => ({ name: c.name, value: c.value }));
-          finish({ ok: true, cookies });
+          void readAccount(ses).then((account) => finish({ ok: true, cookies, account }));
         })
         .catch(() => {
           /* the jar is not readable yet; the next tick tries again */

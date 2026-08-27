@@ -102,12 +102,53 @@ function profileDir(): string {
 const NOT_OURS_TO_REPLAY =
   /^(cf_clearance|__cf_bm|__cflb|_cfuvid|GCLB|__oailb|oai-last-model-config|oai-default-model-config)$/i;
 
+/**
+ * Put the session into the browser, and never let one bad cookie sink it.
+ *
+ * `addCookies` is all-or-nothing: it rejects the whole batch over a single
+ * invalid entry, which is how a signed-in user ended up driving an anonymous
+ * browser — the failure was swallowed, so nothing said the session had not
+ * been injected. A failed batch is now retried cookie by cookie, and what
+ * could not be set is named in the log rather than lost.
+ */
+async function injectCookies(
+  context: BrowserContext,
+  cookies: SessionCookie[]
+): Promise<void> {
+  const prepared = toPlaywrightCookies(cookies);
+  if (prepared.length === 0) return;
+  try {
+    await context.addCookies(prepared);
+    return;
+  } catch (e) {
+    logger.warn("browser", "cookie batch refused; retrying one at a time", {
+      error: e instanceof Error ? e.message.slice(0, 160) : String(e),
+      count: prepared.length,
+    });
+  }
+  const rejected: string[] = [];
+  let accepted = 0;
+  for (const cookie of prepared) {
+    try {
+      await context.addCookies([cookie]);
+      accepted++;
+    } catch {
+      rejected.push(cookie.name);
+    }
+  }
+  logger.warn("browser", "injected cookies individually", {
+    accepted,
+    rejected: [...new Set(rejected)],
+  });
+}
+
 function toPlaywrightCookies(cookies: SessionCookie[]) {
   const out: {
     name: string;
     value: string;
-    domain: string;
-    path: string;
+    domain?: string;
+    path?: string;
+    url?: string;
     httpOnly: boolean;
     secure: boolean;
     sameSite: "None" | "Lax" | "Strict";
@@ -122,13 +163,24 @@ function toPlaywrightCookies(cookies: SessionCookie[]) {
   }
 
   for (const c of carried) {
+    // A `__Host-` cookie is host-only by definition: sent with a Domain it is
+    // not merely ignored, it makes the whole batch invalid — and one of those
+    // (`__Host-next-auth.csrf-token`) rides along with a real ChatGPT login,
+    // so a single cookie was costing the entire session. Given as a url it
+    // becomes host-only, which is what the prefix demands.
+    if (c.name.startsWith("__Host-")) {
+      for (const url of ["https://chatgpt.com/", "https://openai.com/"]) {
+        out.push({ name: c.name, value: c.value, url, httpOnly: true, secure: true, sameSite: "Lax" });
+      }
+      continue;
+    }
     for (const domain of [".chatgpt.com", ".openai.com"]) {
       out.push({
         name: c.name,
         value: c.value,
         domain,
         path: "/",
-        httpOnly: c.name.startsWith("__Secure-") || c.name.startsWith("__Host-"),
+        httpOnly: c.name.startsWith("__Secure-"),
         secure: true,
         sameSite: "Lax",
       });
@@ -231,10 +283,7 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
     });
   }
 
-  await context.addCookies(toPlaywrightCookies(cookies)).catch(() => {
-    // A malformed cookie should not be fatal — the profile may already be
-    // logged in on its own.
-  });
+  await injectCookies(context, cookies);
 
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });

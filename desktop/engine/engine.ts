@@ -881,7 +881,10 @@ export class Engine {
    * session. Rebuilding the transport instead would strand the conversation
    * this session is attached to.
    */
-  async applySignIn(cookies: { name: string; value: string }[]): Promise<{ ok: boolean }> {
+  async applySignIn(
+    cookies: { name: string; value: string }[],
+    account?: { name?: string; email?: string }
+  ): Promise<{ ok: boolean }> {
     // The session token may arrive whole or split across `.0`/`.1`; anything
     // else in the jar is a session cookie but not *the* one, and picking the
     // first long value would happily store a Cloudflare cookie instead.
@@ -912,6 +915,11 @@ export class Engine {
     this.transport?.reset();
     await closeBrowser().catch(() => {});
 
+    if (account?.name || account?.email) {
+      this.account = account;
+      saveConfig({ accountName: account.name, accountEmail: account.email });
+      associateAccount(this.accountKey());
+    }
     this.probeSignedIn = true;
     this.emitConnect("ready");
     this.notice("Signed in to ChatGPT — the session is saved and ready to use.");

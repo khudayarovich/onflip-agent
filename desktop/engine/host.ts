@@ -91,7 +91,8 @@ peer.onRequest = async (method, rawParams) => {
       return engine.applySignOut();
     case "applySignIn":
       return engine.applySignIn(
-        (params.cookies as { name: string; value: string }[]) ?? []
+        (params.cookies as { name: string; value: string }[]) ?? [],
+        params.account as { name?: string; email?: string } | undefined
       );
 
     case "recentProjects":
