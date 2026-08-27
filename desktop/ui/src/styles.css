@@ -1934,6 +1934,10 @@ a:hover {
 
 .send-btn {
   position: absolute;
+  /* Above the composer's text layer: the textarea is raised so the skill
+     highlight can sit behind it, and without this the textarea's box covers
+     the button and swallows the click — the stop button stopped nothing. */
+  z-index: 2;
   right: 10px;
   bottom: 44px;
   width: 32px;

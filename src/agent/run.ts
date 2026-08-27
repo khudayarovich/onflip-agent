@@ -201,6 +201,21 @@ export async function runTurn(
         history.push(newMessage("user", protocolCorrection(slip)));
         continue;
       }
+      // Corrections are spent and it still will not call a tool. Saying so
+      // is worth more than the refusal itself: the protocol is text a model
+      // has to be willing to follow, and the lighter tiers frequently are
+      // not — which reads to the user as "the app has no tools" when the
+      // tools were there and listed all along.
+      if (slip) {
+        logger.warn("agent", "model refused the tool protocol", {
+          model: opts.model,
+          corrections: protocolCorrections,
+        });
+        events.onNotice?.(
+          `This model answered in prose and would not emit a tool call, even after ${protocolCorrections} corrections — so nothing was run. ` +
+            "That is the model declining the protocol, not a missing tool. Switch model with the chip under the composer (the lighter tiers often refuse it) and send again."
+        );
+      }
       // ChatGPT's own service messages come back through the same channel as a
       // reply and read like the agent's answer. Saying whose message it is
       // saves the user debugging OnFlip for something OnFlip did not do.

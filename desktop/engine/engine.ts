@@ -250,11 +250,46 @@ export class Engine {
 
     this.connected = true;
     void this.checkSignInState();
+    void this.learnAccountModels();
 
     this.pushTranscript();
     const status = this.statusPayload();
     this.peer.emit("status", status);
     return status;
+  }
+
+  /**
+   * Learn the account's real model list, once, on a machine that has never
+   * seen it.
+   *
+   * Slugs are per-account: the web app's name for Luna here is
+   * `gpt-5.6-luna-wm`, and the public `gpt-5.6-luna` is not in the list at
+   * all. `?model=` with a name ChatGPT does not know is ignored in silence,
+   * so a fresh install was quietly running on whatever the web app chose —
+   * often a lighter model that then refused the tool protocol, which reads
+   * to the user as "this app has no tools". Discovering the list lets the
+   * session settle on a slug the account actually has.
+   */
+  private async learnAccountModels(): Promise<void> {
+    if (loadConfig().discoveredModels?.length) return;
+    if (!this.transport || this.transport.name !== "browser") return;
+    try {
+      await this.refreshModels();
+      const wanted = defaultModel();
+      // Only adopt it when the user has not chosen for themselves.
+      const chosen = process.env.ONFLIP_MODEL ?? loadConfig().model;
+      if (!chosen && wanted !== this.model) {
+        this.model = wanted;
+        saveConfig({ model: wanted });
+        if (this.session) this.session.model = wanted;
+        this.notice(`Using ${wanted}, the model this account reports.`);
+      }
+      this.pushStatus();
+    } catch (e) {
+      logger.warn("engine", "could not read the account's model list", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
 
   /** Only the configuration that can be silently signed out needs probing. */

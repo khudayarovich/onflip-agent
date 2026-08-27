@@ -1004,6 +1004,9 @@ function TodoPanel({ items }: { items: TodoItemDTO[] }): React.ReactElement | nu
   const visible = items.filter((t) => t.status !== "cancelled");
   if (visible.length === 0) return null;
   const done = visible.filter((t) => t.status === "completed").length;
+  // A plan with nothing left to do is history, not a plan: it stays only
+  // while something is still outstanding.
+  if (done === visible.length) return null;
   const current = visible.find((t) => t.status === "in_progress");
   const pct = Math.round((done / visible.length) * 100);
 

@@ -78,7 +78,7 @@ export function clearModelCache(): void {
   saveConfig({ discoveredModels: [], modelsRefreshedAt: undefined });
 }
 
-export const DEFAULT_MODEL = "gpt-5.6-luna";
+export const DEFAULT_MODEL = "auto";
 
 /**
  * What a session runs on when nothing was chosen.
@@ -90,8 +90,13 @@ export const DEFAULT_MODEL = "gpt-5.6-luna";
  * slug ChatGPT does not recognise silently falls back to its own default.
  */
 export function defaultModel(): string {
-  const cached = loadConfig().discoveredModels;
-  const luna = cached?.find((m) => /luna/i.test(m.slug));
+  const luna = loadConfig().discoveredModels?.find((m) => /luna/i.test(m.slug));
+  // Only ever a slug the account actually reports. A guessed public name is
+  // worse than none: `?model=` is ignored silently when ChatGPT does not
+  // recognise it, so a fresh machine ran on whatever the web app fell back
+  // to — measured, the real slug here is `gpt-5.6-luna-wm`, and the public
+  // `gpt-5.6-luna` is not in the account's list at all. `auto` is honest
+  // about letting ChatGPT choose.
   return luna?.slug ?? DEFAULT_MODEL;
 }
 
