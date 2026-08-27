@@ -1,6 +1,6 @@
 {
   "name": "onflip-desktop",
-  "version": "0.5.0",
+  "version": "0.4.1",
   "private": true,
   "description": "OnFlip Desktop — the OnFlip coding agent in a native window",
   "author": "Farrukh Khudayarovich Yuldashev",
@@ -21,6 +21,7 @@
     "productName": "OnFlip",
     "asar": false,
     "npmRebuild": false,
+    "afterPack": "scripts/mac-adhoc-sign.js",
     "directories": {
       "output": "release",
       "buildResources": "buildResources"
