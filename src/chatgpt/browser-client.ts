@@ -1162,6 +1162,56 @@ async function collectReplyImages(p: Page): Promise<ReplyImage[]> {
   return images;
 }
 
+/** ChatGPT's logged-out experience, by the two signs that are unambiguous. */
+async function looksAnonymous(p: Page): Promise<boolean> {
+  // The anonymous conversation route is unambiguous.
+  if (/\/uc\//.test(p.url())) return true;
+  // Wording alone is not: a reply *about* authentication says "log in" and
+  // "sign up" too, and acting on that would tell a signed-in user they are
+  // signed out. So the text rule is paired with a structural one — a page
+  // showing a conversation has message nodes, a login wall has none.
+  const WALL =
+    `(() => {` +
+    `  var text = ((document.body && document.body.innerText) || "").slice(0, 400);` +
+    `  var wall = /\\bLog in\\b[\\s\\S]{0,120}\\bSign up\\b/i.test(text);` +
+    `  var messages = document.querySelectorAll("[data-message-author-role]").length;` +
+    `  return wall && messages === 0;` +
+    `})()`;
+  return Boolean(await p.evaluate(WALL).catch(() => false));
+}
+
+/**
+ * Repair a page that came up logged out while we hold a working session.
+ *
+ * Seen for real: the profile had the session token on `.openai.com` but not
+ * on `.chatgpt.com`, so every send went to the anonymous `/uc/` page and
+ * vanished — while the stored cookies authenticated perfectly from Node. The
+ * session was fine; only this browser's copy of it had gone. Re-injecting and
+ * reloading puts it back, which beats telling someone who is signed in that
+ * they are not.
+ *
+ * One attempt only. If it is still anonymous afterwards the session really is
+ * gone, and the caller's sign-in message is the honest answer.
+ */
+async function recoverAnonymousPage(p: Page, cookies: SessionCookie[]): Promise<void> {
+  if (cookies.length === 0 || !context) return;
+  if (!(await looksAnonymous(p).catch(() => false))) return;
+
+  logger.warn("browser", "page came up logged out; re-injecting the session", {
+    url: p.url(),
+    cookies: cookies.length,
+  });
+  await injectCookies(context, cookies);
+  await p
+    .goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 45_000 })
+    .catch(() => {});
+  await p.waitForTimeout(1_200);
+  const stillOut = await looksAnonymous(p).catch(() => false);
+  logger.info("browser", stillOut ? "still logged out after re-injecting" : "session restored", {
+    url: p.url(),
+  });
+}
+
 export async function sendViaBrowser(
   message: string,
   cookies: SessionCookie[],
@@ -1173,6 +1223,10 @@ export async function sendViaBrowser(
     await openNewChat(p, normalizeModel(opts?.model));
     inConversation = true;
   }
+
+  // Checked before typing, not after the send has already disappeared into a
+  // logged-out page and cost the turn.
+  await recoverAnonymousPage(p, cookies);
 
   return sendOn(p, message, opts);
 }
@@ -1482,6 +1536,16 @@ export async function waitForReply(
       if (composerContent.trim()) {
         throw new ChatGPTBrowserError(
           "The message was typed but never sent — the composer still holds it. ChatGPT may be rate-limiting this account, or the send control has moved."
+        );
+      }
+      // A logged-out page swallows the message and then simply says nothing.
+      // Waiting the full silence budget for that costs a minute and a half,
+      // three times over, before anyone is told why — and the page has been
+      // able to answer the question since the first second.
+      if (!sendLanded && (await looksAnonymous(p).catch(() => false))) {
+        throw new ChatGPTBrowserError(
+          "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. " +
+            "Sign in from the account menu (or run `onflip login`), then send again."
         );
       }
     }
