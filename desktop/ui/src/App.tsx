@@ -77,6 +77,16 @@ export function App(): React.ReactElement {
   /** True mid-drag, to suspend the layout transition. */
   const [resizingSidebar, setResizingSidebar] = useState(false);
   const [terminalOpen, setTerminalOpen] = useState(false);
+  /** Terminal panel width in px, draggable and remembered. */
+  const [termWidth, setTermWidth] = useState<number>(() => {
+    try {
+      const stored = Number(localStorage.getItem("onflip.termWidth"));
+      return stored >= 280 && stored <= 720 ? stored : 380;
+    } catch {
+      return 380;
+    }
+  });
+  const [resizingTerm, setResizingTerm] = useState(false);
   const [lang, setLang] = useState<Lang>(() => loadLang());
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try {
@@ -535,14 +545,36 @@ export function App(): React.ReactElement {
     window.addEventListener("mouseup", up);
   };
 
+  const startTermDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setResizingTerm(true);
+    const clamp = (x: number) => Math.min(720, Math.max(280, x));
+    const widthAt = (ev: MouseEvent) => clamp(window.innerWidth - ev.clientX);
+    const move = (ev: MouseEvent) => setTermWidth(widthAt(ev));
+    const up = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      setResizingTerm(false);
+      try {
+        localStorage.setItem("onflip.termWidth", String(widthAt(ev)));
+      } catch {
+        /* cosmetic */
+      }
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
   return (
     <LangContext.Provider value={lang}>
     <div
-      className={`app${sidebarHidden ? " sidebar-hidden" : ""}${resizingSidebar ? " resizing" : ""}${terminalOpen ? " term-open" : ""}`}
+      className={`app${sidebarHidden ? " sidebar-hidden" : ""}${resizingSidebar || resizingTerm ? " resizing" : ""}${terminalOpen ? " term-open" : ""}`}
       style={
         {
           "--sidebar-w": `${sidebarWidth}px`,
-          "--term-w": terminalOpen ? "380px" : "0px",
+          "--term-w": terminalOpen ? `${termWidth}px` : "0px",
+          // Content keeps its width even while the column animates shut.
+          "--term-cw": `${termWidth}px`,
         } as React.CSSProperties
       }
     >
@@ -702,6 +734,23 @@ export function App(): React.ReactElement {
           onLoadModels={loadModels}
         />
       </main>
+
+      {terminalOpen && (
+        <div
+          className="term-resizer"
+          style={{ right: termWidth - 3 }}
+          onMouseDown={startTermDrag}
+          onDoubleClick={() => {
+            setTermWidth(380);
+            try {
+              localStorage.setItem("onflip.termWidth", "380");
+            } catch {
+              /* cosmetic */
+            }
+          }}
+          title="Drag to resize · double-click to reset"
+        />
+      )}
 
       <TerminalPanel
         open={terminalOpen}

@@ -1133,7 +1133,20 @@ a:hover {
   pointer-events: auto;
 }
 .term-panel > * {
-  min-width: 379px;
+  min-width: calc(var(--term-cw, 380px) - 1px);
+}
+
+.term-resizer {
+  position: absolute;
+  top: var(--titlebar-h);
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 40;
+}
+.term-resizer:hover,
+.app.resizing .term-resizer {
+  background: linear-gradient(to right, transparent 2px, var(--border-strong) 3px, transparent 5px);
 }
 .term-head {
   display: flex;
