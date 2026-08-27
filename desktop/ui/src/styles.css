@@ -345,8 +345,10 @@ a:hover {
   flex-direction: column;
   gap: 2px;
   width: 100%;
+  min-width: 0;
   text-align: left;
-  padding: 8px 10px;
+  /* Right padding keeps long text from running under the ✕ / spinner. */
+  padding: 8px 28px 8px 10px;
   border-radius: 8px;
   position: relative;
 }
@@ -357,6 +359,9 @@ a:hover {
   background: var(--bg-active);
 }
 .session-row .title {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
   font-size: 13px;
   white-space: nowrap;
   overflow: hidden;
@@ -364,11 +369,19 @@ a:hover {
   color: var(--text);
 }
 .session-row .meta {
+  display: block;
+  max-width: 100%;
+  min-width: 0;
   font-size: 11.5px;
   color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .session-row-wrap {
   position: relative;
+  min-width: 0;
+  overflow: hidden;
 }
 .session-row-wrap .delete {
   position: absolute;
