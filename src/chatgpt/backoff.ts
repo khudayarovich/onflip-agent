@@ -50,6 +50,18 @@ export function classifyFailure(message: string): Classification {
     };
   }
 
+  // The transport's own send-path failures, tested before the throttle
+  // patterns because their advice text used to say "rate-limited" — and this
+  // function read the advice. Same disease as the composer-entry case below,
+  // second outbreak: a composer that would not clear became a persisted
+  // five-minute cooldown, three times in one evening, when what it usually
+  // means is the page was not ready and one retry fixes it. A genuine
+  // throttle still cools down through the signals ChatGPT itself sends — an
+  // HTTP 429 in an error, or a "you've reached your limit" reply.
+  if (/would not accept it|typed but never sent|never showed it working/i.test(m)) {
+    return { kind: "retry", seconds: 0, reason: m };
+  }
+
   if (/HTTP 429|too many requests|rate.?limit/i.test(m)) {
     // Honour a server-supplied delay when there is one.
     const after = /retry[- ]after[":\s]+(\d+)/i.exec(m);

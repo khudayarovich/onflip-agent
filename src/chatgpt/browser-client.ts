@@ -1116,7 +1116,32 @@ export interface BrowserSendOptions {
  * only trustworthy signal that the message was accepted, so each method is
  * tried and then verified.
  */
-async function submitMessage(p: Page, signal?: AbortSignal): Promise<void> {
+async function submitMessage(
+  p: Page,
+  signal?: AbortSignal,
+  ctx?: { attached?: boolean }
+): Promise<void> {
+  // An upload in flight disables the send control, and the attachment chips
+  // appear before the upload finishes — so "the chips are there" is not "the
+  // message can go". Both real send failures on file-handover turns happened
+  // exactly here: submit tried for its few seconds while the upload was still
+  // running, the composer never cleared, and the turn was reported as ChatGPT
+  // refusing the message. So when files ride along, wait for the button to
+  // actually come enabled before trying to press it.
+  if (ctx?.attached) {
+    const deadline = Date.now() + 30_000;
+    for (;;) {
+      throwIfAborted(signal);
+      const button = await firstVisible(p, SEND_SELECTORS, 1_000);
+      if (button && (await button.isEnabled().catch(() => false))) break;
+      if (Date.now() > deadline) {
+        logger.debug("browser", "send button never enabled after the upload; trying anyway");
+        break;
+      }
+      await p.waitForTimeout(400);
+    }
+  }
+
   const methods: { name: string; run: () => Promise<void> }[] = [
     {
       // Clicking the real control is the most faithful to what a user does,
@@ -1159,8 +1184,11 @@ async function submitMessage(p: Page, signal?: AbortSignal): Promise<void> {
     logger.debug("browser", `submit via ${method.name} left the composer full`);
   }
 
+  // Worded without "rate-limited" on purpose: classifyFailure reads error
+  // text, and that phrase in this message once turned every composer stumble
+  // into a persisted cooldown.
   throw new ChatGPTBrowserError(
-    "The message was typed but ChatGPT would not accept it — neither the send button nor Enter cleared the composer. The account may be rate-limited, or the send control has moved. Run `onflip login --headed` to watch."
+    "The message was typed but ChatGPT would not accept it — neither the send button nor Enter cleared the composer. ChatGPT may be throttling this account, or the send control has moved. Run `onflip login --headed` to watch."
   );
 }
 
@@ -1390,7 +1418,7 @@ async function sendOn(
   // The last moment where stopping is free: after this the message is gone.
   throwIfAborted(opts?.signal);
   const submitStart = Date.now();
-  await submitMessage(p, opts?.signal);
+  await submitMessage(p, opts?.signal, { attached: attachments.length > 0 });
   const submitMs = Date.now() - submitStart;
 
   const sentAt = Date.now();
@@ -1665,7 +1693,7 @@ export async function waitForReply(
       const composerContent = await readComposer(p).catch(() => "");
       if (composerContent.trim()) {
         throw new ChatGPTBrowserError(
-          "The message was typed but never sent — the composer still holds it. ChatGPT may be rate-limiting this account, or the send control has moved."
+          "The message was typed but never sent — the composer still holds it. ChatGPT may be throttling this account, or the send control has moved."
         );
       }
       // A logged-out page swallows the message and then simply says nothing.
@@ -1744,7 +1772,7 @@ export async function waitForReply(
     );
   }
   throw new ChatGPTBrowserError(
-    `No reply from ChatGPT after ${secs}s, and the page never showed it working. The account may be rate-limited, the model may be unavailable, or the reply selectors may no longer match — try \`onflip login --headed\` to watch.`
+    `No reply from ChatGPT after ${secs}s, and the page never showed it working. ChatGPT may be throttling this account, the model may be unavailable, or the reply selectors may no longer match — try \`onflip login --headed\` to watch.`
   );
 }
 
