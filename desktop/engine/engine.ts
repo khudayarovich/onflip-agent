@@ -20,6 +20,7 @@ import {
 } from "onflip/dist/models";
 import { resolveAuth, ResolvedAuth } from "onflip/dist/auth/resolve";
 import { spawnExtractToken, takeExtractError } from "onflip/dist/auth/extract";
+import { fetchAccessToken } from "onflip/dist/auth/access";
 import { chooseTransport, Transport } from "onflip/dist/chatgpt/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import {
@@ -915,6 +916,23 @@ export class Engine {
     this.transport?.reset();
     await closeBrowser().catch(() => {});
 
+    // The window path knows who signed in; the cookie-import path does not,
+    // and waiting for the automation browser to be asked after a turn left
+    // the panel saying "ChatGPT account" over a working session. The same
+    // endpoint that issues the access token names the account, so ask it —
+    // bounded, because a name is never worth stalling a sign-in for.
+    if (!account?.name && !account?.email) {
+      account = await Promise.race([
+        fetchAccessToken(cookies)
+          .then((info) =>
+            info.user?.name || info.user?.email
+              ? { name: info.user.name, email: info.user.email }
+              : undefined
+          )
+          .catch(() => undefined),
+        new Promise<undefined>((resolve) => setTimeout(() => resolve(undefined), 8_000)),
+      ]);
+    }
     if (account?.name || account?.email) {
       this.account = account;
       saveConfig({ accountName: account.name, accountEmail: account.email });
