@@ -1,4 +1,4 @@
-import React, { useContext, useEffect, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import type { ChatItem } from "../../../shared/protocol";
 import { Markdown } from "../markdown";
 import { ToolCard } from "./ToolCard";
@@ -23,6 +23,8 @@ export function Transcript({
   emptyProject,
   deliveries,
   onRevise,
+  searchOpen,
+  onCloseSearch,
 }: {
   items: ChatItem[];
   streaming: StreamingState;
@@ -34,10 +36,57 @@ export function Transcript({
   deliveries: Record<string, DeliveryState>;
   /** Edit/resend a user message; undefined while a turn is running. */
   onRevise?: (id: string, mode: "edit" | "resend") => void;
+  /** In-chat search (Ctrl+F / the strip button). */
+  searchOpen: boolean;
+  onCloseSearch: () => void;
 }): React.ReactElement {
   const t = useT();
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const [query, setQuery] = useState("");
+  const [matchCursor, setMatchCursor] = useState(0);
+
+  /** Indices into `items` whose text contains the query. */
+  const matches = useMemo(() => {
+    const needle = query.trim().toLowerCase();
+    if (!searchOpen || needle.length < 2) return [];
+    const hits: number[] = [];
+    items.forEach((item, index) => {
+      if (searchableText(item).toLowerCase().includes(needle)) hits.push(index);
+    });
+    return hits;
+  }, [items, query, searchOpen]);
+
+  useEffect(() => setMatchCursor(0), [query]);
+  useEffect(() => {
+    if (searchOpen) searchInputRef.current?.focus();
+  }, [searchOpen]);
+
+  // Outline and scroll to the current match. Imperative on purpose: items
+  // render themselves, and a wrapper div would break their flex alignment.
+  useEffect(() => {
+    const inner = scrollRef.current?.querySelector(".transcript-inner");
+    if (!inner) return;
+    inner.querySelectorAll(".search-hit").forEach((el) => el.classList.remove("search-hit"));
+    if (!searchOpen || matches.length === 0) return;
+    const index = matches[Math.min(matchCursor, matches.length - 1)];
+    const el = inner.children[index] as HTMLElement | undefined;
+    if (el) {
+      el.classList.add("search-hit");
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
+  }, [searchOpen, matches, matchCursor]);
+
+  const step = (delta: number) => {
+    if (matches.length === 0) return;
+    setMatchCursor((c) => (c + delta + matches.length) % matches.length);
+  };
+
+  const closeSearch = () => {
+    setQuery("");
+    onCloseSearch();
+  };
 
   // Follow the newest output unless the user has scrolled up to read.
   const onScroll = () => {
@@ -80,6 +129,35 @@ export function Transcript({
 
   return (
     <div className="transcript" ref={scrollRef} onScroll={onScroll}>
+      {searchOpen && (
+        <div className="chat-search-anchor">
+          <div className="chat-search">
+            <input
+              ref={searchInputRef}
+              value={query}
+              placeholder={t("searchPlaceholder")}
+              spellCheck={false}
+              onChange={(e) => setQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
+                else if (e.key === "Escape") closeSearch();
+              }}
+            />
+            <span className="count">
+              {matches.length === 0 ? "0/0" : `${Math.min(matchCursor, matches.length - 1) + 1}/${matches.length}`}
+            </span>
+            <button title="Previous (Shift+Enter)" onClick={() => step(-1)}>
+              ▲
+            </button>
+            <button title="Next (Enter)" onClick={() => step(1)}>
+              ▼
+            </button>
+            <button title="Close (Esc)" onClick={closeSearch}>
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
       <div className="transcript-inner">
         {items.map((item) =>
           item.type === "user" ? (
@@ -122,6 +200,16 @@ export function Transcript({
       </div>
     </div>
   );
+}
+
+/** What in-chat search can see of an item. */
+function searchableText(item: ChatItem): string {
+  switch (item.type) {
+    case "tool":
+      return `${item.call.tool} ${item.call.subject} ${item.result?.output ?? ""}`;
+    default:
+      return "text" in item ? item.text : "";
+  }
 }
 
 /**

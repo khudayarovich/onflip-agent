@@ -100,6 +100,15 @@ function ExportIcon(): React.ReactElement {
   );
 }
 
+function SearchIcon(): React.ReactElement {
+  return (
+    <svg {...stripIconProps}>
+      <circle cx="11" cy="11" r="7" />
+      <line x1="21" y1="21" x2="16.2" y2="16.2" />
+    </svg>
+  );
+}
+
 export function App(): React.ReactElement {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [connect, setConnect] = useState<ConnectState>("connecting");
@@ -149,6 +158,19 @@ export function App(): React.ReactElement {
     }
   });
   const [resizingTerm, setResizingTerm] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+
+  // Ctrl+F opens in-chat search wherever focus is.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey && !e.shiftKey && !e.altKey && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setSearchOpen(true);
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const [lang, setLang] = useState<Lang>(() => loadLang());
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try {
@@ -745,6 +767,13 @@ export function App(): React.ReactElement {
           <button className="strip-btn" onClick={doExport} title={t("stripExportTip")}>
             <ExportIcon /> {t("stripExport")}
           </button>
+          <button
+            className={`strip-btn${searchOpen ? " badged" : ""}`}
+            onClick={() => setSearchOpen((o) => !o)}
+            title={t("stripSearchTip")}
+          >
+            <SearchIcon /> {t("stripSearch")}
+          </button>
         </div>
 
         {loading ? (
@@ -764,6 +793,8 @@ export function App(): React.ReactElement {
             emptyProject={status ? baseName(status.cwd) : null}
             deliveries={deliveries}
             onRevise={busy || engineDown ? undefined : reviseMessage}
+            searchOpen={searchOpen}
+            onCloseSearch={() => setSearchOpen(false)}
           />
         )}
 
