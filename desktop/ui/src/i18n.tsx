@@ -173,6 +173,16 @@ const en = {
     "OnFlip drives ChatGPT's ordinary chat through a real browser — the same conversation you could type at chatgpt.com. No API key, no per-token billing: the agent rides on the ChatGPT plan you already have, so it adds no separate API costs or usage limits. The model does the thinking on ChatGPT's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
   aboutAuthorTitle: "Author",
   aboutLicense: "Open source under the MIT license.",
+  aboutLimitsTitle: "Models & usage limits",
+  aboutLimitsIntro:
+    "OnFlip spends your ChatGPT plan's normal chat allowance — each agent step is one model request. What is capped depends on the plan and model (as of August 2026):",
+  aboutLimitFree:
+    "GPT-5.6 Luna: unlimited text chats · smarter models ~10 messages / 5 h · no Thinking",
+  aboutLimitGo: "~160 messages / 3 h · 10 Thinking messages / 5 h",
+  aboutLimitPlus: "160 messages / 3 h on the standard model · 3,000 Thinking messages / week",
+  aboutLimitPro: "Effectively unlimited on standard models, within abuse guardrails",
+  aboutLimitsNote:
+    "Thinking/Pro-class models are capped on every plan and each model counts separately. Luna's unlimited tier covers text only and sits behind abuse guardrails — and OpenAI adjusts all of these limits over time.",
   menuSkills: "Skills",
   skillsTitle: "Skill Hub",
   skillsHint:
@@ -329,6 +339,16 @@ const ru: Partial<Record<StringKey, string>> = {
     "OnFlip управляет обычным чатом ChatGPT через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com. Без API-ключа и оплаты за токены: агент работает на вашем существующем плане ChatGPT и не добавляет отдельных API-затрат и лимитов. Модель думает на стороне ChatGPT, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
   aboutAuthorTitle: "Автор",
   aboutLicense: "Открытый код по лицензии MIT.",
+  aboutLimitsTitle: "Модели и лимиты",
+  aboutLimitsIntro:
+    "OnFlip расходует обычную квоту чата вашего плана ChatGPT — каждый шаг агента это один запрос к модели. Что ограничено, зависит от плана и модели (на август 2026):",
+  aboutLimitFree:
+    "GPT-5.6 Luna: безлимитный текстовый чат · умные модели ~10 сообщений / 5 ч · без Thinking",
+  aboutLimitGo: "~160 сообщений / 3 ч · 10 Thinking-сообщений / 5 ч",
+  aboutLimitPlus: "160 сообщений / 3 ч на стандартной модели · 3 000 Thinking-сообщений / неделю",
+  aboutLimitPro: "Практически без лимитов на стандартных моделях, в рамках защиты от злоупотреблений",
+  aboutLimitsNote:
+    "Модели класса Thinking/Pro ограничены на всех планах, и у каждой модели свой счётчик. Безлимит Luna касается только текста и защищён от злоупотреблений — и OpenAI со временем меняет эти лимиты.",
   menuSkills: "Навыки",
   skillsTitle: "Хаб навыков",
   skillsHint:
@@ -483,6 +503,16 @@ const uz: Partial<Record<StringKey, string>> = {
     "OnFlip haqiqiy brauzer orqali ChatGPT ning oddiy chatini boshqaradi — bu chatgpt.com da yozadigan o'sha suhbatingiz. API kaliti ham, token uchun to'lov ham yo'q: agent sizdagi mavjud ChatGPT tarifida ishlaydi, alohida API xarajatlari va limitlari qo'shilmaydi. Model ChatGPT tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",
   aboutAuthorTitle: "Muallif",
   aboutLicense: "MIT litsenziyasi ostidagi ochiq kod.",
+  aboutLimitsTitle: "Modellar va limitlar",
+  aboutLimitsIntro:
+    "OnFlip ChatGPT tarifingizning oddiy chat kvotasini sarflaydi — agentning har bir qadami bitta model so'rovi. Nima cheklangani tarif va modelga bog'liq (2026-yil avgust holatiga):",
+  aboutLimitFree:
+    "GPT-5.6 Luna: cheksiz matnli chat · kuchliroq modellar ~10 xabar / 5 soat · Thinking yo'q",
+  aboutLimitGo: "~160 xabar / 3 soat · 10 Thinking xabar / 5 soat",
+  aboutLimitPlus: "Standart modelda 160 xabar / 3 soat · haftasiga 3 000 Thinking xabar",
+  aboutLimitPro: "Standart modellarda amalda cheksiz, suiiste'moldan himoya doirasida",
+  aboutLimitsNote:
+    "Thinking/Pro toifadagi modellar barcha tariflarda cheklangan va har bir model alohida hisoblanadi. Luna cheksizligi faqat matnga tegishli va himoya qoidalari ostida — OpenAI bu limitlarni vaqt o'tishi bilan o'zgartiradi.",
   menuSkills: "Ko'nikmalar",
   skillsTitle: "Ko'nikmalar markazi",
   skillsHint:
