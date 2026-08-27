@@ -12,6 +12,7 @@ import {
 import {
   allModels,
   normalizeModel,
+  defaultModel,
   isThinkingLevel,
   cacheModels,
   ThinkingLevel,
@@ -144,7 +145,7 @@ export class Engine {
     private cwd: string
   ) {
     const cfg = this.config;
-    this.model = normalizeModel(process.env.ONFLIP_MODEL ?? cfg.model) ?? "auto";
+    this.model = normalizeModel(process.env.ONFLIP_MODEL ?? cfg.model) ?? defaultModel();
     const rawThinking = process.env.ONFLIP_THINKING ?? cfg.thinking ?? "";
     this.thinking = isThinkingLevel(rawThinking) ? rawThinking : undefined;
     this.approvalMode = isApprovalMode(cfg.approvalMode ?? "")

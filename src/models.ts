@@ -20,6 +20,9 @@ export interface ModelInfo {
 
 const BUILTIN_MODELS: ModelInfo[] = [
   { slug: "auto", label: "Auto", description: "let ChatGPT pick the model" },
+  { slug: "gpt-5.6-luna", label: "GPT-5.6 Luna", description: "fast and light — unlimited text chat on every plan" },
+  { slug: "gpt-5.6-terra", label: "GPT-5.6 Terra", description: "balanced mid-tier for everyday work" },
+  { slug: "gpt-5.6-sol", label: "GPT-5.6 Sol", description: "deepest reasoning, rate-limited on paid plans" },
   { slug: "gpt-5", label: "GPT-5", description: "general purpose, fast" },
   { slug: "gpt-5-thinking", label: "GPT-5 Thinking", description: "extended reasoning, best for hard tasks" },
   { slug: "gpt-5-pro", label: "GPT-5 Pro", description: "highest capability, slowest" },
@@ -75,7 +78,22 @@ export function clearModelCache(): void {
   saveConfig({ discoveredModels: [], modelsRefreshedAt: undefined });
 }
 
-export const DEFAULT_MODEL = "auto";
+export const DEFAULT_MODEL = "gpt-5.6-luna";
+
+/**
+ * What a session runs on when nothing was chosen.
+ *
+ * Luna, because it is the tier with unlimited text chat — the agent's many
+ * tool round-trips burn through capped models' windows fast. The account's
+ * own list is preferred when it has been refreshed: the web app's slug for
+ * Luna can differ from the public one (measured: `gpt-5.6-luna-wm`), and a
+ * slug ChatGPT does not recognise silently falls back to its own default.
+ */
+export function defaultModel(): string {
+  const cached = loadConfig().discoveredModels;
+  const luna = cached?.find((m) => /luna/i.test(m.slug));
+  return luna?.slug ?? DEFAULT_MODEL;
+}
 
 export const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];

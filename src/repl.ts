@@ -14,6 +14,7 @@ import {
   isThinkingLevel,
   normalizeModel,
   describeModel,
+  defaultModel,
 } from "./models";
 import { resolveAuth, ResolvedAuth } from "./auth/resolve";
 import { chooseTransport, Transport } from "./chatgpt/transport";
@@ -147,7 +148,7 @@ export class Repl {
 
   constructor(private opts: ReplOptions) {
     const cfg = this.config;
-    this.model = normalizeModel(opts.model ?? process.env.ONFLIP_MODEL ?? cfg.model) ?? "auto";
+    this.model = normalizeModel(opts.model ?? process.env.ONFLIP_MODEL ?? cfg.model) ?? defaultModel();
     const rawThinking = opts.thinking ?? process.env.ONFLIP_THINKING ?? cfg.thinking ?? "";
     this.thinking = isThinkingLevel(rawThinking) ? rawThinking : undefined;
     this.approvalMode =
