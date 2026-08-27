@@ -75,6 +75,8 @@ export type ChatItem =
   | { type: "narration"; id: string; text: string }
   | { type: "tool"; id: string; call: ToolCallDTO; result?: ToolResultDTO }
   | { type: "image"; id: string; dataUrl: string; name: string }
+  /** How long a finished turn took, rendered as a quiet line under it. */
+  | { type: "duration"; id: string; ms: number; interrupted?: boolean }
   | { type: "notice"; id: string; text: string }
   | { type: "error"; id: string; text: string };
 

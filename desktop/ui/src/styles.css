@@ -2617,3 +2617,21 @@ a:hover {
 .msg-image-save:hover {
   background: var(--bg-hover);
 }
+
+/* ---- turn timer ---------------------------------------------------------- */
+
+.thinking-row .elapsed {
+  margin-left: 8px;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--text-muted);
+  /* Tabular figures so a ticking clock does not shuffle the label beside it. */
+  font-variant-numeric: tabular-nums;
+}
+
+.msg-duration {
+  margin: 2px 0 10px;
+  font-size: 11.5px;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}

@@ -218,6 +218,8 @@ export function App(): React.ReactElement {
 
   useEffect(() => saveLang(lang), [lang]);
 
+  /** When the running turn began, for the timer and the closing duration. */
+  const turnStartedAt = useRef<number | null>(null);
   const sessionIdRef = useRef<string>("");
   const sessionTitleRef = useRef<string>("");
 
@@ -341,7 +343,12 @@ export function App(): React.ReactElement {
         }
         case "thinking": {
           const t = data as { iteration: number };
-          setStreaming({ active: true, iteration: t.iteration, tail: "" });
+          setStreaming((prev) => ({
+            active: true,
+            iteration: t.iteration,
+            tail: "",
+            startedAt: prev.startedAt ?? turnStartedAt.current ?? undefined,
+          }));
           break;
         }
         case "delta": {
@@ -350,7 +357,12 @@ export function App(): React.ReactElement {
           break;
         }
         case "turn": {
-          const t = data as { state: "start" | "end"; exhausted?: boolean; error?: string };
+          const t = data as {
+            state: "start" | "end";
+            exhausted?: boolean;
+            error?: string;
+            interrupted?: boolean;
+          };
           if (t.state === "start") {
             setTurnActive(true);
             setFailedSessionId(null);
@@ -360,10 +372,29 @@ export function App(): React.ReactElement {
             // Animate immediately: compaction and transport retries happen
             // before the first "thinking" event, and a static screen while
             // they run reads as a hang.
-            setStreaming({ active: true, iteration: 0, tail: "" });
+            turnStartedAt.current = Date.now();
+            setStreaming({ active: true, iteration: 0, tail: "", startedAt: turnStartedAt.current });
           } else {
             setTurnActive(false);
             setStreaming(IDLE_STREAM);
+            // A turn that ran is worth a mark of how long it took — the
+            // running clock disappears with the spinner otherwise.
+            if (turnStartedAt.current) {
+              const ms = Date.now() - turnStartedAt.current;
+              turnStartedAt.current = null;
+              // Sub-second turns are noise, not information.
+              if (ms >= 1_000) {
+                setItems((prev) => [
+                  ...prev,
+                  {
+                    type: "duration",
+                    id: crypto.randomUUID(),
+                    ms,
+                    interrupted: t.interrupted,
+                  },
+                ]);
+              }
+            }
             if (t.exhausted && t.error) {
               setItems((prev) => [
                 ...prev,

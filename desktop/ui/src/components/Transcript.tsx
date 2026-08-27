@@ -10,6 +10,36 @@ export interface StreamingState {
   active: boolean;
   iteration: number;
   tail: string;
+  /** When this turn began, for the running timer. */
+  startedAt?: number;
+}
+
+/**
+ * Seconds since `startedAt`, updated once a second while a turn runs.
+ *
+ * The interval exists only while it is needed: a timer left ticking behind an
+ * idle screen re-renders the whole transcript every second for nothing.
+ */
+function useElapsed(startedAt: number | undefined, active: boolean): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    if (!active || !startedAt) return;
+    setNow(Date.now());
+    const id = window.setInterval(() => setNow(Date.now()), 1_000);
+    return () => window.clearInterval(id);
+  }, [active, startedAt]);
+  return startedAt ? Math.max(0, now - startedAt) : 0;
+}
+
+/** "8s", "1:04", "1:02:11" — compact enough to sit beside a label. */
+export function formatElapsed(ms: number): string {
+  const total = Math.floor(ms / 1000);
+  const h = Math.floor(total / 3600);
+  const m = Math.floor((total % 3600) / 60);
+  const sec = total % 60;
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(sec).padStart(2, "0")}`;
+  if (m > 0) return `${m}:${String(sec).padStart(2, "0")}`;
+  return `${sec}s`;
 }
 
 export type DeliveryState = "pending" | "read" | "sent" | "failed";
@@ -215,6 +245,7 @@ export function Transcript({
                     ? t("streamThinking")
                     : t("streamStep", { n: streaming.iteration })}
               </span>
+              <RunningTimer startedAt={streaming.startedAt} active={streaming.active} />
             </div>
             {streaming.tail && <div className="tail">{streaming.tail}</div>}
           </div>
@@ -334,6 +365,7 @@ function TranscriptItem({
   item: ChatItem;
   toolProgress: Record<string, string>;
 }): React.ReactElement | null {
+  const t = useT();
   switch (item.type) {
     case "user":
       return <div className="msg-user">{item.text}</div>;
@@ -353,6 +385,13 @@ function TranscriptItem({
       return <ToolCard item={item} progress={toolProgress[item.id]} />;
     case "image":
       return <GeneratedImage dataUrl={item.dataUrl} name={item.name} />;
+    case "duration":
+      return (
+        <div className="msg-duration">
+          {item.interrupted ? t("workedUntilStopped", { time: formatElapsed(item.ms) })
+                            : t("workedFor", { time: formatElapsed(item.ms) })}
+        </div>
+      );
     case "notice":
       return <div className="msg-notice">{item.text}</div>;
     case "error":
@@ -394,4 +433,17 @@ function GeneratedImage({ dataUrl, name }: { dataUrl: string; name: string }): R
       </div>
     </div>
   );
+}
+
+/** The clock beside "Working", ticking while the turn runs. */
+function RunningTimer({
+  startedAt,
+  active,
+}: {
+  startedAt?: number;
+  active: boolean;
+}): React.ReactElement | null {
+  const elapsed = useElapsed(startedAt, active);
+  if (!startedAt) return null;
+  return <span className="elapsed">{formatElapsed(elapsed)}</span>;
 }
