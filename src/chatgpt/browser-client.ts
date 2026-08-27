@@ -75,6 +75,36 @@ export function takeComposerWarning(): string | null {
   return w;
 }
 
+/**
+ * Files to attach to the next send, and images ChatGPT drew in the last one.
+ *
+ * Both are side-channels around `sendOn`, which trades in strings: the
+ * transport layer knows nothing of files, so attachments are queued before a
+ * send and consumed once by it, and any image the reply contained is left
+ * here for the caller to pick up the same way `takeComposerWarning` works.
+ */
+let pendingAttachments: string[] = [];
+let lastReplyImages: ReplyImage[] = [];
+
+export interface ReplyImage {
+  /** A data: URL — the image bytes, fetched from the page and inlined. */
+  dataUrl: string;
+  /** Best-effort file name for a Save action. */
+  name: string;
+}
+
+/** Attach these local files to the next message OnFlip sends. */
+export function queueAttachments(paths: string[]): void {
+  pendingAttachments = paths.filter((p) => p && fs.existsSync(p));
+}
+
+/** Images ChatGPT generated in the most recent reply; cleared on read. */
+export function takeReplyImages(): ReplyImage[] {
+  const images = lastReplyImages;
+  lastReplyImages = [];
+  return images;
+}
+
 export function configureBrowser(opts: BrowserOptions): void {
   browserOptions = { ...browserOptions, ...opts };
 }
@@ -979,6 +1009,129 @@ async function submitMessage(p: Page): Promise<void> {
   );
 }
 
+/** The composer's hidden file input, across the spellings ChatGPT has used. */
+const FILE_INPUT_SELECTORS = [
+  "input[type='file'][multiple]",
+  "input[type='file']",
+];
+
+/**
+ * Attach local files to the ChatGPT composer.
+ *
+ * ChatGPT keeps a hidden `<input type=file>` behind the paperclip; setting its
+ * files is exactly what clicking the paperclip and choosing them does, and it
+ * avoids driving a native OS file dialog Playwright cannot see into. The upload
+ * runs before the text is typed, and we wait for the composer's own attachment
+ * chips to appear so the message is not sent before the files finish uploading.
+ */
+async function attachFiles(p: Page, paths: string[]): Promise<void> {
+  const existing = paths.filter((f) => fs.existsSync(f));
+  if (existing.length === 0) return;
+
+  let input = null;
+  for (const sel of FILE_INPUT_SELECTORS) {
+    const loc = p.locator(sel).first();
+    if ((await loc.count().catch(() => 0)) > 0) {
+      input = loc;
+      break;
+    }
+  }
+  if (!input) {
+    lastComposerWarning =
+      "This ChatGPT page has no file-upload control, so the attachment could not be added — the message was sent without it.";
+    logger.warn("browser", "no file input on the composer", { files: existing.length });
+    return;
+  }
+
+  try {
+    await input.setInputFiles(existing, { timeout: 20_000 });
+  } catch (e) {
+    lastComposerWarning = `The attachment could not be uploaded (${
+      e instanceof Error ? e.message : String(e)
+    }); the message was sent without it.`;
+    return;
+  }
+
+  // Wait for the upload to register: an attachment chip, or the file name
+  // appearing near the composer. Sending mid-upload drops the file silently.
+  // A plain expression rather than a function — this file compiles without
+  // the DOM lib, and a stringified function is only called when it is handed
+  // an argument.
+  const chipsPresent = `document.querySelectorAll("[data-testid*='attachment'], [class*='attachment'], [aria-label*='Remove'], img[alt*='uploaded']").length >= ${existing.length}`;
+  const settled = await p
+    .waitForFunction(chipsPresent, undefined, { timeout: 30_000 })
+    .then(() => true)
+    .catch(() => false);
+
+  await p.waitForTimeout(settled ? 400 : 1_500);
+  logger.info("browser", "attached files", { files: existing.length, settled });
+}
+
+/**
+ * Pull any images the model drew in its latest turn back off the page.
+ *
+ * A generated image lands in the assistant turn as an `<img>` whose bytes live
+ * on ChatGPT's own host; the renderer here cannot fetch cross-origin, but the
+ * page can, so the fetch-and-inline runs inside `evaluate` and returns data
+ * URLs. User-uploaded thumbnails and tiny UI glyphs are filtered out by size
+ * and by the host the src points at.
+ */
+async function collectReplyImages(p: Page): Promise<ReplyImage[]> {
+  // An immediately-invoked expression: evaluated as written, so it needs no
+  // argument to run and no DOM types at compile time.
+  const FIND_IMAGES = `(() => {
+    const turns = document.querySelectorAll("[data-message-author-role='assistant']");
+    const node = turns[turns.length - 1];
+    if (!node) return [];
+    const out = [];
+    const imgs = node.querySelectorAll("img");
+    for (let i = 0; i < imgs.length; i++) {
+      const el = imgs[i];
+      const src = el.currentSrc || el.src || "";
+      if (!src) continue;
+      // Generated images come from OpenAI's user-content host; the size test
+      // catches the rest while excluding avatars, emoji and layout spacers.
+      const generated = /oaiusercontent|blob:|dalle|sdmntpr/i.test(src);
+      const big = el.naturalWidth >= 256 && el.naturalHeight >= 256;
+      if ((generated || big) && out.indexOf(src) === -1) out.push(src);
+    }
+    return out;
+  })()`;
+
+  const urls = (await p.evaluate(FIND_IMAGES).catch(() => [])) as string[];
+  if (!Array.isArray(urls) || urls.length === 0) return [];
+
+  const images: ReplyImage[] = [];
+  for (let i = 0; i < urls.length && i < 6; i++) {
+    // The URL is baked into the expression rather than passed as an argument,
+    // for the same reason: this has to stay a self-invoking expression.
+    const FETCH_IMAGE = `(async () => {
+      try {
+        const res = await fetch(${JSON.stringify(urls[i])});
+        if (!res.ok) return null;
+        const blob = await res.blob();
+        if (blob.size > 12000000) return null;
+        return await new Promise((resolve) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(typeof reader.result === "string" ? reader.result : null);
+          reader.onerror = () => resolve(null);
+          reader.readAsDataURL(blob);
+        });
+      } catch (e) {
+        return null;
+      }
+    })()`;
+    const dataUrl = (await p.evaluate(FETCH_IMAGE).catch(() => null)) as string | null;
+    if (typeof dataUrl === "string" && dataUrl.startsWith("data:image")) {
+      images.push({ dataUrl, name: `chatgpt-image-${i + 1}.png` });
+    }
+  }
+  if (images.length > 0) {
+    logger.info("browser", "collected reply images", { count: images.length });
+  }
+  return images;
+}
+
 export async function sendViaBrowser(
   message: string,
   cookies: SessionCookie[],
@@ -1009,6 +1162,15 @@ async function sendOn(
   priorTurnCount = (await assistantTurns(p)).length;
   const userTurnsBefore = await userTurnCount(p).catch(() => 0);
 
+  // Attachments ride with this one message and no other. The transport resends
+  // them on no retry, so consume the queue up front: a re-typed payload after a
+  // composer stumble must not upload the files a second time.
+  const attachments = pendingAttachments;
+  pendingAttachments = [];
+  if (attachments.length > 0) {
+    await attachFiles(p, attachments);
+  }
+
   const typedAt = Date.now();
   await typeMessage(p, payload);
   await p.waitForTimeout(200);
@@ -1031,6 +1193,14 @@ async function sendOn(
     }
     throw e;
   }
+
+  // Pick up anything the model drew, before the next send overwrites the turn.
+  lastReplyImages = await collectReplyImages(p).catch((e) => {
+    logger.debug("browser", "could not collect reply images", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return [];
+  });
 
   // Group it in the sidebar now that the conversation exists.
   const conversationId = await groupInProject(p);

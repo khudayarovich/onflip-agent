@@ -25,6 +25,7 @@ import { ChatsModal } from "./components/ChatsModal";
 import { ProjectModal } from "./components/ProjectModal";
 import { TodoList } from "./components/ToolCard";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { BrowserPanel, BrowserFrameDTO } from "./components/BrowserPanel";
 import { AboutModal } from "./components/AboutModal";
 import { SkillsModal } from "./components/SkillsModal";
 import { Modal, baseName } from "./components/common";
@@ -68,6 +69,16 @@ function TerminalIcon(): React.ReactElement {
     <svg {...stripIconProps}>
       <polyline points="4 17 10 11 4 5" />
       <line x1="12" y1="19" x2="20" y2="19" />
+    </svg>
+  );
+}
+
+function BrowserIcon(): React.ReactElement {
+  return (
+    <svg {...stripIconProps}>
+      <rect x="3" y="4" width="18" height="16" rx="2" />
+      <path d="M3 9h18" />
+      <circle cx="6.5" cy="6.5" r="0.6" fill="currentColor" />
     </svg>
   );
 }
@@ -160,6 +171,18 @@ export function App(): React.ReactElement {
   });
   const [resizingTerm, setResizingTerm] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+  /** Live view of the agent's browser: the last frame it sent, if any. */
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [browserFrame, setBrowserFrame] = useState<BrowserFrameDTO | null>(null);
+  const [browserWidth, setBrowserWidth] = useState<number>(() => {
+    try {
+      const stored = Number(localStorage.getItem("onflip.browserWidth"));
+      return stored >= 320 && stored <= 900 ? stored : 460;
+    } catch {
+      return 460;
+    }
+  });
+  const [resizingBrowser, setResizingBrowser] = useState(false);
 
   // Ctrl+F opens in-chat search wherever focus is.
   useEffect(() => {
@@ -375,6 +398,14 @@ export function App(): React.ReactElement {
           setTodos((data as { items: TodoItemDTO[] }).items);
           break;
         }
+        case "browser-frame": {
+          const frame = data as BrowserFrameDTO;
+          setBrowserFrame(frame);
+          // The panel opens itself the first time the agent shows a page —
+          // the point of it is not having to know in advance to look.
+          if (frame.image) setBrowserOpen(true);
+          break;
+        }
         case "log":
           // Engine diagnostics; visible in the devtools console only.
           console.debug("[engine]", (data as { line: string }).line);
@@ -413,8 +444,8 @@ export function App(): React.ReactElement {
   );
 
   const sendPrompt = useCallback(
-    (text: string) => {
-      guard(api.send(text));
+    (text: string, attachments?: string[]) => {
+      guard(api.send(text, attachments?.length ? attachments : undefined));
     },
     [guard]
   );
@@ -634,6 +665,29 @@ export function App(): React.ReactElement {
     window.addEventListener("mouseup", up);
   };
 
+  const startBrowserDrag = (e: React.MouseEvent) => {
+    e.preventDefault();
+    setResizingBrowser(true);
+    const clamp = (x: number) => Math.min(900, Math.max(320, x));
+    // The terminal sits to the right of this panel, so its width is part of
+    // the distance from the window edge.
+    const offset = terminalOpen ? termWidth : 0;
+    const widthAt = (ev: MouseEvent) => clamp(window.innerWidth - ev.clientX - offset);
+    const move = (ev: MouseEvent) => setBrowserWidth(widthAt(ev));
+    const up = (ev: MouseEvent) => {
+      window.removeEventListener("mousemove", move);
+      window.removeEventListener("mouseup", up);
+      setResizingBrowser(false);
+      try {
+        localStorage.setItem("onflip.browserWidth", String(widthAt(ev)));
+      } catch {
+        /* cosmetic */
+      }
+    };
+    window.addEventListener("mousemove", move);
+    window.addEventListener("mouseup", up);
+  };
+
   const startTermDrag = (e: React.MouseEvent) => {
     e.preventDefault();
     setResizingTerm(true);
@@ -657,13 +711,17 @@ export function App(): React.ReactElement {
   return (
     <LangContext.Provider value={lang}>
     <div
-      className={`app${sidebarHidden ? " sidebar-hidden" : ""}${resizingSidebar || resizingTerm ? " resizing" : ""}${terminalOpen ? " term-open" : ""}`}
+      className={`app${sidebarHidden ? " sidebar-hidden" : ""}${
+        resizingSidebar || resizingTerm || resizingBrowser ? " resizing" : ""
+      }${terminalOpen ? " term-open" : ""}${browserOpen ? " browser-open" : ""}`}
       style={
         {
           "--sidebar-w": `${sidebarWidth}px`,
           "--term-w": terminalOpen ? `${termWidth}px` : "0px",
           // Content keeps its width even while the column animates shut.
           "--term-cw": `${termWidth}px`,
+          "--browser-w": browserOpen ? `${browserWidth}px` : "0px",
+          "--browser-cw": `${browserWidth}px`,
         } as React.CSSProperties
       }
     >
@@ -789,6 +847,13 @@ export function App(): React.ReactElement {
             <TerminalIcon /> {t("stripTerminal")}
           </button>
           <button
+            className={`strip-btn${browserOpen ? " badged" : ""}`}
+            onClick={() => setBrowserOpen((o) => !o)}
+            title={t("browserTip")}
+          >
+            <BrowserIcon /> {t("browserTitle")}
+          </button>
+          <button
             className={`strip-btn${(status?.snapshotCount ?? 0) > 0 ? " badged" : ""}`}
             onClick={() => setModal("diff")}
             title={t("stripDiffTip")}
@@ -885,6 +950,29 @@ export function App(): React.ReactElement {
         open={terminalOpen}
         projectCwd={status?.cwd ?? null}
         onClose={() => setTerminalOpen(false)}
+      />
+
+      {browserOpen && (
+        <div
+          className="browser-resizer"
+          style={{ right: browserWidth + (terminalOpen ? termWidth : 0) - 3 }}
+          onMouseDown={startBrowserDrag}
+          onDoubleClick={() => {
+            setBrowserWidth(460);
+            try {
+              localStorage.setItem("onflip.browserWidth", "460");
+            } catch {
+              /* cosmetic */
+            }
+          }}
+          title="Drag to resize · double-click to reset"
+        />
+      )}
+
+      <BrowserPanel
+        open={browserOpen}
+        frame={browserFrame}
+        onClose={() => setBrowserOpen(false)}
       />
 
       {approval && (

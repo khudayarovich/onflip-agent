@@ -35,12 +35,15 @@ import {
   listProjects,
   createProject,
   takeComposerWarning,
+  queueAttachments,
+  takeReplyImages,
   takeProjectWarning,
   currentConversationId,
   pageSessionUser,
   deleteConversations,
   RemoteProject,
 } from "onflip/dist/chatgpt/browser-client";
+import { setBrowserFrameSink, BrowserFrame } from "onflip/dist/tools/browser";
 import { recordSend, usageSummary, associateAccount, UNKNOWN_ACCOUNT } from "./usage";
 import {
   createToolRegistry,
@@ -140,7 +143,7 @@ export class Engine {
 
   private abort = new AbortController();
   private busy = false;
-  private queue: string[] = [];
+  private queue: { text: string; attachments?: string[] }[] = [];
   private connected = false;
 
   /** Arguments of the call currently awaiting approval, for diff previews. */
@@ -249,6 +252,10 @@ export class Engine {
     if (this.session.chatId) await this.reattachChat();
 
     this.connected = true;
+    // Mirror the agent's browser into the desktop panel. The browser itself
+    // is a separate OS window that cannot be embedded, so the panel is fed
+    // frames captured after each action.
+    setBrowserFrameSink((frame: BrowserFrame) => this.peer.emit("browser-frame", frame));
     void this.checkSignInState();
     void this.learnAccountModels();
 
@@ -421,7 +428,7 @@ export class Engine {
       cooldownUntil: cfg.cooldownUntil && cfg.cooldownUntil > Date.now() ? cfg.cooldownUntil : undefined,
       headed: cfg.headed ?? false,
       busy: this.busy,
-      queued: [...this.queue],
+      queued: this.queue.map((q) => q.text),
       snapshotCount: this.toolState.snapshots.length,
       todoCount: this.toolState.todos.length,
       signedIn: this.hasSession(),
@@ -567,14 +574,16 @@ export class Engine {
   // running turns
   // =========================================================================
 
-  send(text: string): { queued: boolean } {
+  send(text: string, attachments?: string[]): { queued: boolean } {
     if (!this.connected) throw new Error("The engine is still connecting — try again in a moment.");
     if (this.busy) {
-      this.queue.push(text);
+      // A queued message keeps its own attachments: they belong to that
+      // message, not to whichever turn happens to run next.
+      this.queue.push({ text, attachments });
       this.pushStatus();
       return { queued: true };
     }
-    void this.runOneTurn(text);
+    void this.runOneTurn(text, attachments);
     return { queued: false };
   }
 
@@ -593,7 +602,7 @@ export class Engine {
   private runningToolId: string | null = null;
   private toolIds = new Map<ToolCall, string>();
 
-  private async runOneTurn(text: string): Promise<void> {
+  private async runOneTurn(text: string, attachments?: string[]): Promise<void> {
     this.busy = true;
     this.abort = new AbortController();
     this.toolIds.clear();
@@ -603,6 +612,17 @@ export class Engine {
     // @skill tags expand into their full prompt for the model; the emitted
     // item keeps the compact tag, which the chat renders as a link.
     const userMessage = newMessage("user", expandMentions(expandSkillToken(text), this.cwd));
+    // Files go to the browser transport as a side-channel: the payload is
+    // text, and the composer uploads these alongside it. The model is told
+    // in words too, so it knows to look at what was attached.
+    if (attachments?.length) {
+      queueAttachments(attachments);
+      userMessage.content = `${userMessage.content}
+
+[Attached to this message: ${attachments
+        .map((f) => path.basename(f))
+        .join(", ")}]`;
+    }
     // The item carries the history message's id so edit/resend can find it,
     // and delivery events can attach to it.
     this.peer.emit("item", { type: "user", id: userMessage.id, text } satisfies ChatItem);
@@ -644,6 +664,18 @@ export class Engine {
     } finally {
       const composerWarning = takeComposerWarning();
       if (composerWarning) this.notice(composerWarning);
+
+      // Images ChatGPT drew this turn. They live on the page, not on disk,
+      // so they are carried into the transcript as data URLs and saved only
+      // if the user asks for them.
+      for (const image of takeReplyImages()) {
+        this.peer.emit("item", {
+          type: "image",
+          id: randomUUID(),
+          dataUrl: image.dataUrl,
+          name: image.name,
+        } satisfies ChatItem);
+      }
       const projectWarning = takeProjectWarning();
       if (projectWarning) this.notice(projectWarning);
 
@@ -675,7 +707,7 @@ export class Engine {
         // Start synchronously through the point where runOneTurn installs its
         // new AbortController. A stop click can then never hit the old turn's
         // already-finished controller during the queue hand-off.
-        void this.runOneTurn(next);
+        void this.runOneTurn(next.text, next.attachments);
       }
     }
   }

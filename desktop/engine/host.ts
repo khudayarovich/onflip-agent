@@ -67,7 +67,10 @@ peer.onRequest = async (method, rawParams) => {
     case "init":
       return engine.init();
     case "send":
-      return engine.send(String(params.text ?? ""));
+      return engine.send(
+        String(params.text ?? ""),
+        params.attachments as string[] | undefined
+      );
     case "interrupt":
       engine.interrupt();
       return null;

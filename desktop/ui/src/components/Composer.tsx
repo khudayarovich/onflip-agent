@@ -99,6 +99,14 @@ function ShieldIcon(): React.ReactElement {
   );
 }
 
+function PaperclipIcon(): React.ReactElement {
+  return (
+    <svg {...iconProps} width={15} height={15}>
+      <path d="M21 12.5 12.5 21a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.9-7.8" />
+    </svg>
+  );
+}
+
 function ShellOffIcon(): React.ReactElement {
   return (
     <svg {...iconProps}>
@@ -126,7 +134,7 @@ export function Composer({
   status: EngineStatus | null;
   busy: boolean;
   models: ModelDTO[];
-  onSend: (text: string) => void;
+  onSend: (text: string, attachments: string[]) => void;
   onInterrupt: () => void;
   onCommand: (name: string, arg: string) => void;
   onSetModel: (slug: string) => void;
@@ -139,6 +147,8 @@ export function Composer({
 }): React.ReactElement {
   const t = useT();
   const [text, setText] = useState("");
+  /** Files staged for the next message; paths, not copies. */
+  const [attached, setAttached] = useState<string[]>([]);
   const [slashIndex, setSlashIndex] = useState(0);
   const areaRef = useRef<HTMLTextAreaElement>(null);
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -230,10 +240,13 @@ export function Composer({
 
   const submit = () => {
     const value = canonicaliseSkillMentions(text.trim());
-    if (!value) return;
+    // Files alone are a message: "look at this" needs no words.
+    if (!value && attached.length === 0) return;
+    const files = attached;
     setText("");
+    setAttached([]);
     requestAnimationFrame(autosize);
-    if (value.startsWith("/")) {
+    if (value && value.startsWith("/")) {
       const space = value.indexOf(" ");
       const name = (space < 0 ? value : value.slice(0, space)).toLowerCase();
       const arg = space < 0 ? "" : value.slice(space + 1).trim();
@@ -248,7 +261,7 @@ export function Composer({
         return;
       }
     }
-    onSend(value);
+    onSend(value, files);
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
@@ -362,6 +375,24 @@ export function Composer({
           </div>
         )}
 
+        {attached.length > 0 && (
+          <div className="attach-strip">
+            {attached.map((file) => (
+              <span className="attach-chip" key={file} title={file}>
+                <PaperclipIcon />
+                <span className="attach-name">{fileName(file)}</span>
+                <button
+                  className="attach-x"
+                  title={t("attachRemove")}
+                  onClick={() => setAttached((prev) => prev.filter((f) => f !== file))}
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+          </div>
+        )}
+
         <div className="input-wrap">
           <div className="input-backdrop" ref={backdropRef} aria-hidden="true">
             {backdropNodes}
@@ -392,7 +423,7 @@ export function Composer({
         ) : (
           <button
             className="send-btn"
-            disabled={disabled || !text.trim()}
+            disabled={disabled || (!text.trim() && attached.length === 0)}
             onClick={submit}
             title="Send (Enter)"
           >
@@ -401,6 +432,21 @@ export function Composer({
         )}
 
         <div className="chips">
+          <button
+            className="chip icon-only"
+            data-tip={t("attachTip")}
+            disabled={disabled}
+            onClick={() => {
+              void window.onflip.pickFiles().then((files) => {
+                if (files.length === 0) return;
+                // De-duplicated: picking the same file twice uploads it twice.
+                setAttached((prev) => [...new Set([...prev, ...files])]);
+                areaRef.current?.focus();
+              });
+            }}
+          >
+            <PaperclipIcon />
+          </button>
           <button
             className="chip"
             data-tip={`${t("menuModel")} — ${modelLabel}`}
@@ -490,4 +536,10 @@ export function Composer({
       )}
     </div>
   );
+}
+
+/** Just the file name, for a chip that has to stay narrow. */
+function fileName(p: string): string {
+  const parts = p.split(/[\/]/);
+  return parts[parts.length - 1] || p;
 }

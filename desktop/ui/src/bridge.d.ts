@@ -6,6 +6,8 @@ interface OnFlipBridge {
   respondApproval(id: number, decision: unknown): void;
   onEngineExit(listener: (code: number | null) => void): () => void;
   pickFolder(): Promise<string | null>;
+  pickFiles(): Promise<string[]>;
+  saveImage(dataUrl: string, suggestedName: string): Promise<string | null>;
   saveFile(suggestedName: string, content: string): Promise<string | null>;
   restartEngine(cwd?: string): Promise<boolean>;
   appInfo(): Promise<{ version: string; platform: string }>;

@@ -89,11 +89,57 @@ export async function closeAutomationBrowser(): Promise<void> {
   } finally {
     context = null;
     page = null;
+    frameSink?.({ closed: true });
   }
 }
 
 export function automationBrowserOpen(): boolean {
   return Boolean(page && !page.isClosed());
+}
+
+// ---------------------------------------------------------------------------
+// live view — mirroring the agent's browser into the desktop panel
+// ---------------------------------------------------------------------------
+
+/**
+ * A frame of the agent's browser, sent to whatever wants to display it.
+ *
+ * The agent's Chromium is a separate OS window that cannot be embedded in the
+ * Electron app, so the desktop panel is fed screenshots instead: after every
+ * action the current page is captured and handed to the sink, which the engine
+ * forwards to the UI. `closed` marks the browser going away so the panel can
+ * retire itself.
+ */
+export interface BrowserFrame {
+  image?: string;
+  url?: string;
+  title?: string;
+  note?: string;
+  closed?: boolean;
+}
+
+let frameSink: ((frame: BrowserFrame) => void) | null = null;
+
+export function setBrowserFrameSink(sink: ((frame: BrowserFrame) => void) | null): void {
+  frameSink = sink;
+}
+
+/** Capture the page and push it to the panel. Never throws into a tool run. */
+async function emitFrame(p: Page, note?: string): Promise<void> {
+  if (!frameSink) return;
+  try {
+    const buffer = await p.screenshot({ type: "jpeg", quality: 55, fullPage: false, timeout: 8_000 });
+    frameSink({
+      image: `data:image/jpeg;base64,${buffer.toString("base64")}`,
+      url: p.url(),
+      title: (await p.title().catch(() => "")) || undefined,
+      note,
+    });
+  } catch (e) {
+    logger.debug("browser-tool", "could not capture a frame", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -294,6 +340,8 @@ async function respond(p: Page, note: string): Promise<ToolResult> {
   await p.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
   await p.waitForTimeout(400);
   const shot = await snapshot(p);
+  // Mirror the result into the desktop's browser panel, if one is listening.
+  void emitFrame(p, note);
   return ok(describe(shot, note), { title: shot.title || shot.url });
 }
 
@@ -513,6 +561,7 @@ export const browserScreenshotTool: ToolDefinition = {
     } catch (e) {
       return err(`Could not take a screenshot: ${e instanceof Error ? e.message : String(e)}`);
     }
+    void emitFrame(p, "Screenshot");
     return ok(`Saved a screenshot of ${p.url()} to ${file}. Tell the user the path — you cannot see it.`, {
       title: path.basename(file),
     });

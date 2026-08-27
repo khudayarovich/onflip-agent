@@ -365,6 +365,51 @@ function registerIpc(): void {
     }
   );
 
+  // Attachments: the picker returns paths, and the engine hands them to the
+  // ChatGPT composer. Nothing is copied — the file is uploaded from where it
+  // already lives.
+  ipcMain.handle("pick-files", async () => {
+    if (!win) return [];
+    const result = await dialog.showOpenDialog(win, {
+      title: "Attach files",
+      properties: ["openFile", "multiSelections"],
+      filters: [
+        {
+          name: "Images and documents",
+          extensions: [
+            "png", "jpg", "jpeg", "gif", "webp", "bmp", "svg",
+            "pdf", "txt", "md", "csv", "json", "docx", "xlsx", "pptx",
+          ],
+        },
+        { name: "All files", extensions: ["*"] },
+      ],
+    });
+    return result.canceled ? [] : result.filePaths;
+  });
+
+  // Saving an image the model drew. It arrives as a data URL because it lived
+  // on the ChatGPT page rather than on disk.
+  ipcMain.handle(
+    "save-image",
+    async (_e, payload: { dataUrl: string; suggestedName: string }) => {
+      if (!win) return null;
+      const match = /^data:image\/([a-z+]+);base64,(.+)$/i.exec(payload.dataUrl ?? "");
+      if (!match) return null;
+      const ext = match[1].toLowerCase() === "jpeg" ? "jpg" : match[1].toLowerCase();
+      const result = await dialog.showSaveDialog(win, {
+        title: "Save image",
+        defaultPath: path.join(
+          app.getPath("downloads"),
+          payload.suggestedName?.replace(/\.[a-z0-9]+$/i, "") || "chatgpt-image"
+        ) + `.${ext}`,
+        filters: [{ name: "Image", extensions: [ext] }],
+      });
+      if (result.canceled || !result.filePath) return null;
+      fs.writeFileSync(result.filePath, Buffer.from(match[2], "base64"));
+      return result.filePath;
+    }
+  );
+
   ipcMain.handle("restart-engine", async (_e, payload: { cwd?: string }) => {
     const cwd = payload?.cwd || loadState().lastCwd || os.homedir();
     await stopEngine();

@@ -126,12 +126,12 @@ a:hover {
 .app {
   display: grid;
   grid-template-rows: var(--titlebar-h) 1fr;
-  grid-template-columns: var(--sidebar-w, 268px) 1fr var(--term-w, 0px);
+  grid-template-columns: var(--sidebar-w, 268px) 1fr var(--browser-w, 0px) var(--term-w, 0px);
   /* Grid columns interpolate, which is what makes the panels slide. */
   transition: grid-template-columns 0.28s cubic-bezier(0.25, 0.8, 0.25, 1);
   grid-template-areas:
-    "titlebar titlebar titlebar"
-    "sidebar main term";
+    "titlebar titlebar titlebar titlebar"
+    "sidebar main browser term";
   height: 100%;
 }
 /* Dragging the sidebar edge must track the pointer, not ease after it. */
@@ -140,7 +140,7 @@ a:hover {
 }
 
 .app.sidebar-hidden {
-  grid-template-columns: 0px 1fr var(--term-w, 0px);
+  grid-template-columns: 0px 1fr var(--browser-w, 0px) var(--term-w, 0px);
 }
 /* Kept mounted so the column can animate closed; contents fade and clip. */
 .app.sidebar-hidden .sidebar {
@@ -2440,4 +2440,180 @@ a:hover {
 .banner-error .grow {
   flex: 1;
   white-space: pre-wrap;
+}
+
+/* ==========================================================================
+   browser panel — a live view of the agent's browser
+   ========================================================================== */
+
+.browser-panel {
+  grid-area: browser;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  background: var(--bg-sidebar);
+  border-left: 1px solid var(--border);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.2s ease;
+}
+.app.browser-open .browser-panel {
+  opacity: 1;
+  pointer-events: auto;
+}
+.browser-panel > * {
+  min-width: calc(var(--browser-cw, 460px) - 1px);
+}
+
+.browser-resizer {
+  position: absolute;
+  top: var(--titlebar-h);
+  bottom: 0;
+  width: 7px;
+  cursor: col-resize;
+  z-index: 40;
+}
+.browser-resizer:hover,
+.app.resizing .browser-resizer {
+  background: linear-gradient(to right, transparent 2px, var(--border-strong) 3px, transparent 5px);
+}
+
+.browser-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.browser-shot {
+  width: 100%;
+  height: auto;
+  display: block;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: #ffffff;
+  cursor: zoom-in;
+}
+/* Actual size: overflow the panel and scroll, rather than shrink to fit. */
+.browser-shot.zoom {
+  width: auto;
+  max-width: none;
+  cursor: zoom-out;
+}
+
+.browser-note {
+  font-size: 11.5px;
+  color: var(--text-muted);
+  padding: 0 2px;
+  word-break: break-word;
+}
+
+.browser-empty {
+  margin: auto;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  padding: 24px 16px;
+  line-height: 1.6;
+}
+.browser-empty-icon {
+  font-size: 30px;
+  opacity: 0.35;
+  margin-bottom: 8px;
+}
+
+/* ==========================================================================
+   composer attachments
+   ========================================================================== */
+
+.attach-strip {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 10px 8px;
+}
+
+.attach-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 6px 4px 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-raised);
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.attach-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.attach-x {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1;
+  padding: 2px;
+  border-radius: 4px;
+}
+.attach-x:hover {
+  background: var(--bg-hover);
+  color: var(--red);
+}
+
+.chip.icon-only {
+  padding: 5px 7px;
+}
+
+/* ==========================================================================
+   generated images
+   ========================================================================== */
+
+.msg-image {
+  margin: 10px 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  background: var(--bg-raised);
+  max-width: 560px;
+}
+.msg-image img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.msg-image-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 10px;
+  border-top: 1px solid var(--border);
+  font-size: 12px;
+}
+.msg-image-note {
+  color: var(--text-muted);
+  flex: 1;
+}
+.msg-image-saved {
+  color: var(--green);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 320px;
+}
+.msg-image-save {
+  color: var(--accent);
+  font-size: 12px;
+  padding: 3px 8px;
+  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+}
+.msg-image-save:hover {
+  background: var(--bg-hover);
 }

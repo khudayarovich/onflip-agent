@@ -20,7 +20,8 @@ const call = <T>(method: string, params?: unknown): Promise<T> =>
 export const api = {
   init: () => call<EngineStatus>("init"),
   status: () => call<EngineStatus>("status"),
-  send: (text: string) => call<{ queued: boolean }>("send", { text }),
+  send: (text: string, attachments?: string[]) =>
+    call<{ queued: boolean }>("send", { text, attachments }),
   interrupt: () => call<null>("interrupt"),
   clearQueue: () => call<null>("clearQueue"),
 

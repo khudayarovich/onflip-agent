@@ -351,6 +351,8 @@ function TranscriptItem({
       );
     case "tool":
       return <ToolCard item={item} progress={toolProgress[item.id]} />;
+    case "image":
+      return <GeneratedImage dataUrl={item.dataUrl} name={item.name} />;
     case "notice":
       return <div className="msg-notice">{item.text}</div>;
     case "error":
@@ -358,4 +360,38 @@ function TranscriptItem({
     default:
       return null;
   }
+}
+
+/**
+ * An image ChatGPT drew, shown in the transcript.
+ *
+ * It arrives as a data URL rather than a path: the image was rendered on the
+ * ChatGPT page and never touched this machine's disk, so saving it is an
+ * explicit action rather than something that happens behind the user's back.
+ */
+function GeneratedImage({ dataUrl, name }: { dataUrl: string; name: string }): React.ReactElement {
+  const t = useT();
+  const [saved, setSaved] = useState<string | null>(null);
+  return (
+    <div className="msg-image">
+      <img src={dataUrl} alt={name} />
+      <div className="msg-image-bar">
+        <span className="msg-image-note">{t("imageFromChat")}</span>
+        {saved ? (
+          <span className="msg-image-saved">{t("imageSaved", { path: saved })}</span>
+        ) : (
+          <button
+            className="msg-image-save"
+            onClick={() => {
+              void window.onflip.saveImage(dataUrl, name).then((p) => {
+                if (p) setSaved(p);
+              });
+            }}
+          >
+            {t("imageSave")}
+          </button>
+        )}
+      </div>
+    </div>
+  );
 }

@@ -74,6 +74,7 @@ export type ChatItem =
   | { type: "assistant"; id: string; text: string }
   | { type: "narration"; id: string; text: string }
   | { type: "tool"; id: string; call: ToolCallDTO; result?: ToolResultDTO }
+  | { type: "image"; id: string; dataUrl: string; name: string }
   | { type: "notice"; id: string; text: string }
   | { type: "error"; id: string; text: string };
 
@@ -202,6 +203,10 @@ export type EngineEvent =
       };
     }
   | { event: "todos"; data: { items: TodoItemDTO[] } }
+  | {
+      event: "browser-frame";
+      data: { image?: string; url?: string; title?: string; note?: string; closed?: boolean };
+    }
   | { event: "log"; data: { line: string } };
 
 // ---------------------------------------------------------------------------
@@ -227,7 +232,7 @@ export interface ExportResult {
 /** Everything the renderer can ask of the engine, by method name. */
 export interface EngineMethods {
   init: { params: Record<string, never>; result: EngineStatus };
-  send: { params: { text: string }; result: { queued: boolean } };
+  send: { params: { text: string; attachments?: string[] }; result: { queued: boolean } };
   interrupt: { params: Record<string, never>; result: null };
   clearQueue: { params: Record<string, never>; result: null };
 
