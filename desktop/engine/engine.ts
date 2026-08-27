@@ -813,7 +813,12 @@ export class Engine {
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
       signal: this.abort.signal,
       compactAfterMessages: this.config.compactAfter ?? 60,
-      compactAfterChars: this.config.compactAfterChars ?? 60_000,
+      // 30k, not 60k. The ceiling is not the model's limit but the
+      // composer's: measured on real sends, 4k characters are typed in 1.3s,
+      // 35k arrived as "0 of 580 lines", and 56k took 64 seconds. A
+      // transcript allowed to grow to 60k produces exactly the payloads that
+      // cannot be typed, so it is summarised while it is still sendable.
+      compactAfterChars: this.config.compactAfterChars ?? 30_000,
       events: {
         onThinking: (iteration) => this.peer.emit("thinking", { iteration }),
         onDelta: (full) => {
@@ -1246,7 +1251,7 @@ export class Engine {
       browserHeadless: cfg.browserHeadless ?? true,
       maxIterations: firstPositiveInt([cfg.maxIterations], 40),
       replyTimeout: firstPositiveInt([cfg.replyTimeout], 600),
-      compactAfterChars: firstPositiveInt([cfg.compactAfterChars], 60_000),
+      compactAfterChars: firstPositiveInt([cfg.compactAfterChars], 30_000),
       rules,
       allowedCommands: cfg.allowedCommands ?? [],
       allowedWriteDirs: cfg.allowedWriteDirs ?? [],
@@ -1259,7 +1264,7 @@ export class Engine {
       browserHeadless: (v) => ({ browserHeadless: Boolean(v) }),
       maxIterations: (v) => ({ maxIterations: firstPositiveInt([v as number], 40) }),
       replyTimeout: (v) => ({ replyTimeout: firstPositiveInt([v as number], 600) }),
-      compactAfterChars: (v) => ({ compactAfterChars: firstPositiveInt([v as number], 60_000) }),
+      compactAfterChars: (v) => ({ compactAfterChars: firstPositiveInt([v as number], 30_000) }),
       allowedCommands: (v) => ({ allowedCommands: Array.isArray(v) ? v.map(String) : [] }),
       allowedWriteDirs: (v) => ({ allowedWriteDirs: Array.isArray(v) ? v.map(String) : [] }),
     };

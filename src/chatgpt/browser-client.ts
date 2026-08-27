@@ -655,14 +655,32 @@ export function __resetFiledForTest(): void {
   conversationsBeforeChat = null;
 }
 
-/** Dispatch a real paste event, which is how ProseMirror best accepts text. */
-const PASTE_INTO = `(el, text) => {
-  el.focus();
-  const data = new DataTransfer();
-  data.setData("text/plain", text);
-  const ev = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true });
-  return el.dispatchEvent(ev);
-}`;
+/**
+ * Dispatch a real paste event, which is how ProseMirror best accepts text.
+ *
+ * Built with `new Function` rather than written as a template string, and
+ * this is not a style choice. Playwright does not *call* a stringified
+ * function: it evaluates the text as an expression, which yields a function
+ * object and returns undefined. Measured across every shape — arrow,
+ * parenthesised arrow, `function` keyword, with and without an argument — all
+ * of them returned undefined. So this strategy never pasted anything, and the
+ * composer-focus check below always answered false, which silently disabled
+ * `insertText` and left the slow `fill` path doing all the work.
+ *
+ * `new Function` produces a genuine function object that Playwright
+ * serialises and calls, while the body stays a string — so this file still
+ * compiles without the DOM lib.
+ */
+const PASTE_INTO = new Function(
+  "el",
+  "text",
+  `el.focus();
+   const data = new DataTransfer();
+   data.setData("text/plain", text);
+   const ev = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true });
+   el.dispatchEvent(ev);
+   return true;`
+) as (el: unknown, text: string) => boolean;
 
 /**
  * Did the composer receive what we meant to send?
@@ -786,9 +804,18 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
     }
     if (!(await composerFocused(p))) return false;
     // Select-all-and-delete is slow on a large document and pointless on an
-    // empty one, which is what the box normally is on the first attempt.
-    const existing = await readComposer(p).catch(() => "");
-    if (existing.trim()) {
+    // empty one, which is what the box normally is on the first attempt. But
+    // "cannot read it" is not "it is empty": treating a failed read as empty
+    // would skip the clear and append this payload to whatever was already
+    // sitting there.
+    let existing = "";
+    let read = true;
+    try {
+      existing = await readComposer(p);
+    } catch {
+      read = false;
+    }
+    if (!read || existing.trim()) {
       await p.keyboard.press("Control+A").catch(() => {});
       await p.keyboard.press("Delete").catch(() => {});
     }
@@ -799,26 +826,26 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
   // preserved every line of every payload in practice; the synthetic paste
   // event is kept as a fallback because ProseMirror handles real pastes well,
   // but it is not what the live composer responds to, so it goes second.
-  const strategies: { name: string; run: () => Promise<unknown> }[] = [
-    { name: "insertText", run: () => p.keyboard.insertText(text) },
-    { name: "paste", run: () => composer.evaluate(PASTE_INTO, text) },
-    { name: "fill", run: () => composer.fill(text, { timeout: 8_000 }) },
-  ];
+  const insertText = { name: "insertText", run: () => p.keyboard.insertText(text) };
+  const paste = { name: "paste", run: () => composer.evaluate(PASTE_INTO, text) };
+  const fill = { name: "fill", run: () => composer.fill(text, { timeout: 8_000 }) };
 
   /**
-   * Above this, a second attempt is not worth what it costs.
+   * Above this a payload is large enough that how it is entered matters.
    *
-   * Every attempt re-clears and re-types the whole payload, and in the live
-   * composer that is not free the way it is in a bare contenteditable: 60k
-   * characters go into one of those in about a second, while a real send of
-   * 55,781 characters spent 65.9 seconds inside this function. So for a large
-   * payload an intact-but-reflowed result is taken as it is — the parser
-   * recovers a flattened block, and the warning below says it happened —
-   * rather than paying another minute for the chance of tidier line breaks.
-   * Small payloads keep trying, because there the extra attempt is cheap.
+   * Measured on real sends: 4k characters typed in 1.3s, 35k arrived as "0 of
+   * 580 lines", and 56k took 64 seconds. `insertText` feeds the editor
+   * keystroke-style and degrades with length; a paste is one transaction,
+   * which is what ProseMirror is built to handle. So the order flips for big
+   * payloads and stays as it was for everything else, where insertText is
+   * the more faithful of the two.
    */
-  const RETYPE_BUDGET_CHARS = 8_000;
-  const costly = text.length > RETYPE_BUDGET_CHARS;
+  const LARGE_PAYLOAD_CHARS = 8_000;
+  const costly = text.length > LARGE_PAYLOAD_CHARS;
+  const strategies: { name: string; run: () => Promise<unknown> }[] = costly
+    ? [paste, insertText, fill]
+    : [insertText, paste, fill];
+
 
   // Keep the best attempt rather than failing on the first imperfect one.
   let best: { check: ComposerCheck; text: string } | null = null;
@@ -885,17 +912,19 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
   );
 }
 
-const IS_COMPOSER_FOCUSED = `(selectors) => {
-  const active = document.activeElement;
-  if (!active) return false;
-  return selectors.some((sel) => {
-    try {
-      return active.matches(sel) || Boolean(active.closest(sel));
-    } catch {
-      return false;
-    }
-  });
-}`;
+/** See PASTE_INTO for why this is a Function object and not a string. */
+const IS_COMPOSER_FOCUSED = new Function(
+  "selectors",
+  `const active = document.activeElement;
+   if (!active) return false;
+   return selectors.some(function (sel) {
+     try {
+       return active.matches(sel) || Boolean(active.closest(sel));
+     } catch (e) {
+       return false;
+     }
+   });`
+) as (selectors: string[]) => boolean;
 
 /** How many user turns the conversation shows. */
 async function userTurnCount(p: Page): Promise<number> {
