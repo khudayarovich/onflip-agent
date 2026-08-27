@@ -7,7 +7,7 @@ import type {
 } from "../../../shared/protocol";
 import { Menu, useMenu } from "./common";
 import { useT, StringKey, LangContext } from "../i18n";
-import { SKILLS, canonicaliseSkillMentions } from "../../../shared/skills";
+import { SKILLS, canonicaliseSkillMentions, findSkillMention } from "../../../shared/skills";
 
 export interface SlashCommand {
   name: string;
@@ -141,6 +141,25 @@ export function Composer({
   const [text, setText] = useState("");
   const [slashIndex, setSlashIndex] = useState(0);
   const areaRef = useRef<HTMLTextAreaElement>(null);
+  const backdropRef = useRef<HTMLDivElement>(null);
+
+  // The textarea's own text is transparent; this layer paints it, with a
+  // skill mention as a coloured token. Kept scroll-synced with the textarea.
+  const syncBackdrop = () => {
+    const backdrop = backdropRef.current;
+    const area = areaRef.current;
+    if (backdrop && area) backdrop.scrollTop = area.scrollTop;
+  };
+  const mention = findSkillMention(text);
+  const backdropNodes = mention ? (
+    <>
+      {text.slice(0, mention.start)}
+      <span className="mention">{text.slice(mention.start, mention.end)}</span>
+      {text.slice(mention.end)}
+    </>
+  ) : (
+    text
+  );
 
   // "Edit message" hands the recalled text back through here.
   useEffect(() => {
@@ -206,6 +225,7 @@ export function Composer({
     if (!el) return;
     el.style.height = "auto";
     el.style.height = `${Math.min(el.scrollHeight, 220)}px`;
+    syncBackdrop();
   };
 
   const submit = () => {
@@ -342,21 +362,28 @@ export function Composer({
           </div>
         )}
 
-        <textarea
-          ref={areaRef}
-          rows={1}
-          value={text}
-          placeholder={placeholder}
-          disabled={disabled}
-          onChange={(e) => {
-            setText(e.target.value);
-            setSlashIndex(0);
-            setAtIndex(0);
-            setAtDismissed(false);
-            autosize();
-          }}
-          onKeyDown={onKeyDown}
-        />
+        <div className="input-wrap">
+          <div className="input-backdrop" ref={backdropRef} aria-hidden="true">
+            {backdropNodes}
+            {"​"}
+          </div>
+          <textarea
+            ref={areaRef}
+            rows={1}
+            value={text}
+            placeholder={placeholder}
+            disabled={disabled}
+            onChange={(e) => {
+              setText(e.target.value);
+              setSlashIndex(0);
+              setAtIndex(0);
+              setAtDismissed(false);
+              autosize();
+            }}
+            onScroll={syncBackdrop}
+            onKeyDown={onKeyDown}
+          />
+        </div>
 
         {busy ? (
           <button className="send-btn stop" onClick={onInterrupt} title="Stop (Esc)">

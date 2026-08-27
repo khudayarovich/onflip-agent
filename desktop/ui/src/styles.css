@@ -1159,18 +1159,52 @@ a:hover {
   border-color: #4a4a4a;
 }
 
-.composer textarea {
+.composer .input-wrap {
+  position: relative;
+}
+/* The textarea and its highlight backdrop must be metric-identical — same
+   font, padding and wrapping — or the painted text drifts from the caret. */
+.composer textarea,
+.composer .input-backdrop {
   width: 100%;
-  resize: none;
   padding: 13px 52px 6px 16px;
+  font-family: var(--sans);
   font-size: 14px;
   line-height: 1.5;
+  letter-spacing: normal;
   max-height: 220px;
   min-height: 44px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: break-word;
+}
+.composer textarea {
+  position: relative;
+  z-index: 1;
+  resize: none;
   background: transparent;
+  /* The backdrop paints the glyphs; the textarea keeps the caret. */
+  color: transparent;
+  caret-color: var(--text);
 }
 .composer textarea::placeholder {
   color: var(--text-muted);
+}
+.composer textarea::selection {
+  background: rgba(232, 150, 60, 0.3);
+}
+.composer .input-backdrop {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  color: var(--text);
+}
+.composer .input-backdrop .mention {
+  color: var(--yellow);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2.5px;
 }
 
 .composer .chips {

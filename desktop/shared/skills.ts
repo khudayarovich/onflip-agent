@@ -41,6 +41,38 @@ function skillNamePatterns(): { id: string; name: string }[] {
   return out.sort((a, b) => b.name.length - a.name.length);
 }
 
+export interface SkillMention {
+  start: number;
+  end: number;
+  id: string;
+}
+
+/**
+ * Locate the first skill mention in a text — canonical `@skill:<id>` or the
+ * readable `@<Name>` form in any interface language — with its exact span,
+ * so the composer can paint it as a token while the user types.
+ */
+export function findSkillMention(text: string): SkillMention | null {
+  const canonical = SKILL_TOKEN_RE.exec(text);
+  if (canonical && findSkill(canonical[1])) {
+    return {
+      start: canonical.index,
+      end: canonical.index + canonical[0].length,
+      id: canonical[1].toLowerCase(),
+    };
+  }
+  for (const { id, name } of skillNamePatterns()) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(^|\\s)@${escaped}(?=$|[\\s.,!?:;])`, "i");
+    const m = re.exec(text);
+    if (m) {
+      const start = m.index + m[1].length;
+      return { start, end: start + name.length + 1, id };
+    }
+  }
+  return null;
+}
+
 /**
  * Turn "@Explain Project …" — the readable form the composer shows, in any
  * interface language — into the canonical "@skill:explain …" the engine and
