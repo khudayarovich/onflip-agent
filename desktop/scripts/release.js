@@ -58,6 +58,12 @@ function materialise() {
   fs.mkdirSync(LINK, { recursive: true });
   fs.copyFileSync(path.join(ROOT, "package.json"), path.join(LINK, "package.json"));
   fs.cpSync(path.join(ROOT, "dist"), path.join(LINK, "dist"), { recursive: true });
+  // The Electron-ABI sqlite binding, so cookie import works on machines with
+  // no Node installed (the engine then runs under Electron-as-Node).
+  const prebuilds = path.join(ROOT, "prebuilds");
+  if (fs.existsSync(prebuilds)) {
+    fs.cpSync(prebuilds, path.join(LINK, "prebuilds"), { recursive: true });
+  }
 
   const packages = dependencyClosure();
   console.log(`vendoring ${packages.length} packages from the root tree…`);

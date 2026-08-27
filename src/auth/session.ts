@@ -11,6 +11,48 @@ import { SessionCookie } from "./access";
 
 const SESSION_COOKIE = "__Secure-next-auth.session-token";
 
+/**
+ * Open a cookie database under whatever runtime this process happens to be.
+ *
+ * better-sqlite3's own binding is prebuilt for Node's ABI. On a machine with
+ * no Node installed, the desktop app runs everything under Electron-as-Node —
+ * a different ABI — and the require fails with NODE_MODULE_VERSION 137 vs
+ * 130. That failure used to end cookie import entirely: the user clicked
+ * "sign in with my browser's session" and was told to go install Node.
+ *
+ * So the package carries a second binding, prebuilt for the Electron ABI the
+ * desktop app ships (see prebuilds/), and the ABI that fails to load falls
+ * back to the binding that matches `process.versions.modules`. Node and
+ * Electron ABI numbers never collide, so the number alone picks the file.
+ */
+function openCookieDb(file: string): Database.Database {
+  try {
+    return new Database(file, { readonly: true, fileMustExist: true });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    const wrongAbi = /NODE_MODULE_VERSION|was compiled against a different Node\.js version/i.test(
+      message
+    );
+    if (!wrongAbi) throw e;
+    const bundled = bundledBinding();
+    if (!bundled) throw e;
+    return new Database(file, { readonly: true, fileMustExist: true, nativeBinding: bundled });
+  }
+}
+
+/** The shipped binding for this runtime's ABI, or null when there is none. */
+function bundledBinding(): string | null {
+  const file = path.join(
+    __dirname,
+    "..",
+    "..",
+    "prebuilds",
+    `${process.platform}-${process.arch}`,
+    `better_sqlite3-abi${process.versions.modules}.node`
+  );
+  return fs.existsSync(file) ? file : null;
+}
+
 export interface ExtractedToken {
   cookies: SessionCookie[];
   primary: SessionCookie;
@@ -52,7 +94,7 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
   const aesKey = getAesKeyFromLocalState(loc.localStatePath);
   const { file, cleanup } = readWithCopy(loc.cookieDbPath);
   try {
-    const db = new Database(file, { readonly: true, fileMustExist: true });
+    const db = openCookieDb(file);
 
     const allRows = db
       .prepare(
@@ -88,7 +130,7 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
 function extractFirefox(loc: BrowserCookieLocation): ExtractedToken | null {
   const { file, cleanup } = readWithCopy(loc.cookieDbPath);
   try {
-    const db = new Database(file, { readonly: true, fileMustExist: true });
+    const db = openCookieDb(file);
 
     const allRows = db
       .prepare(

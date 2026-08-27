@@ -10,20 +10,25 @@ function workerPath(): string {
 /**
  * Which runtimes could run the cookie worker, best first.
  *
- * The worker needs a *Node* runtime, not just any runtime: better-sqlite3's
- * prebuilt binding is compiled against Node's ABI. Under Electron —
- * `ELECTRON_RUN_AS_NODE`, which the desktop app falls back to when the
- * machine has no Node installed — `process.execPath` is the app binary and
- * the binding refuses to load (NODE_MODULE_VERSION 137 vs 130), so every
- * browser read failed and the user was told no session existed anywhere.
- * A real `node` on PATH is tried in that case.
+ * A real Node is preferred: better-sqlite3's default binding is compiled
+ * against Node's ABI, and under Electron — `ELECTRON_RUN_AS_NODE`, which the
+ * desktop app falls back to when the machine has no Node installed — that
+ * binding refuses to load (NODE_MODULE_VERSION 137 vs 130). But Electron is
+ * no longer useless here: the package ships a second binding for the
+ * Electron ABI (see prebuilds/ and openCookieDb), so the app's own binary
+ * goes last as the runtime of last resort. Before that, a machine with no
+ * Node at all showed "install Node.js" to a user who had clicked a button
+ * promising to read their browser — on the one kind of machine the desktop
+ * app most needs to work on.
  */
 function runtimeCandidates(): string[] {
   const candidates: string[] = [];
   if (process.env.ONFLIP_NODE) candidates.push(process.env.ONFLIP_NODE);
-  // Only trust our own runtime when it is genuinely Node.
+  // Only trust our own runtime outright when it is genuinely Node.
   if (!process.versions.electron) candidates.push(process.execPath);
   candidates.push(process.platform === "win32" ? "node.exe" : "node");
+  // Electron-as-Node, carried by the bundled Electron-ABI binding.
+  if (process.versions.electron) candidates.push(process.execPath);
   return [...new Set(candidates)];
 }
 

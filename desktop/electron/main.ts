@@ -74,12 +74,11 @@ function engineEntry(): string {
 }
 
 /**
- * The engine must run under plain Node, not Electron: better-sqlite3 ships
- * prebuilt bindings for the Node ABI, and cookie extraction dies under
- * Electron's. `ELECTRON_RUN_AS_NODE` is the fallback when no system Node is
- * installed — everything still works except reading browser cookies, which
- * the core already survives (it falls back to the stored token and the
- * persistent browser profile).
+ * Plain Node is preferred: better-sqlite3's default binding is built for the
+ * Node ABI, and everything is exactly the CLI. `ELECTRON_RUN_AS_NODE` is the
+ * fallback when no system Node is installed — the core carries a second
+ * sqlite binding for the Electron ABI (onflip/prebuilds), so even browser
+ * cookie import works there now.
  */
 function spawnEngine(cwd: string): ChildProcess {
   const entry = engineEntry();

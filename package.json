@@ -27,6 +27,7 @@
   "main": "dist/index.js",
   "files": [
     "dist",
+    "prebuilds",
     "scripts/postinstall.js",
     "README.md",
     "LICENSE"
