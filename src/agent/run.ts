@@ -32,6 +32,13 @@ export interface AgentEvents {
   onToolEnd?(call: ToolCall, result: ToolResult): void;
   /** Out-of-band status: retries, compaction, protocol corrections. */
   onNotice?(text: string): void;
+  /**
+   * Messages compaction just removed from the context.
+   *
+   * The caller may want to keep showing them: summarising is about what is
+   * *sent*, and a transcript that empties itself looks like lost work.
+   */
+  onCompacted?(dropped: ChatMessage[]): void;
   /** The model's final prose answer. */
   onFinal?(text: string): void;
 }
@@ -327,7 +334,9 @@ async function compactIfLarge(
   const before = transcriptChars(history);
   logger.info("agent", "compacting", { reason, messages: history.length, chars: before });
   events.onNotice?.(`Context is getting long (${reason}) — compacting.`);
+  const dropped = history.filter((m) => m.role !== "system");
   await compact(history, opts);
+  events.onCompacted?.(dropped);
 
   const after = transcriptChars(history);
   logger.info("agent", "compacted", {
@@ -702,5 +711,7 @@ export async function compactNow(
   history: ChatMessage[],
   opts: AgentOptions
 ): Promise<void> {
+  const dropped = history.filter((m) => m.role !== "system");
   await compact(history, opts);
+  opts.events?.onCompacted?.(dropped);
 }

@@ -133,6 +133,8 @@ export class Engine {
   private session!: StoredSession;
   private toolState: SessionState = createSessionState();
   private history: ChatMessage[] = [];
+  /** Compacted-away messages, kept for display only. Never sent. */
+  private archived: ChatMessage[] = [];
 
   private model: string;
   private thinking: ThinkingLevel | undefined;
@@ -238,6 +240,7 @@ export class Engine {
     } else {
       this.session = createSession(this.cwd, this.model);
       this.history = this.session.messages;
+    this.archived = this.session.archived ?? [];
     }
 
     openLog(this.session.id);
@@ -336,6 +339,7 @@ export class Engine {
   private adoptStoredSession(restored: StoredSession): void {
     this.session = restored;
     this.history = restored.messages;
+    this.archived = restored.archived ?? [];
     this.toolState = createSessionState();
     this.toolState.todos = restored.todos ?? [];
     this.toolState.snapshots = restored.snapshots ?? [];
@@ -460,7 +464,9 @@ export class Engine {
   }
 
   private pushTranscript(): void {
-    this.peer.emit("transcript", { items: replayItems(this.history) });
+    // Display shows the whole conversation; the model's context is the
+    // compacted part alone.
+    this.peer.emit("transcript", { items: replayItems([...this.archived, ...this.history]) });
     this.peer.emit("todos", { items: this.toolState.todos });
   }
 
@@ -863,6 +869,11 @@ export class Engine {
           }
         },
         onNotice: (noticeText) => this.notice(noticeText),
+        // Compaction empties the context, not the conversation: keep what it
+        // dropped so the transcript still reads as one.
+        onCompacted: (dropped) => {
+          this.archived = [...this.archived, ...dropped];
+        },
         onFinal: (final) => {
           this.peer.emit("item", {
             type: "assistant",
@@ -906,6 +917,7 @@ export class Engine {
     this.saveNow();
     this.session = createSession(this.cwd, this.model);
     this.history = this.session.messages;
+    this.archived = this.session.archived ?? [];
     this.toolState = createSessionState();
     this.seedSystemPrompt();
     this.transport.reset();
@@ -1149,6 +1161,7 @@ export class Engine {
     } else {
       this.session = createSession(target, this.model);
       this.history = this.session.messages;
+    this.archived = this.session.archived ?? [];
       this.toolState = createSessionState();
       this.seedSystemPrompt();
       this.transport.reset();
@@ -1365,8 +1378,10 @@ export class Engine {
     try {
       // Compaction opens a fresh chat, which must be filed like any other.
       await this.ensureOnFlipProject();
+      // What compaction is about to drop stays visible: it leaves the
+      // context, not the conversation.
       await compactNow(this.history, this.agentOptions());
-      this.notice("Transcript compacted into a fresh conversation.");
+      this.notice("Transcript compacted — earlier messages stay on screen, but are no longer sent.");
       this.pushTranscript();
       return { ok: true };
     } finally {
@@ -1507,6 +1522,7 @@ export class Engine {
     this.session.title = title ?? "ChatGPT conversation";
     this.session.chatId = id;
     this.history = this.session.messages;
+    this.archived = this.session.archived ?? [];
     this.toolState = createSessionState();
     this.seedSystemPrompt();
     for (const m of messages) this.history.push(newMessage(m.role, m.content));
@@ -1665,6 +1681,7 @@ export class Engine {
     const current = this.fingerprint();
     if (current === this.savedFingerprint) return;
     this.session.messages = this.history;
+    this.session.archived = this.archived;
     this.session.todos = this.toolState.todos;
     this.session.snapshots = this.toolState.snapshots;
     this.session.model = this.model;

@@ -19,6 +19,13 @@ export interface ShellHost {
   name: string;
 }
 
+/** Make a PowerShell child speak UTF-8 in both directions. */
+const WINDOWS_UTF8_PRELUDE =
+  "$ProgressPreference='SilentlyContinue'; " +
+  "chcp 65001 > $null; " +
+  "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+  "$OutputEncoding=[Text.Encoding]::UTF8; ";
+
 export function shellHost(): ShellHost {
   if (process.platform === "win32") {
     const usePwsh = Boolean(process.env.ONFLIP_USE_PWSH);
@@ -32,7 +39,11 @@ export function shellHost(): ShellHost {
         "-ExecutionPolicy",
         "Bypass",
         "-Command",
-        command,
+        // PowerShell writes in the OEM codepage unless told otherwise, so
+        // every non-ASCII character came back as `?` — Russian output was
+        // unreadable in the chat. The terminal panel already does this; the
+        // agent's own shell had been left behind.
+        `${WINDOWS_UTF8_PRELUDE}${command}`,
       ],
       cwdProbe: `; Write-Output ("${CWD_MARKER}:" + (Get-Location).Path)`,
     };

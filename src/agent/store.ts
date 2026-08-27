@@ -30,6 +30,13 @@ export interface StoredSession {
   createdAt: number;
   updatedAt: number;
   messages: ChatMessage[];
+  /**
+   * Messages compaction removed from the model's context, kept only so the
+   * transcript still reads as a conversation. They are never sent — summarising
+   * exists precisely to stop sending them — but losing them from the screen
+   * meant a compaction looked like the chat had been deleted.
+   */
+  archived?: ChatMessage[];
   todos: TodoItem[];
   /** Kept for /undo; trimmed to the most recent changes. */
   snapshots: FileSnapshot[];
