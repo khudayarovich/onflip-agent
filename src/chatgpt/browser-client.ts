@@ -382,14 +382,16 @@ async function waitForConversationId(p: Page, timeout = 8_000): Promise<string |
 
 /** The account's most recent conversation ids, newest first. */
 async function recentConversationIds(p: Page, limit = 20): Promise<string[]> {
-  // One token probe only. This runs at chat-open, on the coldest page of the
-  // session, where the full five-attempt wait (with its reload) costs up to
-  // ten seconds before typing can even start — and the snapshot is
-  // best-effort anyway: without it, filing falls back to the URL id.
+  // Three token probes, not the full five with their late reload. One probe
+  // was tried and it broke filing: whenever the token lagged even briefly,
+  // the snapshot came back empty, the URL then withheld the id too, and the
+  // chat landed unfiled in the main list with its id untracked. Three keeps
+  // most of the speed win (the reload only fires before a third attempt)
+  // while giving the token the moment it usually needs.
   const json = (await backendApi(
     p,
     `/backend-api/conversations?offset=0&limit=${limit}&order=updated`,
-    { tokenAttempts: 1 }
+    { tokenAttempts: 3 }
   )) as { items?: { id?: unknown }[] };
   const out: string[] = [];
   for (const item of json.items ?? []) {

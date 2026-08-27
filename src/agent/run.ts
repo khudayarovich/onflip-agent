@@ -482,6 +482,13 @@ function detectToolDenial(text: string): string | null {
   // typewriter apostrophe matches nothing it actually says.
   const t = straighten(text.trim());
   if (!t || t.length > 600) return null;
+  // Talking about the *user's* tools — "the export tool in your app is not
+  // accessible from the admin page" — is an answer about their code, not a
+  // refusal about OnFlip's own tools. OnFlip denials say "in this
+  // conversation/chat/turn", never "in your app".
+  if (/\btools?\b[^.]{0,30}\bin (your|the|this) (app|application|site|website|page|project|admin|dashboard)\b/i.test(t)) {
+    return null;
+  }
   const denies =
     /\b(do ?n'?t|cannot|can'?t|no|not) (have|see|access|reach|use)\b[^.]{0,40}\btools?\b/i.test(t) ||
     // "I'm sorry, but I can't execute the local file-editing tool in this
@@ -512,7 +519,14 @@ function detectToolDenial(text: string): string | null {
     /\bonflip\b[^.]{0,50}\b(did ?n[o']?t|does ?n[o']?t|has ?n[o']?t|have ?n[o']?t|failed to|refused to)\b[^.]{0,40}\b(execute|run|process|perform|receive|pick up)\b/i.test(t) ||
     /\b(runtime|harness)\b[^.]{0,40}\b(did ?n[o']?t|does ?n[o']?t|has ?n[o']?t|have ?n[o']?t|failed to|refused to)\b[^.]{0,40}\b(execute|run|process|perform|receive|pick up)\b[^.]{0,40}\b(calls?|blocks?|tools?)\b/i.test(t) ||
     // "no machine-side calls were executed", "no tool calls went through".
-    /\b(no|none of the|any)\b[^.]{0,30}\b(machine-side|tool|onflip)\b[^.]{0,20}\bcalls?\b[^.]{0,60}\b(executed|ran|made|performed|went through|reached)\b/i.test(t);
+    /\b(no|none of the|any)\b[^.]{0,30}\b(machine-side|tool|onflip)\b[^.]{0,20}\bcalls?\b[^.]{0,60}\b(executed|ran|made|performed|went through|reached)\b/i.test(t) ||
+    // "the machine-side OnFlip execution channel is not actually exposed as
+    // an invokable tool in this conversation" — live, straight after a
+    // compaction opened a fresh thread. The subject is a *channel* and the
+    // negation comes before the word "tool", so both earlier shapes missed
+    // it and the excuse ended the turn with the plan at 1/5.
+    /\b(onflip|machine-side|execution channel|tool channel)\b[^.]{0,60}\b(is|are)( \w+){0,2} not\b[^.]{0,60}\b(exposed|available|invokable|callable|attached|accessible|enabled)\b/i.test(t) ||
+    /\bnot\b[^.]{0,40}\b(exposed|invokable|callable|available)\b[^.]{0,30}\btools?\b/i.test(t);
   if (!denies) return null;
   return (
     "you said a tool could not run, or that OnFlip executed nothing — but " +
