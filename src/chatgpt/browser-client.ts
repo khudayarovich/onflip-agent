@@ -711,16 +711,34 @@ function inspectComposer(typed: string, intended: string): ComposerCheck {
  */
 async function waitForComposerReady(p: Page, timeout = 20_000) {
   const deadline = Date.now() + timeout;
+  /**
+   * The stop indicator is advisory here, never a precondition.
+   *
+   * `waitForReply` learned this the hard way and says so: that button lingers,
+   * and `aria-label*='stop'` is loose enough to match controls that have
+   * nothing to do with generation. Blocking on it for a full timeout turns an
+   * unreliable signal into a guaranteed stall on every send. So it is worth a
+   * short pause — streaming really is about to change the box under us — and
+   * after that an editable composer is good enough.
+   */
+  const busyDeadline = Date.now() + Math.min(2_500, timeout);
   let composer = await firstVisible(p, COMPOSER_SELECTORS, timeout);
   for (;;) {
     if (composer) {
       const editable = await composer.isEditable({ timeout: 500 }).catch(() => false);
-      // Still streaming means the box is about to change state under us.
-      const busy = await anyVisible(p, STOP_SELECTORS).catch(() => false);
-      if (editable && !busy) return composer;
+      if (editable) {
+        const busy =
+          Date.now() < busyDeadline
+            ? await anyVisible(p, STOP_SELECTORS).catch(() => false)
+            : false;
+        if (!busy) return composer;
+      }
     }
-    if (Date.now() > deadline) return composer;
-    await p.waitForTimeout(250);
+    if (Date.now() > deadline) {
+      logger.debug("browser", "composer never reported ready; proceeding anyway");
+      return composer;
+    }
+    await p.waitForTimeout(150);
     composer = await firstVisible(p, COMPOSER_SELECTORS, 1_000);
   }
 }
@@ -740,9 +758,19 @@ async function typeMessage(p: Page, text: string): Promise<void> {
    * settles ProseMirror's own state, with `focus()` as the fallback.
    */
   const clear = async (): Promise<boolean> => {
-    await composer.click({ timeout: 5_000 }).catch(() => {});
+    // Clicking settles ProseMirror's own state, but it is a convenience, not
+    // the mechanism: `focus()` is what has to succeed. On a five-second leash
+    // it was anything but free — a click that cannot land (an overlay, a
+    // toast, an element Playwright will not call actionable) times out in
+    // full, and `clear` runs before *every* typing strategy. Measured across
+    // 60 real sends, that was a fixed ~17.5s tax on more than a quarter of
+    // them, with the payload itself taking 38ms. So: skip the click when the
+    // box already has focus, and keep it on a short leash when it does not.
     if (!(await composerFocused(p))) {
-      await composer.focus({ timeout: 2_000 }).catch(() => {});
+      await composer.click({ timeout: 1_200 }).catch(() => {});
+    }
+    if (!(await composerFocused(p))) {
+      await composer.focus({ timeout: 1_000 }).catch(() => {});
     }
     if (!(await composerFocused(p))) return false;
     await p.keyboard.press("Control+A").catch(() => {});
@@ -973,7 +1001,9 @@ async function submitMessage(p: Page): Promise<void> {
       // and Playwright's actionability check surfaces a disabled button.
       name: "send-button",
       run: async () => {
-        const button = await firstVisible(p, SEND_SELECTORS, 4_000);
+        // Enter is the next method and costs nothing, so a missing button is
+        // not worth four seconds of looking for it.
+        const button = await firstVisible(p, SEND_SELECTORS, 1_500);
         if (!button) throw new Error("no send button found");
         await button.click({ timeout: 5_000 });
       },
@@ -1173,8 +1203,11 @@ async function sendOn(
 
   const typedAt = Date.now();
   await typeMessage(p, payload);
+  const typedMs = Date.now() - typedAt;
   await p.waitForTimeout(200);
+  const submitStart = Date.now();
   await submitMessage(p);
+  const submitMs = Date.now() - submitStart;
 
   const sentAt = Date.now();
   let reply: string;
@@ -1211,6 +1244,10 @@ async function sendOn(
   logger.info("browser", "reply received", {
     ...shapeOf(reply),
     composeMs: sentAt - typedAt,
+    // Split out, because "composing took eighteen seconds" and "submitting
+    // did" need different fixes and looked identical from one number.
+    typedMs,
+    submitMs,
     replyMs: Date.now() - sentAt,
     // Which conversation this landed in, and whether it was grouped. `filed`
     // has to mean the move happened: an unknown id compares equal to an
@@ -1304,6 +1341,8 @@ export async function waitForReply(
   let loggedPlaceholder = "";
   let notedLongThink = false;
   let brokeOnSilence = false;
+  /** Consecutive polls with no stop indicator — a streak, not one sighting. */
+  let notGeneratingPolls = 0;
 
   while (Date.now() < deadline) {
     if (opts?.signal?.aborted) {
@@ -1330,6 +1369,9 @@ export async function waitForReply(
     if (generating) {
       sawGeneration = true;
       lastSignAt = now;
+      notGeneratingPolls = 0;
+    } else {
+      notGeneratingPolls++;
     }
 
     let turns: string[];
@@ -1390,11 +1432,28 @@ export async function waitForReply(
       // because almost-nothing is what a mid-thought pause looks like.
       const shortReply = text.trim().length < 200;
       if (!generating) {
-        // Fast path: the composer is back to idle and the text has settled.
+        /**
+         * Fast path: the page is idle and the text has settled.
+         *
+         * "Idle" used to mean a Send button had reappeared — but with an
+         * empty composer ChatGPT shows a voice control instead, so that was
+         * often simply absent and every reply fell through to the six- or
+         * twelve-second backstop below. The stop indicator going away is the
+         * signal that actually tracks generation ending; required over
+         * several consecutive polls it is stronger evidence than one
+         * sighting of a button, because a momentary flicker between thinking
+         * and writing cannot survive the streak.
+         */
         const sendBack = await anyVisible(p, SEND_SELECTORS).catch(() => false);
-        const idleNeed = shortReply ? Math.max(IDLE_QUIET_MS, 5_000) : IDLE_QUIET_MS;
-        if (sendBack && quietFor >= idleNeed) {
-          logger.debug("browser", "reply complete (composer idle)", { quietFor, chars: text.length });
+        const settled = sendBack || notGeneratingPolls >= 3;
+        const idleNeed = shortReply ? Math.max(IDLE_QUIET_MS, 2_500) : IDLE_QUIET_MS;
+        if (settled && quietFor >= idleNeed) {
+          logger.debug("browser", "reply complete (page idle)", {
+            quietFor,
+            chars: text.length,
+            via: sendBack ? "send-button" : "stop-gone",
+            notGeneratingPolls,
+          });
           return text.trim();
         }
       }
