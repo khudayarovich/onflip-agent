@@ -191,6 +191,14 @@ const en = {
   aboutLimitPro: "Effectively unlimited on standard models, within abuse guardrails",
   aboutLimitsNote:
     "Thinking/Pro-class models are capped on every plan and each model counts separately. Luna's unlimited tier covers text only and sits behind abuse guardrails — and OpenAI adjusts all of these limits over time.",
+  aboutTokensTitle: "Context & token sizes",
+  aboutTokensIntro:
+    "How much conversation the model can hold in view depends on the plan's context window (~4 characters per token, as of August 2026):",
+  aboutTokensFree: "≈16K-token context window",
+  aboutTokensPlus: "≈32K context · Thinking models 256K",
+  aboutTokensPro: "≈128K context · Thinking models 256K",
+  aboutTokensOnFlip:
+    "OnFlip's own working sizes: one outbound message tops out near the web composer's real limit (~60–80K characters), so the transcript is summarised automatically once it passes 60,000 characters (≈15K tokens) — adjustable in Settings → “Compact after”. Luna's 1M-token window applies to the API, not chat mode.",
   menuSkills: "Skills",
   skillsTitle: "Skill Hub",
   skillsHint:
@@ -364,6 +372,14 @@ const ru: Partial<Record<StringKey, string>> = {
   aboutLimitPro: "Практически без лимитов на стандартных моделях, в рамках защиты от злоупотреблений",
   aboutLimitsNote:
     "Модели класса Thinking/Pro ограничены на всех планах, и у каждой модели свой счётчик. Безлимит Luna касается только текста и защищён от злоупотреблений — и OpenAI со временем меняет эти лимиты.",
+  aboutTokensTitle: "Контекст и размеры токенов",
+  aboutTokensIntro:
+    "Сколько беседы модель держит в поле зрения, зависит от контекстного окна плана (~4 символа на токен, на август 2026):",
+  aboutTokensFree: "контекст ≈16K токенов",
+  aboutTokensPlus: "контекст ≈32K · Thinking-модели 256K",
+  aboutTokensPro: "контекст ≈128K · Thinking-модели 256K",
+  aboutTokensOnFlip:
+    "Рабочие размеры OnFlip: одно исходящее сообщение упирается в реальный лимит веб-композера (~60–80 тыс. символов), поэтому переписка автоматически сжимается после 60 000 символов (≈15K токенов) — настраивается в «Настройки → Сжимать после». Окно Luna в 1M токенов относится к API, а не к чату.",
   menuSkills: "Навыки",
   skillsTitle: "Хаб навыков",
   skillsHint:
@@ -535,6 +551,14 @@ const uz: Partial<Record<StringKey, string>> = {
   aboutLimitPro: "Standart modellarda amalda cheksiz, suiiste'moldan himoya doirasida",
   aboutLimitsNote:
     "Thinking/Pro toifadagi modellar barcha tariflarda cheklangan va har bir model alohida hisoblanadi. Luna cheksizligi faqat matnga tegishli va himoya qoidalari ostida — OpenAI bu limitlarni vaqt o'tishi bilan o'zgartiradi.",
+  aboutTokensTitle: "Kontekst va token hajmlari",
+  aboutTokensIntro:
+    "Model suhbatning qanchasini ko'ra olishi tarifning kontekst oynasiga bog'liq (~4 belgi = 1 token, 2026-yil avgust holatiga):",
+  aboutTokensFree: "kontekst oynasi ≈16K token",
+  aboutTokensPlus: "kontekst ≈32K · Thinking modellar 256K",
+  aboutTokensPro: "kontekst ≈128K · Thinking modellar 256K",
+  aboutTokensOnFlip:
+    "OnFlip ish hajmlari: bitta yuboriladigan xabar veb-kompozerning haqiqiy chegarasiga (~60–80 ming belgi) yetadi, shuning uchun yozishma 60 000 belgidan (≈15K token) oshsa avtomatik siqiladi — «Sozlamalar → Siqish chegarasi» da o'zgartiriladi. Luna ning 1M tokenli oynasi API ga tegishli, chat rejimiga emas.",
   menuSkills: "Ko'nikmalar",
   skillsTitle: "Ko'nikmalar markazi",
   skillsHint:

@@ -61,6 +61,26 @@ export function AboutModal({
       </div>
 
       <div className="about-section">
+        <h3>{t("aboutTokensTitle")}</h3>
+        <p>{t("aboutTokensIntro")}</p>
+        <div className="about-limits">
+          <div className="limit-row">
+            <span className="limit-plan">Free</span>
+            <span className="limit-text">{t("aboutTokensFree")}</span>
+          </div>
+          <div className="limit-row">
+            <span className="limit-plan">Plus</span>
+            <span className="limit-text">{t("aboutTokensPlus")}</span>
+          </div>
+          <div className="limit-row">
+            <span className="limit-plan">Pro</span>
+            <span className="limit-text">{t("aboutTokensPro")}</span>
+          </div>
+        </div>
+        <p className="about-limits-note">{t("aboutTokensOnFlip")}</p>
+      </div>
+
+      <div className="about-section">
         <h3>{t("aboutAuthorTitle")}</h3>
         <div className="about-author">
           <span className="avatar big">F</span>
