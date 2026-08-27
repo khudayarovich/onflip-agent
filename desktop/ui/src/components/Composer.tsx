@@ -7,7 +7,7 @@ import type {
 } from "../../../shared/protocol";
 import { Menu, useMenu } from "./common";
 import { useT, StringKey, LangContext } from "../i18n";
-import { SKILLS } from "../../../shared/skills";
+import { SKILLS, canonicaliseSkillMentions } from "../../../shared/skills";
 
 export interface SlashCommand {
   name: string;
@@ -192,7 +192,11 @@ export function Composer({
   const atOpen = !slashOpen && atMatches.length > 0 && !atDismissed;
 
   const pickSkill = (id: string) => {
-    setText((prev) => prev.replace(/@([a-z0-9-]*)$/i, `@skill:${id} `));
+    // The composer shows the readable name; the canonical @skill:<id> form
+    // is produced at send time by canonicaliseSkillMentions.
+    const skill = SKILLS.find((s) => s.id === id);
+    const label = skill ? skill.name[lang] : id;
+    setText((prev) => prev.replace(/@([a-z0-9-]*)$/i, `@${label} `));
     setAtIndex(0);
     areaRef.current?.focus();
   };
@@ -205,7 +209,7 @@ export function Composer({
   };
 
   const submit = () => {
-    const value = text.trim();
+    const value = canonicaliseSkillMentions(text.trim());
     if (!value) return;
     setText("");
     requestAnimationFrame(autosize);

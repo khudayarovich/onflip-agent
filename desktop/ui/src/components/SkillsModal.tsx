@@ -24,9 +24,10 @@ export function SkillsModal({
   const use = (skill: SkillDef) => {
     const argument = (inputs[skill.id] ?? "").trim();
     if (skill.input && !argument) return;
-    // The compact tag goes into the composer; the engine expands it on send
-    // and the chat renders it as a link.
-    onUse(argument ? `@skill:${skill.id} ${argument}` : `@skill:${skill.id} `);
+    // The readable name goes into the composer; it becomes the canonical
+    // @skill:<id> form at send time.
+    const label = `@${skill.name[lang]}`;
+    onUse(argument ? `${label} ${argument}` : `${label} `);
     onClose();
   };
 

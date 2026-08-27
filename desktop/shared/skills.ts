@@ -31,6 +31,34 @@ export function findSkill(id: string): SkillDef | undefined {
   return SKILLS.find((s) => s.id === key);
 }
 
+/** Every display name a skill answers to, longest first so prefixes lose. */
+function skillNamePatterns(): { id: string; name: string }[] {
+  const out: { id: string; name: string }[] = [];
+  const langs: SkillLang[] = ["en", "ru", "uz"];
+  for (const skill of SKILLS) {
+    for (const lang of langs) out.push({ id: skill.id, name: skill.name[lang] });
+  }
+  return out.sort((a, b) => b.name.length - a.name.length);
+}
+
+/**
+ * Turn "@Explain Project …" — the readable form the composer shows, in any
+ * interface language — into the canonical "@skill:explain …" the engine and
+ * the chat renderer work with. Applied once, at send time.
+ */
+export function canonicaliseSkillMentions(text: string): string {
+  let result = text;
+  for (const { id, name } of skillNamePatterns()) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const re = new RegExp(`(^|\\s)@${escaped}(?=$|[\\s.,!?:;])`, "i");
+    if (re.test(result)) {
+      result = result.replace(re, `$1@skill:${id}`);
+      break; // one skill per message, same as expansion
+    }
+  }
+  return result;
+}
+
 /**
  * Expand the first @skill tag in a message into the full prompt.
  *
