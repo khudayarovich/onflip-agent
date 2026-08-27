@@ -1,22 +1,54 @@
-import type { Lang } from "./i18n";
-
 /**
  * The Skill Hub's built-in skills: reusable, well-shaped prompts for the jobs
  * a coding agent does most. Names and descriptions follow the interface
  * language; the prompts themselves are English, which the model handles most
- * reliably — the user sees the full prompt in the composer before sending and
- * can rewrite it in any language.
+ * reliably.
+ *
+ * A skill is invoked as an `@skill:<id>` tag in the message. The engine
+ * expands the tag into the full prompt before the model sees it, while the
+ * chat keeps the compact tag and renders it as a link — Codex-style. Shared
+ * between the renderer (picker, link rendering) and the engine (expansion).
  *
  * `{input}` marks where the skill's argument lands.
  */
+export type SkillLang = "en" | "ru" | "uz";
+
 export interface SkillDef {
   id: string;
   icon: string;
-  name: Record<Lang, string>;
-  desc: Record<Lang, string>;
+  name: Record<SkillLang, string>;
+  desc: Record<SkillLang, string>;
   prompt: string;
   /** Placeholder for the argument field; absent when the skill needs none. */
-  input?: Record<Lang, string>;
+  input?: Record<SkillLang, string>;
+}
+
+/** The tag a message carries; the id addresses SKILLS. */
+export const SKILL_TOKEN_RE = /@skill:([a-z0-9-]+)/i;
+
+export function findSkill(id: string): SkillDef | undefined {
+  const key = id.toLowerCase();
+  return SKILLS.find((s) => s.id === key);
+}
+
+/**
+ * Expand the first @skill tag in a message into the full prompt.
+ *
+ * The rest of the message becomes the skill's `{input}` when it takes one,
+ * and rides along as extra context otherwise. A tag with an unknown id is
+ * left untouched — better an odd-looking message than a silently different
+ * prompt.
+ */
+export function expandSkillToken(text: string): string {
+  const match = SKILL_TOKEN_RE.exec(text);
+  if (!match) return text;
+  const skill = findSkill(match[1]);
+  if (!skill) return text;
+  const rest = (text.slice(0, match.index) + text.slice(match.index + match[0].length)).trim();
+  if (skill.prompt.includes("{input}")) {
+    return skill.prompt.replace("{input}", rest || "(no further details given)");
+  }
+  return rest ? `${skill.prompt}\n\nAdditional context from the user: ${rest}` : skill.prompt;
 }
 
 export const SKILLS: SkillDef[] = [

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ApprovalMode,
   EngineStatus,
@@ -6,7 +6,8 @@ import type {
   ThinkingLevel,
 } from "../../../shared/protocol";
 import { Menu, useMenu } from "./common";
-import { useT, StringKey } from "../i18n";
+import { useT, StringKey, LangContext } from "../i18n";
+import { SKILLS } from "../../../shared/skills";
 
 export interface SlashCommand {
   name: string;
@@ -168,6 +169,34 @@ export function Composer({
   }, [text]);
   const slashOpen = slashMatches.length > 0 && !text.includes(" ");
 
+  // ---- @skill picker, Codex-style ----------------------------------------
+  const lang = useContext(LangContext);
+  const [atIndex, setAtIndex] = useState(0);
+  const [atDismissed, setAtDismissed] = useState(false);
+  /** The partial word after a trailing "@", or null when none is being typed. */
+  const atFragment = useMemo(() => {
+    if (text.startsWith("/")) return null;
+    const match = /(^|\s)@([a-z0-9-]*)$/i.exec(text);
+    return match ? match[2] : null;
+  }, [text]);
+  const atMatches = useMemo(() => {
+    if (atFragment === null) return [];
+    const fragment = atFragment.toLowerCase();
+    return SKILLS.filter(
+      (s) =>
+        s.id.startsWith(fragment) ||
+        s.name[lang].toLowerCase().startsWith(fragment) ||
+        s.name.en.toLowerCase().startsWith(fragment)
+    );
+  }, [atFragment, lang]);
+  const atOpen = !slashOpen && atMatches.length > 0 && !atDismissed;
+
+  const pickSkill = (id: string) => {
+    setText((prev) => prev.replace(/@([a-z0-9-]*)$/i, `@skill:${id} `));
+    setAtIndex(0);
+    areaRef.current?.focus();
+  };
+
   const autosize = () => {
     const el = areaRef.current;
     if (!el) return;
@@ -199,6 +228,28 @@ export function Composer({
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    if (atOpen) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setAtIndex((i) => (i + 1) % atMatches.length);
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setAtIndex((i) => (i - 1 + atMatches.length) % atMatches.length);
+        return;
+      }
+      if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+        e.preventDefault();
+        pickSkill((atMatches[atIndex] ?? atMatches[0]).id);
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setAtDismissed(true);
+        return;
+      }
+    }
     if (slashOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
@@ -269,6 +320,24 @@ export function Composer({
           </div>
         )}
 
+        {atOpen && (
+          <div className="slash-menu">
+            {atMatches.map((s, i) => (
+              <button
+                key={s.id}
+                className={`slash-item${i === atIndex ? " selected" : ""}`}
+                onMouseEnter={() => setAtIndex(i)}
+                onClick={() => pickSkill(s.id)}
+              >
+                <span className="cmd">
+                  {s.icon} {s.name[lang]}
+                </span>
+                <span className="desc">{s.desc[lang]}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         <textarea
           ref={areaRef}
           rows={1}
@@ -278,6 +347,8 @@ export function Composer({
           onChange={(e) => {
             setText(e.target.value);
             setSlashIndex(0);
+            setAtIndex(0);
+            setAtDismissed(false);
             autosize();
           }}
           onKeyDown={onKeyDown}

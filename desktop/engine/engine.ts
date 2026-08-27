@@ -94,6 +94,7 @@ import {
 } from "../shared/protocol";
 import { buildFileDiff } from "./diffs";
 import { replayItems, stripMentionNote } from "./replay";
+import { expandSkillToken } from "../shared/skills";
 import { subjectFor } from "./subjects";
 
 export const ENGINE_VERSION = "0.1.0";
@@ -527,7 +528,9 @@ export class Engine {
     this.pushStatus();
     this.peer.emit("turn", { state: "start" });
 
-    const userMessage = newMessage("user", expandMentions(text, this.cwd));
+    // @skill tags expand into their full prompt for the model; the emitted
+    // item keeps the compact tag, which the chat renders as a link.
+    const userMessage = newMessage("user", expandMentions(expandSkillToken(text), this.cwd));
     // The item carries the history message's id so edit/resend can find it,
     // and delivery events can attach to it.
     this.peer.emit("item", { type: "user", id: userMessage.id, text } satisfies ChatItem);

@@ -56,7 +56,7 @@ const en = {
   hintTests: "Run the tests and summarise the results",
   // composer
   composerPlaceholder: "Describe a change, ask a question, or type / for commands…",
-  hintIdle: "enter to send · shift+enter for a new line · / for commands · @path mentions a file",
+  hintIdle: "enter to send · shift+enter for a new line · / for commands · @ for skills & file paths",
   hintBusy: "enter queues the next prompt · esc interrupts",
   menuModel: "Model",
   menuReasoning: "Reasoning effort",
@@ -176,7 +176,7 @@ const en = {
   menuSkills: "Skills",
   skillsTitle: "Skill Hub",
   skillsHint:
-    "Pick a skill and its prompt lands in the input — edit it there, then send. Skills with a field need it filled first.",
+    "Pick a skill — it lands in the input as an @skill tag; add details and send. In chat the tag shows as a link revealing the full skill. Typing @ in the input opens this list too.",
   skillsUse: "Use",
 };
 
@@ -219,7 +219,7 @@ const ru: Partial<Record<StringKey, string>> = {
   hintFix: "Найди и исправь очевидную ошибку",
   hintTests: "Запусти тесты и подведи итог",
   composerPlaceholder: "Опишите изменение, задайте вопрос или введите / для команд…",
-  hintIdle: "enter — отправить · shift+enter — новая строка · / — команды · @путь — указать файл",
+  hintIdle: "enter — отправить · shift+enter — новая строка · / — команды · @ — навыки и файлы",
   hintBusy: "enter — в очередь · esc — прервать",
   menuModel: "Модель",
   menuReasoning: "Уровень размышления",
@@ -332,7 +332,7 @@ const ru: Partial<Record<StringKey, string>> = {
   menuSkills: "Навыки",
   skillsTitle: "Хаб навыков",
   skillsHint:
-    "Выберите навык — его запрос появится в поле ввода: отредактируйте и отправьте. Навыкам с полем нужно сначала его заполнить.",
+    "Выберите навык — он вставится в поле ввода как @skill-тег: добавьте детали и отправьте. В чате тег отображается ссылкой с полным текстом навыка. Символ @ в поле ввода тоже открывает этот список.",
   skillsUse: "Применить",
 };
 
@@ -373,7 +373,7 @@ const uz: Partial<Record<StringKey, string>> = {
   hintFix: "Aniq xatoni top va tuzat",
   hintTests: "Testlarni ishga tushirib, natijani xulosala",
   composerPlaceholder: "O'zgartirishni yozing, savol bering yoki buyruqlar uchun / kiriting…",
-  hintIdle: "enter — yuborish · shift+enter — yangi qator · / — buyruqlar · @yo'l — fayl ko'rsatish",
+  hintIdle: "enter — yuborish · shift+enter — yangi qator · / — buyruqlar · @ — ko'nikmalar va fayllar",
   hintBusy: "enter — navbatga · esc — to'xtatish",
   menuModel: "Model",
   menuReasoning: "Fikrlash darajasi",
@@ -486,7 +486,7 @@ const uz: Partial<Record<StringKey, string>> = {
   menuSkills: "Ko'nikmalar",
   skillsTitle: "Ko'nikmalar markazi",
   skillsHint:
-    "Ko'nikmani tanlang — so'rovi kiritish maydoniga tushadi: tahrirlang va yuboring. Maydonli ko'nikmalarni avval to'ldiring.",
+    "Ko'nikmani tanlang — u kiritish maydoniga @skill teg sifatida tushadi: tafsilot qo'shib yuboring. Chatda teg havola bo'lib, ko'nikmaning to'liq matnini ochadi. Maydonda @ yozish ham shu ro'yxatni ochadi.",
   skillsUse: "Ishlatish",
 };
 

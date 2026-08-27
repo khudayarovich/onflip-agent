@@ -1,9 +1,10 @@
-import React, { useEffect, useRef } from "react";
+import React, { useContext, useEffect, useRef, useState } from "react";
 import type { ChatItem } from "../../../shared/protocol";
 import { Markdown } from "../markdown";
 import { ToolCard } from "./ToolCard";
 import logo from "../assets/logo.svg";
-import { useT } from "../i18n";
+import { LangContext, useT } from "../i18n";
+import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/skills";
 
 export interface StreamingState {
   active: boolean;
@@ -139,6 +140,26 @@ function UserMessage({
   onRevise?: (id: string, mode: "edit" | "resend") => void;
 }): React.ReactElement {
   const t = useT();
+  const lang = useContext(LangContext);
+  const [skillOpen, setSkillOpen] = useState(false);
+
+  // An @skill tag renders as a link that reveals the full skill content,
+  // Codex-style, instead of dumping the whole prompt into the bubble.
+  const tokenMatch = SKILL_TOKEN_RE.exec(text);
+  const skill = tokenMatch ? findSkill(tokenMatch[1]) : undefined;
+  const bubble =
+    tokenMatch && skill ? (
+      <>
+        {text.slice(0, tokenMatch.index)}
+        <button className="skill-link" onClick={() => setSkillOpen((v) => !v)}>
+          {skill.icon} {skill.name[lang]}
+        </button>
+        {text.slice(tokenMatch.index + tokenMatch[0].length)}
+      </>
+    ) : (
+      text
+    );
+
   return (
     <div className="msg-user-wrap">
       <div className="msg-user-row">
@@ -152,8 +173,16 @@ function UserMessage({
             </button>
           </div>
         )}
-        <div className="msg-user">{text}</div>
+        <div className="msg-user">{bubble}</div>
       </div>
+      {skillOpen && skill && (
+        <div className="skill-reveal">
+          <div className="skill-reveal-head">
+            {skill.icon} {skill.name[lang]}
+          </div>
+          <pre>{expandSkillToken(text)}</pre>
+        </div>
+      )}
       {delivery && (
         <div className={`msg-delivery ${delivery}`}>
           {delivery === "pending" ? (

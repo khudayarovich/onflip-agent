@@ -1098,6 +1098,45 @@ a:hover {
   border-color: rgba(240, 192, 0, 0.3);
 }
 
+/* -- @skill link in chat ----------------------------------------------------- */
+.skill-link {
+  color: var(--blue);
+  font-weight: 600;
+  text-decoration: underline;
+  text-underline-offset: 2.5px;
+  cursor: pointer;
+  padding: 0;
+  font-size: inherit;
+}
+.skill-link:hover {
+  opacity: 0.85;
+}
+.skill-reveal {
+  align-self: flex-end;
+  max-width: 100%;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 11px 13px;
+  animation: pop-in 0.13s ease-out;
+}
+.skill-reveal-head {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.skill-reveal pre {
+  margin: 7px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
 /* -- skill hub --------------------------------------------------------------- */
 .skills-grid {
   display: grid;
