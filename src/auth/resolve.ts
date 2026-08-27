@@ -61,6 +61,11 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
     if (extracted) {
       cookies = extracted.cookies;
       deviceId = extracted.deviceId;
+    } else if (config.sessionCookies?.length) {
+      // A jar OnFlip stored itself: complete, including a chunked token that
+      // a single stored cookie could never carry.
+      cookies = config.sessionCookies.filter((c) => looksLikeSessionToken(c.value));
+      deviceId = config.sessionDeviceId;
     } else if (looksLikeSessionToken(config.sessionToken)) {
       cookies = [
         {

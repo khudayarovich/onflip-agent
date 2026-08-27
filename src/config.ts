@@ -6,6 +6,15 @@ export interface OnFlipConfig {
   // -- auth ---------------------------------------------------------------
   sessionToken?: string;
   sessionCookieName?: string;
+  /**
+   * The whole session jar, when OnFlip signed in itself.
+   *
+   * One cookie is not always the session: ChatGPT splits the token across
+   * `…session-token.0` and `.1` when it is large, and restoring only the
+   * first chunk restores nothing. Kept alongside the single token, which
+   * stays for compatibility with what `onflip login` writes.
+   */
+  sessionCookies?: { name: string; value: string }[];
   sessionDeviceId?: string;
   accessToken?: string;
   accessTokenExpiry?: number;

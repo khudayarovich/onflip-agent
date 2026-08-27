@@ -22,6 +22,25 @@ import { BrowserWindow, session, shell } from "electron";
 const PARTITION = "persist:chatgpt-auth";
 const LOGIN_URL = "https://chatgpt.com/auth/login";
 const SESSION_COOKIE = "__Secure-next-auth.session-token";
+/** Domains whose cookies belong to the session, not to the page. */
+const SESSION_DOMAINS = ["chatgpt.com", "openai.com"];
+
+/**
+ * Is this the session token?
+ *
+ * ChatGPT splits it when it is too large for one cookie, and then the plain
+ * name never appears at all — only `…session-token.0` and `.1`. Waiting for
+ * the exact name meant a successful sign-in was never noticed: measured on a
+ * real login, the jar held both chunks and no unsuffixed cookie.
+ */
+function isSessionCookie(name: string): boolean {
+  return name === SESSION_COOKIE || name.startsWith(`${SESSION_COOKIE}.`);
+}
+
+function belongsToSession(domain: string): boolean {
+  const host = domain.replace(/^\./, "").toLowerCase();
+  return SESSION_DOMAINS.some((d) => host === d || host.endsWith(`.${d}`));
+}
 /** Long enough for a slow login plus a challenge; not forever. */
 const DEADLINE_MS = 15 * 60_000;
 const POLL_MS = 1_000;
@@ -140,14 +159,18 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
         finish({ ok: false, reason: "timeout" });
         return;
       }
+      // Asked without a domain filter and narrowed here: the jar holds
+      // chatgpt.com and openai.com cookies under several host spellings, and
+      // a filter that misses one loses part of the session.
       void ses.cookies
-        .get({ domain: "chatgpt.com" })
+        .get({})
         .then((jar) => {
-          const primary = jar.find((c) => c.name === SESSION_COOKIE);
-          if (!looksLikeToken(primary?.value)) return;
+          const mine = jar.filter((c) => belongsToSession(c.domain ?? ""));
+          const signedIn = mine.some((c) => isSessionCookie(c.name) && looksLikeToken(c.value));
+          if (!signedIn) return;
           // Carry the account cookies; the transport decides which of them
           // are its own to replay.
-          const cookies = jar
+          const cookies = mine
             .filter((c) => looksLikeToken(c.value) || c.name === "oai-did")
             .map((c) => ({ name: c.name, value: c.value }));
           finish({ ok: true, cookies });

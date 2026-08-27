@@ -882,15 +882,24 @@ export class Engine {
    * this session is attached to.
    */
   async applySignIn(cookies: { name: string; value: string }[]): Promise<{ ok: boolean }> {
-    const primary =
-      cookies.find((c) => c.name === "__Secure-next-auth.session-token") ??
-      cookies.find((c) => c.value.length >= 20);
+    // The session token may arrive whole or split across `.0`/`.1`; anything
+    // else in the jar is a session cookie but not *the* one, and picking the
+    // first long value would happily store a Cloudflare cookie instead.
+    const base = "__Secure-next-auth.session-token";
+    const rank = (name: string) =>
+      name === base ? 0 : name === `${base}.0` ? 1 : name === `${base}.1` ? 2 : 3;
+    const primary = [...cookies]
+      .filter((c) => c.value.length >= 20)
+      .sort((a, b) => rank(a.name) - rank(b.name) || b.value.length - a.value.length)
+      .find((c) => rank(c.name) < 3);
     if (!primary) throw new Error("The sign-in returned no session cookie.");
 
     saveConfig({
       sessionToken: primary.value,
       sessionCookieName: primary.name,
       sessionDeviceId: cookies.find((c) => c.name === "oai-did")?.value,
+      // The whole jar, so a restart restores a chunked token intact.
+      sessionCookies: cookies,
       // Signing in lifts the suppression a previous sign-out put in place.
       signedOut: false,
     });
@@ -951,6 +960,7 @@ export class Engine {
     saveConfig({ signedOut: true });
     clearConfigKeys([
       "sessionToken",
+      "sessionCookies",
       "sessionCookieName",
       "sessionDeviceId",
       "accessToken",
