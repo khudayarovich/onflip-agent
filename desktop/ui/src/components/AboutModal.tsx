@@ -42,7 +42,7 @@ export function AboutModal({
           <span className="avatar big">F</span>
           <div>
             <div className="about-author-name">Farrukh Khudayarovich Yuldashev</div>
-            <div className="about-author-line">github.com/khudayarovich · admin@nqaae.uz</div>
+            <div className="about-author-line">github.com/khudayarovich · fashuzfy98@gmail.com</div>
             <div className="about-author-line">github.com/khudayarovich/onflip-agent</div>
           </div>
         </div>

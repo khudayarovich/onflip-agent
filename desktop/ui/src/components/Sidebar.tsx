@@ -25,6 +25,7 @@ export function Sidebar({
   onPickFolder,
   onOpenSettings,
   onOpenAbout,
+  onOpenSkills,
 }: {
   status: EngineStatus | null;
   connect: ConnectState;
@@ -46,6 +47,7 @@ export function Sidebar({
   onPickFolder: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
+  onOpenSkills: () => void;
 }): React.ReactElement {
   const t = useT();
   const projectMenu = useMenu();
@@ -128,6 +130,7 @@ export function Sidebar({
         connectDetail={connectDetail}
         onOpenSettings={onOpenSettings}
         onOpenAbout={onOpenAbout}
+        onOpenSkills={onOpenSkills}
       />
 
 
@@ -245,6 +248,7 @@ function AccountBar({
   connectDetail,
   onOpenSettings,
   onOpenAbout,
+  onOpenSkills,
 }: {
   status: EngineStatus | null;
   connect: ConnectState;
@@ -252,6 +256,7 @@ function AccountBar({
   connectDetail?: string;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
+  onOpenSkills: () => void;
 }): React.ReactElement {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -306,6 +311,15 @@ function AccountBar({
             </div>
 
             <div className="pop-divider" />
+            <button
+              className="pop-item"
+              onClick={() => {
+                setOpen(false);
+                onOpenSkills();
+              }}
+            >
+              <span className="pop-icon">✦</span> {t("menuSkills")}
+            </button>
             <button
               className="pop-item"
               onClick={() => {

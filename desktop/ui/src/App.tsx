@@ -26,10 +26,19 @@ import { ProjectModal } from "./components/ProjectModal";
 import { TodoList } from "./components/ToolCard";
 import { TerminalPanel } from "./components/TerminalPanel";
 import { AboutModal } from "./components/AboutModal";
+import { SkillsModal } from "./components/SkillsModal";
 import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
 
-type ModalName = "settings" | "sessions" | "chats" | "project" | "diff" | "about" | null;
+type ModalName =
+  | "settings"
+  | "sessions"
+  | "chats"
+  | "project"
+  | "diff"
+  | "about"
+  | "skills"
+  | null;
 
 interface ConfirmState {
   message: string;
@@ -673,6 +682,7 @@ export function App(): React.ReactElement {
         onPickFolder={pickFolder}
         onOpenSettings={() => setModal("settings")}
         onOpenAbout={() => setModal("about")}
+        onOpenSkills={() => setModal("skills")}
       />
 
       <main className="main">
@@ -836,6 +846,13 @@ export function App(): React.ReactElement {
       )}
       {modal === "diff" && <DiffModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutModal status={status} onClose={() => setModal(null)} />}
+
+      {modal === "skills" && (
+        <SkillsModal
+          onClose={() => setModal(null)}
+          onUse={(prompt) => setDraft({ text: prompt, nonce: Date.now() })}
+        />
+      )}
 
       {modal === "sessions" && (
         <SessionsModal

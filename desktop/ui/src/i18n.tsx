@@ -173,6 +173,11 @@ const en = {
     "OnFlip drives ChatGPT's ordinary chat through a real browser — the same conversation you could type at chatgpt.com. No API key, no per-token billing: the agent rides on the ChatGPT plan you already have, so it adds no separate API costs or usage limits. The model does the thinking on ChatGPT's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
   aboutAuthorTitle: "Author",
   aboutLicense: "Open source under the MIT license.",
+  menuSkills: "Skills",
+  skillsTitle: "Skill Hub",
+  skillsHint:
+    "Pick a skill and its prompt lands in the input — edit it there, then send. Skills with a field need it filled first.",
+  skillsUse: "Use",
 };
 
 type StringKey = keyof typeof en;
@@ -324,6 +329,11 @@ const ru: Partial<Record<StringKey, string>> = {
     "OnFlip управляет обычным чатом ChatGPT через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com. Без API-ключа и оплаты за токены: агент работает на вашем существующем плане ChatGPT и не добавляет отдельных API-затрат и лимитов. Модель думает на стороне ChatGPT, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
   aboutAuthorTitle: "Автор",
   aboutLicense: "Открытый код по лицензии MIT.",
+  menuSkills: "Навыки",
+  skillsTitle: "Хаб навыков",
+  skillsHint:
+    "Выберите навык — его запрос появится в поле ввода: отредактируйте и отправьте. Навыкам с полем нужно сначала его заполнить.",
+  skillsUse: "Применить",
 };
 
 const uz: Partial<Record<StringKey, string>> = {
@@ -473,6 +483,11 @@ const uz: Partial<Record<StringKey, string>> = {
     "OnFlip haqiqiy brauzer orqali ChatGPT ning oddiy chatini boshqaradi — bu chatgpt.com da yozadigan o'sha suhbatingiz. API kaliti ham, token uchun to'lov ham yo'q: agent sizdagi mavjud ChatGPT tarifida ishlaydi, alohida API xarajatlari va limitlari qo'shilmaydi. Model ChatGPT tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",
   aboutAuthorTitle: "Muallif",
   aboutLicense: "MIT litsenziyasi ostidagi ochiq kod.",
+  menuSkills: "Ko'nikmalar",
+  skillsTitle: "Ko'nikmalar markazi",
+  skillsHint:
+    "Ko'nikmani tanlang — so'rovi kiritish maydoniga tushadi: tahrirlang va yuboring. Maydonli ko'nikmalarni avval to'ldiring.",
+  skillsUse: "Ishlatish",
 };
 
 const STRINGS: Record<Lang, Partial<Record<StringKey, string>>> = { en, ru, uz };
