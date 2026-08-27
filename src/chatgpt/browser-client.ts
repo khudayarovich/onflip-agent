@@ -966,11 +966,22 @@ async function sendOn(
   await submitMessage(p);
 
   const sentAt = Date.now();
-  const reply = await waitForReply(p, priorTurnCount, {
-    ...opts,
-    sent: payload,
-    userTurnsBefore,
-  });
+  let reply: string;
+  try {
+    reply = await waitForReply(p, priorTurnCount, {
+      ...opts,
+      sent: payload,
+      userTurnsBefore,
+    });
+  } catch (e) {
+    // A page that swallowed a message cannot be trusted with the retry:
+    // measured, three identical resends into the same silent page all
+    // vanished, while a freshly opened chat accepted the same payload.
+    if (e instanceof ChatGPTBrowserError && /never appeared/.test(e.message)) {
+      inConversation = false;
+    }
+    throw e;
+  }
 
   // Group it in the sidebar now that the conversation exists.
   const conversationId = await groupInProject(p);
@@ -1231,6 +1242,14 @@ export async function waitForReply(
   // 600-second budget). Still generating at the true deadline is a budget
   // problem; never generating at all is a page or account problem.
   if (brokeOnSilence) {
+    // Blind guessing about why a page swallowed a message wasted three
+    // rounds of fixes; record what it was actually showing.
+    const pageState = (await p
+      .evaluate(
+        `({ url: location.href, text: ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").slice(0, 700) })`
+      )
+      .catch(() => null)) as { url: string; text: string } | null;
+    logger.warn("browser", "send never appeared — page state", pageState ?? { unreadable: true });
     throw new ChatGPTBrowserError(
       `The sent message never appeared in the conversation after ${secs}s — the send itself seems to have failed. Retrying.`
     );
