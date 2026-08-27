@@ -157,9 +157,34 @@ function turnPointer(fileName: string, reminder: string | undefined): string {
     `The full instructions and conversation for this turn are in the attached file **${fileName}**.`,
     "",
     "Read the whole file before answering. It contains, in order: the system instructions that define how you must behave, the conversation so far, and the request to act on at the end. Treat it exactly as if it had been typed here in full — follow it to the letter, including its response format. Do not summarise it back to me; act on it.",
+    "",
+    // A fixed marker, so a missing upload is machine-readable rather than a
+    // paragraph of apology that has to be pattern-matched.
+    "If no file is attached to this message, or you cannot open it, reply with exactly `[attachment unreadable]` and nothing else.",
   ];
   if (reminder && reminder.trim()) lines.push("", reminder.trim());
   return lines.join("\n");
+}
+
+/**
+ * Is this reply the model saying it never got the attached turn?
+ *
+ * Seen for real: a compacted turn went up as a file, the page had silently
+ * lost its login, and the model — accurately — answered that it had no
+ * access to the attachment and asked for the contents to be pasted. That
+ * answer ended the turn as if it were the work. Kept narrow: the reply must
+ * be short, must reference the attachment (by the exact file name, the
+ * requested marker, or the word itself), and must say it cannot be reached —
+ * a real answer that merely discusses attachments survives all three.
+ */
+export function attachmentRejected(reply: string, fileName: string): boolean {
+  // ChatGPT renders apostrophes as U+2019, so "don't" written with the
+  // typewriter apostrophe matches nothing it actually says.
+  const t = (reply ?? "").trim().replace(/[‘’ʼ]/g, "'");
+  if (!t || t.length > 600) return false;
+  if (/\[attachment unreadable\]/i.test(t)) return true;
+  if (!t.includes(fileName) && !/attach/i.test(t)) return false;
+  return /\b(don'?t|do not|cannot|can'?t|no|unable to)\b[^!?]{0,80}\b(access|open|read|see)\b/i.test(t);
 }
 
 export class BrowserTransport implements Transport {
@@ -168,6 +193,8 @@ export class BrowserTransport implements Transport {
   private sentThrough = 0;
   /** Set after adopting an existing thread, which has not seen the prompt. */
   private needsSystemPrompt = false;
+  /** Set when the model rejected an attachment; the next send types instead. */
+  private typeNextTurn = false;
 
   constructor(private cookies: SessionCookie[]) {}
 
@@ -188,10 +215,14 @@ export class BrowserTransport implements Transport {
     });
     const body = [turn, opts.reminder].filter((s) => s && s.trim()).join("\n\n");
 
-    // A turn too large to type goes up as a document instead.
+    // A turn too large to type goes up as a document instead — unless the
+    // model just refused an attachment, in which case this one turn is typed:
+    // whatever kept the upload from being readable (a page that lost its
+    // login, a model without file access) will keep the retry from being
+    // readable too.
     let attachment: string | undefined;
-    let message = clampPayload(body);
-    if (body.length > UPLOAD_ABOVE_CHARS) {
+    let message: string | undefined;
+    if (body.length > UPLOAD_ABOVE_CHARS && !this.typeNextTurn) {
       try {
         attachment = writeTurnFile(body);
         message = turnPointer(path.basename(attachment), opts.reminder);
@@ -205,9 +236,13 @@ export class BrowserTransport implements Transport {
           error: e instanceof Error ? e.message : String(e),
         });
         attachment = undefined;
-        message = clampPayload(body);
       }
     }
+    this.typeNextTurn = false;
+    // Clamped only on the typed path: the file always carries the whole body,
+    // and clamping it first was logging "payload truncated" for sends where
+    // nothing was truncated.
+    if (message === undefined) message = clampPayload(body);
 
     let content: string;
     try {
@@ -244,6 +279,21 @@ export class BrowserTransport implements Transport {
         text: content.trim().slice(0, 200),
       });
       throw new ChatGPTBrowserError(service);
+    }
+
+    // The model saying it cannot read the attachment means it never received
+    // this turn — that is a failed delivery, not an answer, and marking it
+    // delivered is how a session loses its system prompt. The retry types
+    // the turn into the composer instead.
+    if (attachment && attachmentRejected(content, path.basename(attachment))) {
+      this.typeNextTurn = true;
+      logger.warn("transport", "the model could not read the attached turn", {
+        file: path.basename(attachment),
+        reply: content.trim().slice(0, 200),
+      });
+      throw new ChatGPTBrowserError(
+        "ChatGPT answered that it could not read the attached turn file, so the model never saw this turn. Retrying with the turn typed into the composer instead."
+      );
     }
 
     this.sentThrough = history.length;

@@ -1363,6 +1363,19 @@ async function recoverAnonymousPage(p: Page, cookies: SessionCookie[]): Promise<
   logger.info("browser", stillOut ? "still logged out after re-injecting" : "session restored", {
     url: p.url(),
   });
+  // Sending into a page that stayed anonymous is worse than failing: the
+  // anonymous composer accepts the message, answers as a model that has no
+  // account, no file uploads and no memory of the session — and that answer
+  // then ends the turn as if it were real. Measured: a compacted turn went
+  // to a page exactly like this, the attached transcript could not be read
+  // there, and "please paste the file contents" was reported to the user as
+  // the final answer with the whole plan still open. Failing here costs a
+  // retry, which re-runs this recovery and regularly succeeds.
+  if (stillOut) {
+    throw new ChatGPTBrowserError(
+      "ChatGPT opened in anonymous mode and the session could not be restored to the page, so nothing was sent. This often heals on a retry; if it keeps happening, refresh the session with `onflip login`."
+    );
+  }
 }
 
 export async function sendViaBrowser(

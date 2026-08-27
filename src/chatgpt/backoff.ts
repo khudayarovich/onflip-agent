@@ -58,7 +58,16 @@ export function classifyFailure(message: string): Classification {
   // means is the page was not ready and one retry fixes it. A genuine
   // throttle still cools down through the signals ChatGPT itself sends — an
   // HTTP 429 in an error, or a "you've reached your limit" reply.
-  if (/would not accept it|typed but never sent|never showed it working/i.test(m)) {
+  // "anonymous mode … could not be restored" is in this list for the fatal
+  // patterns' sake rather than the throttle's: its advice ends "refresh the
+  // session with `onflip login`", and the word "login" is what the fatal
+  // test matches on. The failure itself healed on retry both times it was
+  // seen — the recovery reload runs again on each attempt.
+  if (
+    /would not accept it|typed but never sent|never showed it working|anonymous mode and the session could not be restored/i.test(
+      m
+    )
+  ) {
     return { kind: "retry", seconds: 0, reason: m };
   }
 
