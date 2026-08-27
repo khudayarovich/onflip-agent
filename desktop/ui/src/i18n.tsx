@@ -30,6 +30,8 @@ const en = {
   lastTurnFailed: "⚠ last turn failed — open the chat for details",
   newSessionTitle: "(new session)",
   deleteSession: "Delete session",
+  deleteSessionConfirm:
+    "Delete this session? Its transcript and the ChatGPT conversations OnFlip created for it will be removed.",
   settings: "Settings",
   msgs: "msgs",
   missing: "missing",
@@ -212,6 +214,8 @@ const ru: Partial<Record<StringKey, string>> = {
   lastTurnFailed: "⚠ последний ход не удался — откройте чат",
   newSessionTitle: "(новая сессия)",
   deleteSession: "Удалить сессию",
+  deleteSessionConfirm:
+    "Удалить эту сессию? Её история и созданные OnFlip чаты в ChatGPT тоже будут удалены.",
   settings: "Настройки",
   msgs: "сообщ.",
   missing: "не найдена",
@@ -381,6 +385,8 @@ const uz: Partial<Record<StringKey, string>> = {
   lastTurnFailed: "⚠ oxirgi urinish muvaffaqiyatsiz — batafsil chatda",
   newSessionTitle: "(yangi sessiya)",
   deleteSession: "Sessiyani o'chirish",
+  deleteSessionConfirm:
+    "Bu sessiya o'chirilsinmi? Uning tarixi va OnFlip yaratgan ChatGPT chatlari ham o'chiriladi.",
   settings: "Sozlamalar",
   msgs: "xabar",
   missing: "topilmadi",

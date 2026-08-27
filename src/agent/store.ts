@@ -16,6 +16,13 @@ export interface StoredSession {
    * one started on chatgpt.com rather than a thread OnFlip opened itself.
    */
   chatId?: string;
+  /**
+   * Every conversation OnFlip itself opened on chatgpt.com for this session
+   * (compaction and resets each open a fresh one). Recorded so deleting the
+   * session can delete them too. `chatId` is deliberately not included:
+   * a thread the user attached is theirs, not OnFlip's to remove.
+   */
+  chatIds?: string[];
   id: string;
   title: string;
   cwd: string;

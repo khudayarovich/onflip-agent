@@ -33,6 +33,7 @@ import {
   takeProjectWarning,
   currentConversationId,
   pageSessionUser,
+  deleteConversations,
   RemoteProject,
 } from "onflip/dist/chatgpt/browser-client";
 import { recordSend, usageSummary, associateAccount, UNKNOWN_ACCOUNT } from "./usage";
@@ -580,6 +581,14 @@ export class Engine {
         this.pendingRead = null;
       }
 
+      // Remember which ChatGPT conversation this session is writing into, so
+      // deleting the session can delete its conversations too.
+      const conversationId = currentConversationId();
+      if (conversationId && this.session) {
+        const ids = (this.session.chatIds ??= []);
+        if (!ids.includes(conversationId)) ids.push(conversationId);
+      }
+
       this.busy = false;
       this.saveNow();
       this.pushStatus();
@@ -815,7 +824,47 @@ export class Engine {
 
   removeSession(id: string): { ok: boolean } {
     if (this.session?.id === id) throw new Error("That session is currently open.");
-    return { ok: deleteSession(id) };
+    // Read the record before the file goes: it names the conversations this
+    // session opened on chatgpt.com, which should not outlive it. Attached
+    // chats (`chatId`) are the user's own and are left alone.
+    const stored = loadSession(id);
+    const ok = deleteSession(id);
+    const remote = stored?.chatIds ?? [];
+    if (ok && remote.length > 0 && this.transport?.name === "browser") {
+      this.deleteRemoteConversations(remote);
+    }
+    return { ok };
+  }
+
+  /**
+   * Delete this session's conversations on chatgpt.com, waiting out any
+   * running turn first — a send owns the page. Best-effort with a bounded
+   * wait; whatever fails is reported so the user can finish by hand.
+   */
+  private deleteRemoteConversations(ids: string[], attempt = 0): void {
+    if (this.busy) {
+      if (attempt < 30) setTimeout(() => this.deleteRemoteConversations(ids, attempt + 1), 5_000);
+      else this.notice(`Could not delete ${ids.length} linked ChatGPT chat(s) — remove them at chatgpt.com.`);
+      return;
+    }
+    void deleteConversations(this.auth.cookies, ids)
+      .then(({ deleted, failed }) => {
+        if (deleted.length > 0) {
+          this.notice(
+            deleted.length === 1
+              ? "Also deleted the session's ChatGPT conversation."
+              : `Also deleted the session's ${deleted.length} ChatGPT conversations.`
+          );
+        }
+        if (failed.length > 0) {
+          this.notice(
+            `${failed.length} linked ChatGPT conversation(s) could not be deleted — remove them at chatgpt.com.`
+          );
+        }
+      })
+      .catch(() => {
+        this.notice("The session's ChatGPT conversations could not be deleted — remove them at chatgpt.com.");
+      });
   }
 
   recentProjectList(): RecentProjectDTO[] {
@@ -1267,6 +1316,7 @@ export class Engine {
       this.model,
       this.history.length,
       last?.id ?? "",
+      this.session?.chatIds?.length ?? 0,
       this.toolState.snapshots.length,
       JSON.stringify(this.toolState.todos),
     ].join("|");

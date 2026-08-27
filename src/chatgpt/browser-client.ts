@@ -1743,6 +1743,45 @@ export async function debugOpenRoot(cookies: SessionCookie[]): Promise<Page> {
  * why this reports the two separately rather than returning a bare false.
  */
 /**
+ * Delete (hide) conversations on chatgpt.com — the same `is_visible: false`
+ * PATCH the web UI's own delete uses. Per-id, best-effort: one failure must
+ * not strand the rest of the cleanup.
+ */
+export async function deleteConversations(
+  cookies: SessionCookie[],
+  ids: string[]
+): Promise<{ deleted: string[]; failed: string[] }> {
+  const deleted: string[] = [];
+  const failed: string[] = [];
+  let p: Page;
+  try {
+    p = await pageOnChatGpt(cookies);
+  } catch (e) {
+    logger.warn("browser", "could not reach chatgpt to delete conversations", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return { deleted, failed: [...ids] };
+  }
+  for (const id of ids) {
+    try {
+      await backendApi(p, `/backend-api/conversation/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        body: { is_visible: false },
+      });
+      deleted.push(id);
+    } catch (e) {
+      logger.warn("browser", "could not delete conversation", {
+        id,
+        error: e instanceof Error ? e.message : String(e),
+      });
+      failed.push(id);
+    }
+  }
+  logger.info("browser", "deleted conversations", { deleted: deleted.length, failed: failed.length });
+  return { deleted, failed };
+}
+
+/**
  * Who the browser profile is signed in as.
  *
  * Read in page context so it works when Cloudflare refuses the same request

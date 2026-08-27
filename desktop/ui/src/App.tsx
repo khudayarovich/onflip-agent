@@ -695,7 +695,7 @@ export function App(): React.ReactElement {
         failedId={failedSessionId}
         onDeleteSession={(id) =>
           setConfirm({
-            message: "Delete this session? Its transcript will be removed.",
+            message: t("deleteSessionConfirm"),
             danger: true,
             action: () => void api.deleteSession(id).then(refreshLists).catch(() => {}),
           })
