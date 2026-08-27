@@ -46,41 +46,73 @@ export function Transcript({
   const searchInputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState("");
   const [matchCursor, setMatchCursor] = useState(0);
-
-  /** Indices into `items` whose text contains the query. */
-  const matches = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    if (!searchOpen || needle.length < 2) return [];
-    const hits: number[] = [];
-    items.forEach((item, index) => {
-      if (searchableText(item).toLowerCase().includes(needle)) hits.push(index);
-    });
-    return hits;
-  }, [items, query, searchOpen]);
+  const [matchCount, setMatchCount] = useState(0);
+  /** Live text ranges of every occurrence, in document order. */
+  const rangesRef = useRef<Range[]>([]);
 
   useEffect(() => setMatchCursor(0), [query]);
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus();
   }, [searchOpen]);
 
-  // Outline and scroll to the current match. Imperative on purpose: items
-  // render themselves, and a wrapper div would break their flex alignment.
+  // Word-level highlighting via the CSS Custom Highlight API: every
+  // occurrence of the query is painted as a text range — inside markdown,
+  // code blocks, tool output — without touching the DOM that React owns.
   useEffect(() => {
+    const registry = highlightRegistry();
+    registry?.delete("chat-find");
+    registry?.delete("chat-find-current");
+    rangesRef.current = [];
+
+    const needle = query.trim().toLowerCase();
     const inner = scrollRef.current?.querySelector(".transcript-inner");
-    if (!inner) return;
-    inner.querySelectorAll(".search-hit").forEach((el) => el.classList.remove("search-hit"));
-    if (!searchOpen || matches.length === 0) return;
-    const index = matches[Math.min(matchCursor, matches.length - 1)];
-    const el = inner.children[index] as HTMLElement | undefined;
-    if (el) {
-      el.classList.add("search-hit");
-      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (!searchOpen || needle.length < 2 || !inner) {
+      setMatchCount(0);
+      return;
     }
-  }, [searchOpen, matches, matchCursor]);
+
+    const ranges: Range[] = [];
+    const walker = document.createTreeWalker(inner, NodeFilter.SHOW_TEXT);
+    let node: Node | null;
+    while ((node = walker.nextNode())) {
+      const text = (node.textContent ?? "").toLowerCase();
+      let at = text.indexOf(needle);
+      while (at >= 0) {
+        const range = new Range();
+        range.setStart(node, at);
+        range.setEnd(node, at + needle.length);
+        ranges.push(range);
+        at = text.indexOf(needle, at + needle.length);
+      }
+    }
+    rangesRef.current = ranges;
+    setMatchCount(ranges.length);
+    const Ctor = highlightCtor();
+    if (registry && Ctor && ranges.length > 0) {
+      registry.set("chat-find", new Ctor(...ranges));
+    }
+    return () => {
+      registry?.delete("chat-find");
+      registry?.delete("chat-find-current");
+    };
+  }, [searchOpen, query, items, streaming.tail]);
+
+  // The current occurrence gets its own stronger paint, and the view centres
+  // on it.
+  useEffect(() => {
+    const registry = highlightRegistry();
+    registry?.delete("chat-find-current");
+    const ranges = rangesRef.current;
+    if (!searchOpen || ranges.length === 0) return;
+    const range = ranges[Math.min(matchCursor, ranges.length - 1)];
+    const Ctor = highlightCtor();
+    if (registry && Ctor) registry.set("chat-find-current", new Ctor(range));
+    range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
+  }, [searchOpen, matchCursor, matchCount]);
 
   const step = (delta: number) => {
-    if (matches.length === 0) return;
-    setMatchCursor((c) => (c + delta + matches.length) % matches.length);
+    if (matchCount === 0) return;
+    setMatchCursor((c) => (c + delta + matchCount) % matchCount);
   };
 
   const closeSearch = () => {
@@ -144,7 +176,7 @@ export function Transcript({
               }}
             />
             <span className="count">
-              {matches.length === 0 ? "0/0" : `${Math.min(matchCursor, matches.length - 1) + 1}/${matches.length}`}
+              {matchCount === 0 ? "0/0" : `${Math.min(matchCursor, matchCount - 1) + 1}/${matchCount}`}
             </span>
             <button title="Previous (Shift+Enter)" onClick={() => step(-1)}>
               ▲
@@ -202,14 +234,19 @@ export function Transcript({
   );
 }
 
-/** What in-chat search can see of an item. */
-function searchableText(item: ChatItem): string {
-  switch (item.type) {
-    case "tool":
-      return `${item.call.tool} ${item.call.subject} ${item.result?.output ?? ""}`;
-    default:
-      return "text" in item ? item.text : "";
-  }
+// The CSS Custom Highlight API is present in this Chromium but not yet in
+// the project's TS lib types, so it is reached through narrow casts.
+interface HighlightRegistry {
+  set(name: string, highlight: unknown): void;
+  delete(name: string): void;
+}
+
+function highlightRegistry(): HighlightRegistry | null {
+  return (CSS as unknown as { highlights?: HighlightRegistry }).highlights ?? null;
+}
+
+function highlightCtor(): (new (...ranges: Range[]) => unknown) | null {
+  return (window as unknown as { Highlight?: new (...ranges: Range[]) => unknown }).Highlight ?? null;
 }
 
 /**

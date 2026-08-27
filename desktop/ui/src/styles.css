@@ -622,11 +622,14 @@ a:hover {
   color: var(--text);
 }
 
-/* the item the search is currently pointing at */
-.search-hit {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
-  border-radius: 10px;
+/* every occurrence of the searched word, and the one currently selected */
+::highlight(chat-find) {
+  background-color: rgba(232, 150, 60, 0.32);
+  color: inherit;
+}
+::highlight(chat-find-current) {
+  background-color: #e8963c;
+  color: #141414;
 }
 
 .transcript-inner {
