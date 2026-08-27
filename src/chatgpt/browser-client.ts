@@ -396,6 +396,19 @@ async function recentConversationIds(p: Page, limit = 20): Promise<string[]> {
 /** What the account already had when the current chat was opened. */
 let conversationsBeforeChat: Set<string> | null = null;
 
+/** The conversation the current chat resolved to, when it could be identified. */
+let lastConversationId: string | null = null;
+
+/**
+ * Which ChatGPT conversation the transport is in right now, or null when it
+ * has not been identified. Identification reuses `resolveConversationId`'s
+ * outcome rather than re-deriving it — the URL alone is not dependable, and
+ * a wrong id here would hang another conversation's title on this session.
+ */
+export function currentConversationId(): string | null {
+  return lastConversationId;
+}
+
 /**
  * The newest conversation the account has gained since the snapshot.
  *
@@ -942,6 +955,7 @@ async function sendOn(
 
   // Group it in the sidebar now that the conversation exists.
   const conversationId = await groupInProject(p);
+  if (conversationId) lastConversationId = conversationId;
 
   // Timing belongs in the log: "it hung" and "it took four minutes" are the
   // same picture from the terminal, and they need different fixes.
@@ -1201,6 +1215,7 @@ export function resetBrowserChat(): void {
   priorTurnCount = 0;
   filedConversation = null;
   conversationsBeforeChat = null;
+  lastConversationId = null;
   projectWarningShown = false;
 }
 
@@ -1476,6 +1491,7 @@ export async function openConversation(
   }
 
   inConversation = true;
+  lastConversationId = id;
   priorTurnCount = (await assistantTurns(p)).length;
   logger.info("browser", "attached to conversation", {
     id,
@@ -1726,6 +1742,30 @@ export async function debugOpenRoot(cookies: SessionCookie[]): Promise<Page> {
  * a failed request and a signed-out profile look nothing alike — which is
  * why this reports the two separately rather than returning a bare false.
  */
+/**
+ * Who the browser profile is signed in as.
+ *
+ * Read in page context so it works when Cloudflare refuses the same request
+ * from Node. A one-shot read, not the patient `pageAccessToken` path: callers
+ * use this after a turn, when the page has long since settled.
+ */
+export async function pageSessionUser(
+  cookies: SessionCookie[]
+): Promise<{ name?: string; email?: string } | null> {
+  try {
+    const p = await pageOnChatGpt(cookies);
+    const result = (await p.evaluate(
+      `fetch("/api/auth/session", { credentials: "include" })
+        .then((r) => (r.ok ? r.json() : null))
+        .then((j) => (j && j.user ? { name: j.user.name || "", email: j.user.email || "" } : null))
+        .catch(() => null)`
+    )) as { name?: string; email?: string } | null;
+    return result && (result.name || result.email) ? result : null;
+  } catch {
+    return null;
+  }
+}
+
 export async function checkSignedIn(
   cookies: SessionCookie[]
 ): Promise<{ signedIn: boolean; reachable: boolean; detail: string }> {

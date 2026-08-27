@@ -1911,6 +1911,12 @@ export class Repl {
   // =========================================================================
 
   private saveNow(): void {
+    // A session nobody spoke in is not worth a file: saving it unconditionally
+    // left an "(empty session)" entry in /sessions for every launch that was
+    // opened and closed without a prompt. An attached chat counts as content.
+    const hasContent =
+      this.session.chatId || this.history.some((m) => m.role !== "system");
+    if (!hasContent) return;
     this.session.messages = this.history;
     this.session.todos = this.toolState.todos;
     this.session.snapshots = this.toolState.snapshots;

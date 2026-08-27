@@ -9,6 +9,9 @@ export interface OnFlipConfig {
   sessionDeviceId?: string;
   accessToken?: string;
   accessTokenExpiry?: number;
+  /** Who the session belongs to, for display and per-account usage counting. */
+  accountName?: string;
+  accountEmail?: string;
 
   // -- model --------------------------------------------------------------
   model?: string;

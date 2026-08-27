@@ -499,12 +499,27 @@ function detectToolDenial(text: string): string | null {
     /\btools?\b[^.]{0,40}\b(aren'?t|are not|is not|isn'?t|not)( \w+){0,2} (available|exposed|attached|accessible|enabled)\b/i.test(t) ||
     /\bno (onflip )?tools? (are )?(available|exposed)\b/i.test(t) ||
     // "I don't have the ability to edit files here."
-    /\b(do ?n'?t|does ?n'?t) have (the )?(ability|capability|permission|means)\b[^.]{0,60}\b(edit|writ|read|run|execut|modif|chang|creat|access|open|list|search)/i.test(t);
+    /\b(do ?n'?t|does ?n'?t) have (the )?(ability|capability|permission|means)\b[^.]{0,60}\b(edit|writ|read|run|execut|modif|chang|creat|access|open|list|search)/i.test(t) ||
+    // "the OnFlip tool runtime did not execute any machine-side calls in this
+    // turn, so I have not modified the file." Live, and matched by nothing
+    // above: the subject is the *runtime* rather than "I", and the verb is a
+    // past-tense "did not execute" rather than a "cannot" — the model blaming
+    // the harness for a call it never emitted, and ending the turn on it.
+    // Naming OnFlip is damning on its own; a bare "runtime"/"harness" subject
+    // only counts when the thing not executed is calls, blocks or tools —
+    // "the cron harness did not execute the job" is a real answer about the
+    // user's system, not an excuse.
+    /\bonflip\b[^.]{0,50}\b(did ?n[o']?t|does ?n[o']?t|has ?n[o']?t|have ?n[o']?t|failed to|refused to)\b[^.]{0,40}\b(execute|run|process|perform|receive|pick up)\b/i.test(t) ||
+    /\b(runtime|harness)\b[^.]{0,40}\b(did ?n[o']?t|does ?n[o']?t|has ?n[o']?t|have ?n[o']?t|failed to|refused to)\b[^.]{0,40}\b(execute|run|process|perform|receive|pick up)\b[^.]{0,40}\b(calls?|blocks?|tools?)\b/i.test(t) ||
+    // "no machine-side calls were executed", "no tool calls went through".
+    /\b(no|none of the|any)\b[^.]{0,30}\b(machine-side|tool|onflip)\b[^.]{0,20}\bcalls?\b[^.]{0,60}\b(executed|ran|made|performed|went through|reached)\b/i.test(t);
   if (!denies) return null;
   return (
-    "you said you could not run a tool, but the tools are attached to this " +
-    "conversation and callable on every turn of it, this one included — emit " +
-    "an onflip block instead of describing what you cannot do"
+    "you said a tool could not run, or that OnFlip executed nothing — but " +
+    "OnFlip runs every onflip block you emit, and this reply contained none. " +
+    "The tools are attached to this conversation and callable on every turn " +
+    "of it, this one included — emit the onflip block now instead of " +
+    "describing what did not happen"
   );
 }
 

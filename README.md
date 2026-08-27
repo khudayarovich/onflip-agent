@@ -532,6 +532,19 @@ Sessions are JSON under `~/.onflip/sessions/`. Resuming replays the transcript i
 - Reasoning effort on the browser path is a prompt instruction, not a real parameter — it nudges, it does not guarantee.
 - `--print` cannot ask for approval, so it declines anything the policy would prompt for. Pair it with `--full-auto` for unattended runs.
 
+## Desktop app (Windows)
+
+[`desktop/`](desktop/) holds **OnFlip Desktop** — the same engine in a native window, styled after the Codex and Claude desktop apps. Sessions, approvals, rules and sign-in are shared with the CLI through `~/.onflip`, so the two can be used interchangeably.
+
+```bash
+npm install && npm run build    # once, at the repo root — the app imports dist/
+cd desktop
+npm install
+npm start
+```
+
+[`desktop/README.md`](desktop/README.md) explains the three-process architecture and why the engine runs under plain Node rather than inside Electron.
+
 ## Development
 
 ```bash

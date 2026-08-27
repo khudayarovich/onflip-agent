@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- OnFlip app icon: a disc mid-flip — black and white lobes chasing each
+       other clockwise, on the brand orange, as a rounded-square app tile. -->
+  <rect width="1024" height="1024" rx="230" fill="#F25E0D"/>
+  <defs>
+    <clipPath id="disc">
+      <circle cx="512" cy="512" r="345"/>
+    </clipPath>
+  </defs>
+
+  <!-- the disc -->
+  <circle cx="512" cy="512" r="345" fill="#0A0A0A"/>
+
+  <!-- white lobe: a big circle clipped to the disc leaves a black crescent -->
+  <g clip-path="url(#disc)">
+    <circle cx="624" cy="529" r="235" fill="#FFFFFF"/>
+
+    <!-- white swoosh over the top: thin tail at 11 o'clock, thick head
+         flowing into the lobe at 2 o'clock, hugging the rim the whole way -->
+    <path fill="#FFFFFF" d="
+      M 383 192
+      A 345 345 0 0 1 853 464
+      L 757 478
+      A 300 300 0 0 0 456 195
+      Z"/>
+  </g>
+
+  <!-- black arrowhead at the swoosh head, pointing clockwise (right/down) -->
+  <path fill="#0A0A0A" d="M 716 279 L 824 207 L 852 368 Z"/>
+
+  <!-- white arrowhead at the bottom-left, pointing clockwise (left/up) -->
+  <path fill="#FFFFFF" d="M 322 706 L 256 805 L 206 690 Z"/>
+
+  <!-- bubbles: white on the black crescent -->
+  <circle cx="355" cy="376" r="39" fill="#FFFFFF"/>
+  <circle cx="316" cy="464" r="22" fill="#FFFFFF"/>
+  <circle cx="347" cy="552" r="14" fill="#FFFFFF"/>
+
+  <!-- bubbles: black on the white lobe -->
+  <circle cx="696" cy="469" r="25" fill="#0A0A0A"/>
+  <circle cx="704" cy="578" r="40" fill="#0A0A0A"/>
+  <circle cx="673" cy="682" r="16" fill="#0A0A0A"/>
+</svg>

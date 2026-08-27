@@ -1,0 +1,70 @@
+{
+  "name": "onflip-desktop",
+  "version": "0.1.0",
+  "private": true,
+  "description": "OnFlip Desktop — the OnFlip coding agent in a native window",
+  "author": "Farrukh Khudayarovich Yuldashev",
+  "license": "MIT",
+  "main": "dist/electron/main.js",
+  "scripts": {
+    "build:node": "tsc -p tsconfig.json",
+    "build:ui": "vite build",
+    "build": "npm run build:node && npm run build:ui",
+    "start": "npm run build && electron .",
+    "app": "electron .",
+    "icon": "node scripts/make-icon.js",
+    "installer": "node scripts/release.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p ui/tsconfig.json --noEmit"
+  },
+  "build": {
+    "appId": "com.onflip.desktop",
+    "productName": "OnFlip",
+    "asar": false,
+    "npmRebuild": false,
+    "directories": {
+      "output": "release",
+      "buildResources": "buildResources"
+    },
+    "files": [
+      "dist/**/*",
+      "ui-dist/**/*",
+      "buildResources/icon.ico",
+      "!node_modules/.bin/**",
+      "!node_modules/**/{test,tests,__tests__,docs,doc,example,examples}/**",
+      "!**/*.map"
+    ],
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "buildResources/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "OnFlip-Setup-${version}.${ext}",
+      "shortcutName": "OnFlip"
+    }
+  },
+  "dependencies": {
+    "diff": "^7.0.0",
+    "onflip": "file:.."
+  },
+  "devDependencies": {
+    "@types/diff": "^6.0.0",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.0",
+    "electron-builder": "^26.15.3",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "typescript": "^5.7.2",
+    "vite": "^6.0.3"
+  }
+}

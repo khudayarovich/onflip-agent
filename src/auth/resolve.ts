@@ -82,6 +82,9 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
       sessionDeviceId: deviceId,
       accessToken: session.accessToken,
       accessTokenExpiry: Number.isFinite(expiry) ? expiry : undefined,
+      // The same response says whose session this is; keep it for display.
+      ...(session.user?.name ? { accountName: session.user.name } : {}),
+      ...(session.user?.email ? { accountEmail: session.user.email } : {}),
     });
   } catch {
     // Access token fetch failed — browser client will handle it
