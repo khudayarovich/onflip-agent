@@ -53,6 +53,18 @@ const CHARS_PER_TOKEN = 4;
  * OnFlip did before it could read the plan at all.
  */
 export const COMPOSER_CEILING_CHARS = 28_000;
+
+/**
+ * The ceiling once a turn too large to type is uploaded instead.
+ *
+ * Typing was the binding constraint, so the plan never got to be. With the
+ * transport handing a big turn over as a file — one request whatever its size
+ * — the account's own window is what limits things again, which is the point
+ * of paying for a larger one. Still short of the full window: the reply, the
+ * turn's tool output and the model's own reasoning all have to fit beside the
+ * transcript.
+ */
+export const UPLOAD_CEILING_CHARS = 160_000;
 /** Leave room in the window for the turn itself, not just its history. */
 const USABLE_FRACTION = 0.55;
 
@@ -69,11 +81,12 @@ export function planProfile(planId: string | undefined): PlanProfile | null {
   );
 }
 
-export function compactionBudget(planId: string | undefined): number {
+export function compactionBudget(planId: string | undefined, canUpload = false): number {
+  const ceiling = canUpload ? UPLOAD_CEILING_CHARS : COMPOSER_CEILING_CHARS;
   const profile = planProfile(planId);
-  if (!profile) return COMPOSER_CEILING_CHARS;
+  if (!profile) return Math.min(COMPOSER_CEILING_CHARS, ceiling);
   const fromPlan = Math.floor(profile.contextTokens * CHARS_PER_TOKEN * USABLE_FRACTION);
-  return Math.max(12_000, Math.min(fromPlan, COMPOSER_CEILING_CHARS));
+  return Math.max(12_000, Math.min(fromPlan, ceiling));
 }
 
 /** For the About page and the status line. */

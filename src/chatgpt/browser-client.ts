@@ -1091,6 +1091,14 @@ export interface BrowserSendOptions {
    */
   sent?: string;
   /**
+   * Files to attach to this one message.
+   *
+   * The transport uses this to hand over a large turn as a document instead
+   * of typing it: an upload is a single request, where the same text typed
+   * into the composer costs tens of seconds and sometimes fails outright.
+   */
+  attachments?: string[];
+  /**
    * User-turn count taken *before* the message was typed. Measured after,
    * the just-sent message is already in the count, "did our turn land?"
    * can never come true, and the silence guard stays armed against a send
@@ -1368,7 +1376,7 @@ async function sendOn(
   // Attachments ride with this one message and no other. The transport resends
   // them on no retry, so consume the queue up front: a re-typed payload after a
   // composer stumble must not upload the files a second time.
-  const attachments = pendingAttachments;
+  const attachments = opts?.attachments?.length ? opts.attachments : pendingAttachments;
   pendingAttachments = [];
   if (attachments.length > 0) {
     await attachFiles(p, attachments);

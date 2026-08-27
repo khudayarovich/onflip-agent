@@ -24,6 +24,7 @@ import { fetchAccessToken } from "onflip/dist/auth/access";
 import { chooseTransport, Transport } from "onflip/dist/chatgpt/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import { compactionBudget, describePlan } from "onflip/dist/chatgpt/plans";
+import { uploadsAvailable } from "onflip/dist/chatgpt/transport";
 import {
   configureBrowser,
   closeBrowser,
@@ -883,8 +884,10 @@ export class Engine {
       // summary run often enough to be its own tax.
       // Set by the user, or derived from the plan: a bigger window is worth
       // more transcript, and the composer's own ceiling caps both.
+      // Uploads lift the typing ceiling, so the plan gets to be the limit.
       compactAfterChars:
-        this.config.compactAfterChars ?? compactionBudget(loadConfig().planType),
+        this.config.compactAfterChars ??
+        compactionBudget(loadConfig().planType, uploadsAvailable()),
       events: {
         onThinking: (iteration) => this.peer.emit("thinking", { iteration }),
         onDelta: (full) => {

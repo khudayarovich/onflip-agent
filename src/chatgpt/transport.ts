@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { ChatMessage } from "../types";
 import { SessionCookie } from "../auth/access";
 import { sendTurn } from "./client";
@@ -106,6 +109,59 @@ function clampPayload(text: string): string {
   ].join("");
 }
 
+/**
+ * Above this, the turn is handed over as a file rather than typed.
+ *
+ * Typing is this transport's real bottleneck, and not a gentle curve.
+ * Measured on live sends: 27k characters took 8.6s, 34k took 29.9s, and 33k
+ * took 67.7s — the same size costing eight seconds once and sixty-eight the
+ * next. An upload is one request whatever the size, so past the point where
+ * typing stops being predictable the turn goes up as a document and the
+ * composer carries a short note pointing at it.
+ *
+ * Below the threshold nothing changes: a typed message is the more faithful
+ * path, and at a few thousand characters it is the faster one too.
+ */
+const UPLOAD_ABOVE_CHARS = Number(process.env.ONFLIP_UPLOAD_ABOVE ?? 20_000);
+
+/**
+ * Whether a turn too large to type has somewhere else to go.
+ *
+ * The compaction budget turns on this: with uploads the account's window is
+ * the limit, without them the composer is. ONFLIP_UPLOAD_ABOVE=0 turns the
+ * path off and goes back to typing everything.
+ */
+export function uploadsAvailable(): boolean {
+  return Number.isFinite(UPLOAD_ABOVE_CHARS) && UPLOAD_ABOVE_CHARS > 0;
+}
+
+/** Where a handed-over turn is written, and cleaned up from. */
+function writeTurnFile(body: string): string {
+  const dir = path.join(os.tmpdir(), "onflip-context");
+  fs.mkdirSync(dir, { recursive: true });
+  const stamp = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  const file = path.join(dir, `onflip-turn-${stamp}.md`);
+  fs.writeFileSync(file, body, "utf8");
+  return file;
+}
+
+/**
+ * What the composer says when the turn itself is attached.
+ *
+ * The protocol reminder is repeated here rather than left only inside the
+ * file. It is the one instruction that cannot afford to be skimmed past, and
+ * keeping it in the message body costs a few hundred characters.
+ */
+function turnPointer(fileName: string, reminder: string | undefined): string {
+  const lines = [
+    `The full instructions and conversation for this turn are in the attached file **${fileName}**.`,
+    "",
+    "Read the whole file before answering. It contains, in order: the system instructions that define how you must behave, the conversation so far, and the request to act on at the end. Treat it exactly as if it had been typed here in full — follow it to the letter, including its response format. Do not summarise it back to me; act on it.",
+  ];
+  if (reminder && reminder.trim()) lines.push("", reminder.trim());
+  return lines.join("\n");
+}
+
 export class BrowserTransport implements Transport {
   readonly name = "browser" as const;
   /** Index into history that the live ChatGPT thread already contains. */
@@ -132,13 +188,46 @@ export class BrowserTransport implements Transport {
     });
     const body = [turn, opts.reminder].filter((s) => s && s.trim()).join("\n\n");
 
-    const content = await sendViaBrowser(clampPayload(body), this.cookies, {
-      model: opts.model,
-      thinking: opts.thinking,
-      onDelta: opts.onDelta,
-      signal: opts.signal,
-      timeoutMs: replyTimeoutMs(),
-    });
+    // A turn too large to type goes up as a document instead.
+    let attachment: string | undefined;
+    let message = clampPayload(body);
+    if (body.length > UPLOAD_ABOVE_CHARS) {
+      try {
+        attachment = writeTurnFile(body);
+        message = turnPointer(path.basename(attachment), opts.reminder);
+        logger.info("transport", "handing the turn over as a file", {
+          chars: body.length,
+          file: path.basename(attachment),
+        });
+      } catch (e) {
+        // Falling back to typing is slow, not broken.
+        logger.warn("transport", "could not write the turn file; typing it instead", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+        attachment = undefined;
+        message = clampPayload(body);
+      }
+    }
+
+    let content: string;
+    try {
+      content = await sendViaBrowser(message, this.cookies, {
+        model: opts.model,
+        thinking: opts.thinking,
+        onDelta: opts.onDelta,
+        signal: opts.signal,
+        timeoutMs: replyTimeoutMs(),
+        ...(attachment ? { attachments: [attachment] } : {}),
+      });
+    } finally {
+      if (attachment) {
+        try {
+          fs.rmSync(attachment, { force: true });
+        } catch {
+          /* a temp file left behind is not worth failing a turn over */
+        }
+      }
+    }
 
     // ChatGPT's own error page arrives through the reply channel and looks
     // like a successful send. It is not one: the model never saw the payload,
