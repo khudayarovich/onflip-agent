@@ -10,6 +10,13 @@ export interface OnFlipConfig {
   accessToken?: string;
   accessTokenExpiry?: number;
   /** Who the session belongs to, for display and per-account usage counting. */
+  /**
+   * The user signed out in the app. Their browser cookies are left exactly
+   * where they are — signing out of OnFlip is not signing out of Chrome —
+   * but they are no longer imported automatically, or the next start would
+   * silently sign the user back in and logout would mean nothing.
+   */
+  signedOut?: boolean;
   accountName?: string;
   accountEmail?: string;
 

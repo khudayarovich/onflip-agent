@@ -40,6 +40,20 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
   let deviceId: string | undefined;
 
   const manualToken = envToken();
+  if (config.signedOut && !manualToken) {
+    // Signed out in the app: do not read the browser, and do not fall back
+    // to a stored token. An explicit ONFLIP_SESSION_TOKEN still wins, since
+    // that is the user asking for a session by hand.
+    logger.info("auth", "signed out in the app; not importing a session");
+    return {
+      accessToken: "",
+      model,
+      thinking,
+      maxIterations,
+      cookies: [],
+      sessionToken: "",
+    };
+  }
   if (manualToken) {
     cookies = [{ name: "__Secure-next-auth.session-token", value: manualToken }];
   } else {

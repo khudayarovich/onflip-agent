@@ -28,6 +28,7 @@ export function Sidebar({
   onOpenSkills,
   onSignIn,
   onSignOut,
+  onSignInCookie,
 }: {
   status: EngineStatus | null;
   connect: ConnectState;
@@ -52,6 +53,7 @@ export function Sidebar({
   onOpenSkills: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
+  onSignInCookie: () => void;
 }): React.ReactElement {
   const t = useT();
   const projectMenu = useMenu();
@@ -195,6 +197,7 @@ export function Sidebar({
         onOpenSkills={onOpenSkills}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
+        onSignInCookie={onSignInCookie}
       />
 
 
@@ -357,6 +360,7 @@ function AccountBar({
   onOpenSkills,
   onSignIn,
   onSignOut,
+  onSignInCookie,
 }: {
   status: EngineStatus | null;
   connect: ConnectState;
@@ -367,6 +371,7 @@ function AccountBar({
   onOpenSkills: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
+  onSignInCookie: () => void;
 }): React.ReactElement {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -421,6 +426,8 @@ function AccountBar({
             </div>
 
             <div className="pop-divider" />
+            {!status?.signedIn && (
+              <>
             <button
               className="pop-item"
               onClick={() => {
@@ -437,6 +444,22 @@ function AccountBar({
               </span>{" "}
               {t("menuSignIn")}
             </button>
+            <button
+              className="pop-item"
+              onClick={() => {
+                setOpen(false);
+                onSignInCookie();
+              }}
+            >
+              <span className="pop-icon">
+                <svg {...popIconProps}>
+                  <path d="M21 2l-2 2m-7.5 7.5a4.5 4.5 0 1 1-6.36 6.36 4.5 4.5 0 0 1 6.36-6.36zm0 0L15 8m0 0l3 3 3-3-3-3" />
+                </svg>
+              </span>{" "}
+              {t("menuSignInCookie")}
+            </button>
+              </>
+            )}
             <button
               className="pop-item"
               onClick={() => {
@@ -473,6 +496,8 @@ function AccountBar({
               </span>{" "}
               {t("setAbout")}
             </button>
+            {status?.signedIn && (
+              <>
             <div className="pop-divider" />
             <button
               className="pop-item danger"
@@ -490,6 +515,8 @@ function AccountBar({
               </span>{" "}
               {t("menuSignOut")}
             </button>
+              </>
+            )}
           </div>
         </>
       )}

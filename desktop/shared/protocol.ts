@@ -141,6 +141,11 @@ export interface EngineStatus {
   queued: string[];
   snapshotCount: number;
   todoCount: number;
+  /**
+   * Whether OnFlip currently holds a usable ChatGPT session — the account
+   * menu offers signing in or signing out on the strength of this.
+   */
+  signedIn: boolean;
   /** Who the ChatGPT session belongs to, when it could be identified. */
   account: { name?: string; email?: string } | null;
   /** Requests sent through OnFlip, counted locally per account. */

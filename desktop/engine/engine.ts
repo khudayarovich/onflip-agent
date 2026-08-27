@@ -116,6 +116,8 @@ export class Engine {
   private auth!: ResolvedAuth;
   private transport!: Transport;
   private transportReason = "";
+  /** Last answer from the sign-in probe, when one has run. */
+  private probeSignedIn: boolean | null = null;
   /** Who the ChatGPT session belongs to, once identified. */
   private account: { name?: string; email?: string } | null = null;
   /** User message awaiting proof of delivery — cleared by the first send. */
@@ -262,6 +264,8 @@ export class Engine {
     }
     try {
       const state = await checkSignedIn(this.auth.cookies);
+      this.probeSignedIn = state.signedIn;
+      this.pushStatus();
       if (state.signedIn) {
         this.emitConnect("ready");
         return;
@@ -384,9 +388,24 @@ export class Engine {
       queued: [...this.queue],
       snapshotCount: this.toolState.snapshots.length,
       todoCount: this.toolState.todos.length,
+      signedIn: this.hasSession(),
       account: this.account,
       usage: usageSummary(this.accountKey()),
     };
+  }
+
+  /**
+   * Does OnFlip hold a session it can actually send with?
+   *
+   * Credentials in hand — injected cookies or a stored token — or a probe
+   * that found the automation profile already logged in. All three go away
+   * on sign-out, so the menu flips back to offering a sign-in.
+   */
+  private hasSession(): boolean {
+    if (loadConfig().signedOut) return false;
+    if (this.auth?.cookies.length) return true;
+    if (loadConfig().sessionToken) return true;
+    return this.probeSignedIn === true;
   }
 
   private accountKey(): string {
@@ -872,6 +891,8 @@ export class Engine {
       sessionToken: primary.value,
       sessionCookieName: primary.name,
       sessionDeviceId: cookies.find((c) => c.name === "oai-did")?.value,
+      // Signing in lifts the suppression a previous sign-out put in place.
+      signedOut: false,
     });
 
     if (this.auth) {
@@ -882,6 +903,7 @@ export class Engine {
     this.transport?.reset();
     await closeBrowser().catch(() => {});
 
+    this.probeSignedIn = true;
     this.emitConnect("ready");
     this.notice("Signed in to ChatGPT — the session is saved and ready to use.");
     this.pushStatus();
@@ -897,6 +919,12 @@ export class Engine {
    * partition.
    */
   async applySignOut(): Promise<{ ok: boolean }> {
+    // Only OnFlip's own copies of the session go: the stored token, and the
+    // automation profile under ~/.onflip. The user's Chrome, Edge and
+    // Firefox profiles are never read or written here — signing out of the
+    // app is not signing out of their browser. The flag is what stops the
+    // next start from silently importing those cookies again.
+    saveConfig({ signedOut: true });
     clearConfigKeys([
       "sessionToken",
       "sessionCookieName",
@@ -912,6 +940,7 @@ export class Engine {
       this.auth.accessToken = "";
     }
     this.account = null;
+    this.probeSignedIn = false;
     this.transport?.reset();
     await clearBrowserProfile().catch(() => {});
 

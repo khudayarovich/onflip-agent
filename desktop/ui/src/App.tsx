@@ -38,6 +38,7 @@ type ModalName =
   | "diff"
   | "about"
   | "skills"
+  | "cookie"
   | null;
 
 interface ConfirmState {
@@ -724,6 +725,7 @@ export function App(): React.ReactElement {
             },
           })
         }
+        onSignInCookie={() => setModal("cookie")}
         onSignIn={() => {
           void window.onflip
             .signIn()
@@ -910,6 +912,22 @@ export function App(): React.ReactElement {
       {modal === "diff" && <DiffModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutModal status={status} onClose={() => setModal(null)} />}
 
+      {modal === "cookie" && (
+        <CookieSignInModal
+          onClose={() => setModal(null)}
+          onSubmit={(token) => {
+            setModal(null);
+            void api
+              .signInWithToken(token)
+              .then(() => {
+                refreshStatus();
+                refreshLists();
+              })
+              .catch((e: Error) => notifyError(e.message));
+          }}
+        />
+      )}
+
       {modal === "skills" && (
         <SkillsModal
           onClose={() => setModal(null)}
@@ -1011,5 +1029,60 @@ function TodoPanel({ items }: { items: TodoItemDTO[] }): React.ReactElement | nu
         )}
       </div>
     </div>
+  );
+}
+
+/**
+ * Signing in by pasting a session cookie.
+ *
+ * The escape hatch for a machine where the sign-in window will not do — the
+ * same token `onflip login` stores, typed in by hand. It is masked while
+ * typing, never logged, and goes straight to the engine, which writes it to
+ * ~/.onflip like any other sign-in.
+ */
+function CookieSignInModal({
+  onClose,
+  onSubmit,
+}: {
+  onClose: () => void;
+  onSubmit: (token: string) => void;
+}): React.ReactElement {
+  const t = useT();
+  const [token, setToken] = useState("");
+  const ready = token.trim().length >= 20;
+  return (
+    <Modal
+      title={t("cookieTitle")}
+      onClose={onClose}
+      footer={
+        <>
+          <button className="btn" onClick={onClose}>
+            {t("cancel")}
+          </button>
+          <button
+            className="btn primary"
+            disabled={!ready}
+            onClick={() => onSubmit(token.trim())}
+          >
+            {t("cookieAction")}
+          </button>
+        </>
+      }
+    >
+      <div className="modal-note">{t("cookieHelp")}</div>
+      <input
+        className="skill-input"
+        style={{ width: "100%", marginTop: 12 }}
+        type="password"
+        autoFocus
+        spellCheck={false}
+        placeholder={t("cookiePlaceholder")}
+        value={token}
+        onChange={(e) => setToken(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && ready) onSubmit(token.trim());
+        }}
+      />
+    </Modal>
   );
 }

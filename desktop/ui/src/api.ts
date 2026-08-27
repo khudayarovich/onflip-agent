@@ -29,6 +29,11 @@ export const api = {
   resumeSession: (id: string) => call<EngineStatus>("resumeSession", { id }),
   deleteSession: (id: string) => call<{ ok: boolean }>("deleteSession", { id }),
   rollback: (messageId: string) => call<{ text: string }>("rollback", { messageId }),
+  /** Sign in with a session cookie the user pasted; same path as the window. */
+  signInWithToken: (token: string) =>
+    call<{ ok: boolean }>("applySignIn", {
+      cookies: [{ name: "__Secure-next-auth.session-token", value: token }],
+    }),
 
 
   recentProjects: () => call<RecentProjectDTO[]>("recentProjects"),

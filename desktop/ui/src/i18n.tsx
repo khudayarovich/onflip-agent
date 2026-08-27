@@ -202,6 +202,12 @@ const en = {
   menuSkills: "Skills",
   menuSignIn: "Sign in to ChatGPT",
   menuSignOut: "Sign out",
+  menuSignInCookie: "Sign in with a session cookie",
+  cookieTitle: "Sign in with a session cookie",
+  cookieHelp:
+    "For when the sign-in window will not do — paste the value of the __Secure-next-auth.session-token cookie from a browser where you are already signed in to chatgpt.com. It is stored only on this machine, in ~/.onflip.",
+  cookiePlaceholder: "paste the session token value",
+  cookieAction: "Sign in",
   signOutConfirm:
     "Sign out of ChatGPT? The stored session and OnFlip's browser profile are cleared, and you will need to sign in again to send anything.",
   skillsTitle: "Skill Hub",
@@ -387,6 +393,12 @@ const ru: Partial<Record<StringKey, string>> = {
   menuSkills: "Навыки",
   menuSignIn: "Войти в ChatGPT",
   menuSignOut: "Выйти",
+  menuSignInCookie: "Войти по cookie сессии",
+  cookieTitle: "Вход по cookie сессии",
+  cookieHelp:
+    "На случай, если окно входа не подходит — вставьте значение cookie __Secure-next-auth.session-token из браузера, где вы уже вошли на chatgpt.com. Оно хранится только на этом компьютере, в ~/.onflip.",
+  cookiePlaceholder: "вставьте значение токена сессии",
+  cookieAction: "Войти",
   signOutConfirm:
     "Выйти из ChatGPT? Сохранённая сессия и профиль браузера OnFlip будут удалены — чтобы отправлять сообщения, нужно будет войти снова.",
   skillsTitle: "Хаб навыков",
@@ -570,6 +582,12 @@ const uz: Partial<Record<StringKey, string>> = {
   menuSkills: "Ko'nikmalar",
   menuSignIn: "ChatGPT ga kirish",
   menuSignOut: "Chiqish",
+  menuSignInCookie: "Sessiya cookie orqali kirish",
+  cookieTitle: "Sessiya cookie orqali kirish",
+  cookieHelp:
+    "Kirish oynasi mos kelmasa — chatgpt.com ga kirgan brauzeringizdan __Secure-next-auth.session-token cookie qiymatini joylang. U faqat shu kompyuterda, ~/.onflip ichida saqlanadi.",
+  cookiePlaceholder: "sessiya token qiymatini joylang",
+  cookieAction: "Kirish",
   signOutConfirm:
     "ChatGPT dan chiqilsinmi? Saqlangan sessiya va OnFlip brauzer profili tozalanadi — xabar yuborish uchun qaytadan kirishingiz kerak bo'ladi.",
   skillsTitle: "Ko'nikmalar markazi",
