@@ -52,12 +52,33 @@ export function Sidebar({
   const t = useT();
   const projectMenu = useMenu();
   const projectName = status ? baseName(status.cwd) : "…";
+  const home = status?.home ?? "";
+
+  // Codex-style grouping: the open folder's sessions first, then other
+  // project folders as named groups, and home-directory sessions as plain
+  // ungrouped "chats" — a chat without a project is just a chat.
   const currentSessions = sessions.filter(
     (s) => !status || samePath(s.cwd, status.cwd)
   );
   const otherSessions = sessions.filter(
     (s) => status && !samePath(s.cwd, status.cwd)
   );
+  const looseChats = otherSessions.filter((s) => home && samePath(s.cwd, home));
+  const projectGroups = (() => {
+    const groups = new Map<string, { dir: string; sessions: SessionSummaryDTO[] }>();
+    for (const s of otherSessions) {
+      if (home && samePath(s.cwd, home)) continue;
+      const key = s.cwd.replace(/[\\/]+$/, "").toLowerCase();
+      const group = groups.get(key) ?? { dir: s.cwd, sessions: [] };
+      group.sessions.push(s);
+      groups.set(key, group);
+    }
+    // The store lists sessions newest-first, so a group's first entry is its
+    // most recent — order groups by that.
+    return [...groups.values()]
+      .sort((a, b) => (b.sessions[0]?.updatedAt ?? 0) - (a.sessions[0]?.updatedAt ?? 0))
+      .slice(0, 8);
+  })();
 
   const connLabel =
     connect === "ready"
@@ -81,7 +102,9 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="section-label">{t("sessions")}</div>
+      <div className="section-label">
+        {status && home && samePath(status.cwd, home) ? t("chatsSection") : t("sessions")}
+      </div>
       <div className="sessions">
         {currentSessions.map((s) => (
           <SessionRow
@@ -101,17 +124,52 @@ export function Sidebar({
             {t("noSessions")}
           </div>
         )}
-        {otherSessions.length > 0 && (
+
+        {projectGroups.length > 0 && (
           <>
             <div className="section-label" style={{ padding: "14px 8px 6px" }}>
-              {t("otherProjects")}
+              {t("projectsSection")}
             </div>
-            {otherSessions.slice(0, 20).map((s) => (
+            {projectGroups.map((group) => (
+              <div key={group.dir} className="project-group">
+                <button
+                  className="project-group-head"
+                  title={group.dir}
+                  onClick={() => {
+                    if (!switching) onOpenProject(group.dir);
+                  }}
+                >
+                  <span className="folder">🗀</span>
+                  <span className="group-name">{baseName(group.dir)}</span>
+                  <span className="group-count">{group.sessions.length}</span>
+                </button>
+                {group.sessions.slice(0, 5).map((s) => (
+                  <SessionRow
+                    key={s.id}
+                    session={s}
+                    active={false}
+                    resuming={s.id === resumingId}
+                    switching={switching}
+                    failed={s.id === failedId}
+                    onResume={onResumeSession}
+                    onDelete={onDeleteSession}
+                  />
+                ))}
+              </div>
+            ))}
+          </>
+        )}
+
+        {looseChats.length > 0 && (
+          <>
+            <div className="section-label" style={{ padding: "14px 8px 6px" }}>
+              {t("chatsSection")}
+            </div>
+            {looseChats.slice(0, 12).map((s) => (
               <SessionRow
                 key={s.id}
                 session={s}
                 active={false}
-                showProject
                 resuming={s.id === resumingId}
                 switching={switching}
                 failed={s.id === failedId}

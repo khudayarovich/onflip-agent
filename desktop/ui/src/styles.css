@@ -390,6 +390,50 @@ a:hover {
   background: var(--red-bg);
   color: var(--red);
 }
+/* project groups in the session list */
+.project-group {
+  margin-bottom: 4px;
+}
+.project-group-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 10px;
+  border-radius: 8px;
+  text-align: left;
+}
+.project-group-head:hover {
+  background: var(--bg-hover);
+}
+.project-group-head .folder {
+  font-size: 12px;
+  color: var(--accent);
+}
+.project-group-head .group-name {
+  flex: 1;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.project-group-head:hover .group-name {
+  color: var(--text);
+}
+.project-group-head .group-count {
+  font-size: 10.5px;
+  color: var(--text-muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 1px 7px;
+}
+.project-group .session-row-wrap {
+  margin-left: 10px;
+}
+
 .session-row-wrap .row-spinner {
   position: absolute;
   right: 12px;
