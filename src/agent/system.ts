@@ -10,6 +10,54 @@ export interface SystemPromptOptions {
 }
 
 /**
+ * Render a tool's argument schema as one readable line per argument.
+ *
+ * This used to be `JSON.stringify` of the raw JSON Schema, and the schemas
+ * were more than half the tool docs by weight: the `{"type":"object",
+ * "properties":...}` scaffolding says nothing the model needs, repeated
+ * twenty-three times. The system prompt is resent whole every time a fresh
+ * conversation opens, and its size is what decides whether that send can be
+ * typed or has to go up as a file — so the scaffolding was paying rent on
+ * every thread. The bullet form keeps everything the model acts on: names,
+ * types, enum values, what is required, and each argument's description.
+ */
+function describeArguments(parameters: Record<string, unknown>): string {
+  const props = (parameters?.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const names = Object.keys(props);
+  if (names.length === 0) return "Arguments: none.";
+
+  const required = new Set((parameters?.required as string[]) ?? []);
+  const lines = names.map((name) => {
+    const schema = props[name];
+    const kind = [schemaType(schema), required.has(name) ? "required" : ""]
+      .filter(Boolean)
+      .join(", ");
+    const head = `- ${name} (${kind})`;
+    const description = typeof schema.description === "string" ? schema.description : "";
+    return description ? `${head}: ${description}` : head;
+  });
+  return `Arguments:\n${lines.join("\n")}`;
+}
+
+/** A compact type for one schema node: enums by value, arrays and objects by shape. */
+function schemaType(schema: Record<string, unknown> | undefined): string {
+  if (!schema || typeof schema !== "object") return "value";
+  if (Array.isArray(schema.enum)) return schema.enum.map(String).join(" | ");
+  if (schema.type === "array") {
+    return `array of ${schemaType(schema.items as Record<string, unknown>)}`;
+  }
+  if (schema.type === "object" && schema.properties) {
+    const props = schema.properties as Record<string, Record<string, unknown>>;
+    const required = new Set((schema.required as string[]) ?? []);
+    const inner = Object.keys(props)
+      .map((k) => `${k}${required.has(k) ? "" : "?"}: ${schemaType(props[k])}`)
+      .join(", ");
+    return `{${inner}}`;
+  }
+  return String(schema.type ?? "value");
+}
+
+/**
  * The system prompt is doing unusually heavy lifting here.
  *
  * The model is a ChatGPT web session with its own sandbox, browsing and code
@@ -22,10 +70,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const { tools, context, approvalMode, shellEnabled } = opts;
 
   const toolDocs = tools
-    .map((t) => {
-      const params = JSON.stringify(t.parameters);
-      return `### ${t.name}\n${t.description}\nJSON schema for arguments: ${params}`;
-    })
+    .map((t) => `### ${t.name}\n${t.description}\n${describeArguments(t.parameters)}`)
     .join("\n\n");
 
   const sections: string[] = [];
