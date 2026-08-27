@@ -235,6 +235,48 @@ function shortTransport(transport?: string): string {
   return transport.startsWith("browser") ? "browser" : transport.split(" ")[0];
 }
 
+// -- account-panel icons (14px strokes, matching the chips and strip) --------
+
+const popIconProps = {
+  width: 14,
+  height: 14,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.8,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+};
+
+function SkillsIcon(): React.ReactElement {
+  return (
+    <svg {...popIconProps}>
+      <path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z" />
+      <path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z" />
+    </svg>
+  );
+}
+
+function SettingsIcon(): React.ReactElement {
+  return (
+    <svg {...popIconProps}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.7 1.7 0 0 0 .34 1.87l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.7 1.7 0 0 0-1.87-.34 1.7 1.7 0 0 0-1.03 1.56V21a2 2 0 1 1-4 0v-.09a1.7 1.7 0 0 0-1.11-1.56 1.7 1.7 0 0 0-1.87.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.7 1.7 0 0 0 .34-1.87 1.7 1.7 0 0 0-1.56-1.03H3a2 2 0 1 1 0-4h.09a1.7 1.7 0 0 0 1.56-1.11 1.7 1.7 0 0 0-.34-1.87l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.7 1.7 0 0 0 1.87.34h.01A1.7 1.7 0 0 0 10 4.09V4a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1.03 1.56 1.7 1.7 0 0 0 1.87-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.7 1.7 0 0 0-.34 1.87v.01c.26.63.87 1.04 1.56 1.03H21a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.51.95z" />
+    </svg>
+  );
+}
+
+function AboutIcon(): React.ReactElement {
+  return (
+    <svg {...popIconProps}>
+      <circle cx="12" cy="12" r="9" />
+      <line x1="12" y1="11" x2="12" y2="16" />
+      <line x1="12" y1="8" x2="12.01" y2="8" />
+    </svg>
+  );
+}
+
 /**
  * The sidebar footer: who is signed in, and how the session is doing.
  *
@@ -318,7 +360,10 @@ function AccountBar({
                 onOpenSkills();
               }}
             >
-              <span className="pop-icon">✦</span> {t("menuSkills")}
+              <span className="pop-icon">
+                <SkillsIcon />
+              </span>{" "}
+              {t("menuSkills")}
             </button>
             <button
               className="pop-item"
@@ -327,7 +372,10 @@ function AccountBar({
                 onOpenSettings();
               }}
             >
-              <span className="pop-icon">⚙</span> {t("settings")}
+              <span className="pop-icon">
+                <SettingsIcon />
+              </span>{" "}
+              {t("settings")}
             </button>
             <button
               className="pop-item"
@@ -336,7 +384,10 @@ function AccountBar({
                 onOpenAbout();
               }}
             >
-              <span className="pop-icon">ⓘ</span> {t("setAbout")}
+              <span className="pop-icon">
+                <AboutIcon />
+              </span>{" "}
+              {t("setAbout")}
             </button>
           </div>
         </>
