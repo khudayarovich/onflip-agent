@@ -195,6 +195,8 @@ export class BrowserTransport implements Transport {
   private needsSystemPrompt = false;
   /** Set when the model rejected an attachment; the next send types instead. */
   private typeNextTurn = false;
+  /** Set when the composer refused typed text; the next send uploads instead. */
+  private uploadNextTurn = false;
 
   constructor(private cookies: SessionCookie[]) {}
 
@@ -222,7 +224,13 @@ export class BrowserTransport implements Transport {
     // readable too.
     let attachment: string | undefined;
     let message: string | undefined;
-    if (body.length > UPLOAD_ABOVE_CHARS && !this.typeNextTurn) {
+    const oversized = body.length > UPLOAD_ABOVE_CHARS;
+    // The two one-shot overrides point in opposite directions and each exists
+    // because the other path just failed: a rejected attachment types, a
+    // refused composer uploads. A short pointer has far better odds against a
+    // composer that would not take a 200-line payload, and the upload itself
+    // is one request the composer never sees.
+    if (uploadsAvailable() && (oversized || this.uploadNextTurn) && !this.typeNextTurn) {
       try {
         attachment = writeTurnFile(body);
         message = turnPointer(path.basename(attachment), opts.reminder);
@@ -239,6 +247,7 @@ export class BrowserTransport implements Transport {
       }
     }
     this.typeNextTurn = false;
+    this.uploadNextTurn = false;
     // Clamped only on the typed path: the file always carries the whole body,
     // and clamping it first was logging "payload truncated" for sends where
     // nothing was truncated.
@@ -254,6 +263,19 @@ export class BrowserTransport implements Transport {
         timeoutMs: replyTimeoutMs(),
         ...(attachment ? { attachments: [attachment] } : {}),
       });
+    } catch (e) {
+      // A composer that refused the whole payload is unlikely to accept it
+      // retyped two seconds later — measured: three identical attempts, 0, 1
+      // and 1 lines arriving. The retry goes up as a file instead, where the
+      // composer only has to take a few pointer lines.
+      if (
+        !attachment &&
+        e instanceof ChatGPTBrowserError &&
+        /could not be entered into the ChatGPT composer/.test(e.message)
+      ) {
+        this.uploadNextTurn = true;
+      }
+      throw e;
     } finally {
       if (attachment) {
         try {

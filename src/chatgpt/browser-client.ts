@@ -904,7 +904,17 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
 
     for (const strategy of strategies) {
       throwIfAborted(signal);
-      const focused = await clear();
+      let focused = await clear();
+      if (!focused) {
+        // A composer that will not take focus is usually a dialog sitting
+        // over the page — an upgrade prompt, a throttle notice — intercepting
+        // every click. Measured on a live session: insertText was skipped for
+        // six straight rounds while paste and fill bounced off in 180ms each.
+        // Escape is how ChatGPT's own dialogs close.
+        await p.keyboard.press("Escape").catch(() => {});
+        await p.waitForTimeout(250);
+        focused = await clear();
+      }
       if (!focused && strategy.name === "insertText") {
         // Typing without focus lands somewhere else entirely; skip to a
         // strategy that addresses the element directly.
@@ -954,6 +964,16 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
     }
     return;
   }
+
+  // Record what the page was showing. "The layout may have changed" was
+  // diagnosed blind three sessions running; a dialog over the composer, a
+  // throttle notice and a genuine layout change all wore this same error.
+  const pageState = (await p
+    .evaluate(
+      `({ url: location.href, text: ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").slice(0, 500) })`
+    )
+    .catch(() => null)) as { url: string; text: string } | null;
+  logger.warn("browser", "composer refused the message — page state", pageState ?? { unreadable: true });
 
   throw new ChatGPTBrowserError(
     `The message could not be entered into the ChatGPT composer (${best?.check.gotLines ?? 0} of ${best?.check.wantLines ?? 0} lines arrived). The page layout may have changed — run \`onflip login --headed\` to watch what happens.`
