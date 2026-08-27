@@ -11,6 +11,7 @@ import { SHELL_TOOLS } from "./shell";
 import { TODO_TOOLS } from "./todo";
 import { WEB_TOOLS } from "./web";
 import { BROWSER_TOOLS } from "./browser";
+import { MEMORY_TOOLS } from "./memory";
 import { err } from "./util";
 
 export { getShellCwd, setShellCwd, resetShellCwd, killAllJobs, listJobs } from "./shell";
@@ -50,7 +51,7 @@ export interface ToolRegistry {
 export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
   let signal = opts.signal;
 
-  let tools: ToolDefinition[] = [...FS_TOOLS, ...TODO_TOOLS];
+  let tools: ToolDefinition[] = [...FS_TOOLS, ...TODO_TOOLS, ...MEMORY_TOOLS];
   if (!opts.disableShell) tools = [...tools, ...SHELL_TOOLS];
   // Browsing is network access with a mouse attached, so it goes out with
   // the network tools rather than getting a switch of its own.
@@ -96,6 +97,18 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
     webfetch: "web_fetch",
     fetch: "web_fetch",
     curl: "web_fetch",
+    websearch: "web_search",
+    search_web: "web_search",
+    google: "web_search",
+    duckduckgo: "web_search",
+    download: "download_file",
+    wget: "download_file",
+    killjob: "kill_job",
+    stop_job: "kill_job",
+    kill: "kill_job",
+    memorize: "remember",
+    save_memory: "remember",
+    memory: "remember",
   };
 
   const resolveName = (name: string): ToolDefinition | undefined => {

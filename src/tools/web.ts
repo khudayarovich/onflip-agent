@@ -1,5 +1,7 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import { ToolDefinition } from "../types";
-import { err, denied, asBool, clip } from "./util";
+import { err, denied, asBool, asNumber, clip } from "./util";
 
 const FETCH_TIMEOUT = 30_000;
 const MAX_BYTES = 2_000_000;
@@ -129,4 +131,198 @@ function htmlToText(html: string): string {
     .trim();
 }
 
-export const WEB_TOOLS: ToolDefinition[] = [webFetchTool];
+/**
+ * Web search without an API key: DuckDuckGo's HTML endpoint, parsed for
+ * titles, URLs and snippets. The redirect links carry the real URL in the
+ * `uddg` parameter, which is what gets returned — the model should follow up
+ * with `web_fetch` on whichever result looks right.
+ */
+export const webSearchTool: ToolDefinition = {
+  name: "web_search",
+  description:
+    "Search the web and return titles, URLs and snippets. Use for current information, error messages, library docs, and anything you cannot know. Follow up with web_fetch on a promising result.",
+  parameters: {
+    type: "object",
+    properties: {
+      query: { type: "string", description: "The search query" },
+      max_results: { type: "number", description: "How many results to return (default 8, max 15)" },
+    },
+    required: ["query"],
+  },
+  async run(args, ctx) {
+    const query = String(args.query ?? "").trim();
+    if (!query) return err("`query` must be non-empty");
+
+    const decision = await ctx.requestPermission({
+      kind: "network",
+      tool: "web_search",
+      subject: `search: ${query}`,
+    });
+    if (!decision.allow) return denied("Search", decision.reason);
+
+    const limit = Math.min(15, Math.max(1, asNumber(args.max_results) ?? 8));
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
+    const onAbort = () => controller.abort();
+    ctx.signal.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      const res = await fetch(
+        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+        {
+          headers: {
+            // The HTML endpoint answers browsers; a bot-shaped UA gets blocked.
+            "user-agent":
+              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+            accept: "text/html",
+          },
+          signal: controller.signal,
+        }
+      );
+      if (!res.ok) return err(`Search failed: HTTP ${res.status}`);
+      const html = await res.text();
+
+      const results: { title: string; url: string; snippet: string }[] = [];
+      const linkRe = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+      const snippetRe = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+      const snippets: string[] = [];
+      for (const m of html.matchAll(snippetRe)) snippets.push(stripTags(m[1]));
+      let index = 0;
+      for (const m of html.matchAll(linkRe)) {
+        if (results.length >= limit) break;
+        results.push({
+          title: stripTags(m[2]),
+          url: resolveDuckLink(m[1]),
+          snippet: snippets[index++] ?? "",
+        });
+      }
+
+      if (results.length === 0) {
+        return err(
+          "No results parsed. The search page may have changed or the query returned nothing — try different terms, or web_fetch a site you already know."
+        );
+      }
+      const lines = results.map(
+        (r, i) => `${i + 1}. ${r.title}\n   ${r.url}${r.snippet ? `\n   ${r.snippet}` : ""}`
+      );
+      return {
+        output: lines.join("\n\n"),
+        title: query,
+        display: { kind: "text", lines },
+      };
+    } catch (e) {
+      if (controller.signal.aborted) {
+        return err(ctx.signal.aborted ? "Search interrupted by the user." : "Search timed out.");
+      }
+      return err(`Search failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      clearTimeout(timer);
+      ctx.signal.removeEventListener("abort", onAbort);
+    }
+  },
+};
+
+function stripTags(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&amp;/gi, "&")
+    .replace(/&lt;/gi, "<")
+    .replace(/&gt;/gi, ">")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/** DuckDuckGo wraps result URLs in a redirect; the real one rides in `uddg`. */
+function resolveDuckLink(href: string): string {
+  try {
+    const url = new URL(href.startsWith("//") ? `https:${href}` : href);
+    const real = url.searchParams.get("uddg");
+    return real ? decodeURIComponent(real) : url.href;
+  } catch {
+    return href;
+  }
+}
+
+const MAX_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+
+/**
+ * Download a URL to disk, byte-for-byte. `web_fetch` is for reading text;
+ * this is for assets — archives, images, binaries — which cannot survive the
+ * text round trip. Treated as a file write, because that is what it is.
+ */
+export const downloadFileTool: ToolDefinition = {
+  name: "download_file",
+  description:
+    "Download a URL to a local file, byte-for-byte (use for archives, images, and binaries — web_fetch is for reading text). Max 50MB.",
+  parameters: {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "Absolute http(s) URL" },
+      path: { type: "string", description: "Destination file path (relative to the working directory)" },
+    },
+    required: ["url", "path"],
+  },
+  mutates: true,
+  async run(args, ctx) {
+    const rawUrl = String(args.url ?? "").trim();
+    const rawPath = String(args.path ?? "").trim();
+    if (!rawUrl || !rawPath) return err("`url` and `path` must both be non-empty");
+
+    let url: URL;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      return err(`Not a valid URL: ${rawUrl}`);
+    }
+    if (url.protocol !== "http:" && url.protocol !== "https:") {
+      return err(`Unsupported protocol: ${url.protocol}`);
+    }
+    const target = path.resolve(ctx.cwd, rawPath);
+
+    const decision = await ctx.requestPermission({
+      kind: "write",
+      tool: "download_file",
+      subject: `download ${url.href}`,
+      targetPath: target,
+      detail: [`to: ${target}`],
+    });
+    if (!decision.allow) return denied("Download", decision.reason);
+
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT * 4);
+    const onAbort = () => controller.abort();
+    ctx.signal.addEventListener("abort", onAbort, { once: true });
+
+    try {
+      const res = await fetch(url.href, {
+        headers: { "user-agent": "OnFlip/1.0 (+https://github.com/onflip)" },
+        signal: controller.signal,
+        redirect: "follow",
+      });
+      if (!res.ok) return err(`Download failed: HTTP ${res.status} ${res.statusText}`);
+      const buf = Buffer.from(await res.arrayBuffer());
+      if (buf.length > MAX_DOWNLOAD_BYTES) {
+        return err(`File is ${Math.round(buf.length / 1024 / 1024)}MB, over the 50MB limit.`);
+      }
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, buf);
+      const kb = Math.max(1, Math.round(buf.length / 1024));
+      return {
+        output: `Saved ${kb}KB to ${target} (${res.headers.get("content-type") ?? "unknown type"}). Note: downloads are not covered by /undo.`,
+        title: path.basename(target),
+      };
+    } catch (e) {
+      if (controller.signal.aborted) {
+        return err(ctx.signal.aborted ? "Download interrupted by the user." : "Download timed out.");
+      }
+      return err(`Download failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      clearTimeout(timer);
+      ctx.signal.removeEventListener("abort", onAbort);
+    }
+  },
+};
+
+export const WEB_TOOLS: ToolDefinition[] = [webFetchTool, webSearchTool, downloadFileTool];

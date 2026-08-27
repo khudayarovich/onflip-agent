@@ -391,4 +391,44 @@ export const jobOutputTool: ToolDefinition = {
   },
 };
 
-export const SHELL_TOOLS: ToolDefinition[] = [bashTool, jobOutputTool];
+/**
+ * Stop a background job the agent started. The whole process tree goes —
+ * a dev server's child watchers must not outlive it — and the job's final
+ * output stays readable through `job_output` until the session ends.
+ */
+export const killJobTool: ToolDefinition = {
+  name: "kill_job",
+  description:
+    "Stop a background command started by `bash` with background: true. Kills the whole process tree. The job's collected output remains readable with job_output.",
+  parameters: {
+    type: "object",
+    properties: {
+      id: { type: "string", description: "Job id returned by the background bash call" },
+    },
+    required: ["id"],
+  },
+  async run(args) {
+    const id = String(args.id ?? "").trim();
+    const job = jobs.get(id);
+    if (!job) {
+      const known = [...jobs.keys()].join(", ") || "none";
+      return err(`No job with id "${id}". Known jobs: ${known}`);
+    }
+    if (job.exitCode !== null) {
+      return { output: `Job ${id} already exited with code ${job.exitCode}.`, title: id };
+    }
+    try {
+      if (process.platform === "win32" && job.child.pid) {
+        // child.kill() alone leaves the tree running on Windows.
+        spawn("taskkill", ["/PID", String(job.child.pid), "/T", "/F"], { windowsHide: true });
+      } else {
+        job.child.kill("SIGTERM");
+      }
+      return { output: `Stopped job ${id} (${job.command}).`, title: id };
+    } catch (e) {
+      return err(`Could not stop job ${id}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  },
+};
+
+export const SHELL_TOOLS: ToolDefinition[] = [bashTool, jobOutputTool, killJobTool];

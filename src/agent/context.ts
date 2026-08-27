@@ -17,6 +17,8 @@ const INSTRUCTION_FILES = [
   "CLAUDE.md",
   "ONFLIP.md",
   ".onflip/instructions.md",
+  // Facts the agent itself recorded with the `remember` tool.
+  ".onflip/memory.md",
   ".cursorrules",
   ".github/copilot-instructions.md",
 ];

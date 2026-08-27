@@ -303,8 +303,12 @@ The footer says which of the two `enter` will do, so it's never a guess.
 | `grep` | regex search across contents |
 | `bash` | run a command; working directory persists between calls |
 | `job_output` | read output from a backgrounded command |
+| `kill_job` | stop a backgrounded command, tree and all |
 | `todo_write` / `todo_read` | the task list you see rendered in the transcript |
+| `remember` | save a durable project fact to `.onflip/memory.md`, loaded into every future session |
 | `web_fetch` | fetch a URL **from your machine**, so localhost and internal hosts work |
+| `web_search` | search the web — titles, URLs and snippets, no API key needed |
+| `download_file` | save a URL to disk byte-for-byte, for archives and binaries |
 | `browser_open` / `browser_snapshot` | open a page in the agent's own browser · re-read it |
 | `browser_click` / `browser_type` / `browser_key` | act on the page by element ref |
 | `browser_screenshot` / `browser_close` | save a PNG for you · close the window |
