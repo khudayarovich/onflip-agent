@@ -81,10 +81,22 @@ export function planProfile(planId: string | undefined): PlanProfile | null {
   );
 }
 
+/**
+ * The budget when the plan could not be read and uploads are on.
+ *
+ * The composer ceiling used to stand in here, and it was the wrong ceiling:
+ * with uploads the composer is not the constraint, and 28k is close enough to
+ * the size of a system prompt plus one working exchange that sessions
+ * compacted almost every turn — each compaction opening a new conversation
+ * and re-uploading the transcript, at a pace ChatGPT eventually throttled.
+ * 45k matches the default the CLI and the desktop settings already use.
+ */
+const UNKNOWN_PLAN_UPLOAD_BUDGET = 45_000;
+
 export function compactionBudget(planId: string | undefined, canUpload = false): number {
   const ceiling = canUpload ? UPLOAD_CEILING_CHARS : COMPOSER_CEILING_CHARS;
   const profile = planProfile(planId);
-  if (!profile) return Math.min(COMPOSER_CEILING_CHARS, ceiling);
+  if (!profile) return canUpload ? UNKNOWN_PLAN_UPLOAD_BUDGET : COMPOSER_CEILING_CHARS;
   const fromPlan = Math.floor(profile.contextTokens * CHARS_PER_TOKEN * USABLE_FRACTION);
   return Math.max(12_000, Math.min(fromPlan, ceiling));
 }

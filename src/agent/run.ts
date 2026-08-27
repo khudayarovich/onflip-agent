@@ -300,12 +300,29 @@ export function transcriptChars(history: ChatMessage[]): number {
   return chars;
 }
 
+/** The part of the transcript compaction can actually shrink. */
+export function reducibleChars(history: ChatMessage[]): number {
+  let chars = 0;
+  for (const message of history) {
+    if (message.role !== "system") chars += message.content.length;
+  }
+  return chars;
+}
+
 /** Why this transcript should be compacted, or null to leave it alone. */
 export function compactionReason(
   history: ChatMessage[],
   limits: { compactAfterChars?: number; compactAfterMessages?: number }
 ): string | null {
-  const chars = transcriptChars(history);
+  // The system prompt is excluded on purpose, and not as a refinement.
+  // Compaction keeps it verbatim, so a transcript can never shrink below
+  // system-plus-summary — and when the prompt alone sits near the budget,
+  // counting it makes the freshly compacted transcript over budget *again*.
+  // That exact loop ran for real: compact, open a new chat, re-upload,
+  // compact, ten new conversations in ten minutes, until ChatGPT throttled
+  // the account. Measuring only what compaction can reclaim makes the loop
+  // impossible at any budget.
+  const chars = reducibleChars(history);
   if (limits.compactAfterChars && chars > limits.compactAfterChars) {
     return `${Math.round(chars / 1000)}k characters`;
   }
@@ -346,6 +363,18 @@ async function compactIfLarge(
   });
   if (after >= before) {
     logger.warn("agent", "compaction did not shrink the transcript", { before, after });
+    return "no-gain";
+  }
+  // Shrinking is not the same as shrinking enough. A compaction that leaves
+  // the transcript still over budget would fire again on the very next
+  // iteration — and each round costs a summary request, a fresh conversation
+  // and a full re-upload, which is a request storm ChatGPT answers with a
+  // throttle. Once summarising has done what it can, it is done for the turn.
+  if (compactionReason(history, opts)) {
+    logger.warn("agent", "still over budget after compacting; not compacting again this turn", {
+      before,
+      after,
+    });
     return "no-gain";
   }
   return "compacted";
