@@ -32,6 +32,8 @@ export interface FileDiff {
   removed: number;
   lines: DiffLine[];
   truncated?: boolean;
+  /** Persisted snapshot omitted the contents, so a truthful diff is impossible. */
+  unavailable?: boolean;
 }
 
 // ---------------------------------------------------------------------------

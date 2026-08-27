@@ -10,6 +10,7 @@ interface OnFlipBridge {
   restartEngine(cwd?: string): Promise<boolean>;
   appInfo(): Promise<{ version: string; platform: string }>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
+  signIn(): Promise<{ ok: boolean; reason?: string }>;
   winControl(action: "minimize" | "maximize" | "close" | "query"): Promise<{ maximized: boolean }>;
   onWinState(listener: (state: { maximized: boolean }) => void): () => void;
   termRun(command: string, cwd: string): Promise<{ ok: boolean; error?: string }>;

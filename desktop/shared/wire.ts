@@ -1,3 +1,5 @@
+import { StringDecoder } from "node:string_decoder";
+
 /**
  * Newline-delimited JSON-RPC between the electron main process and the engine
  * child, over the child's stdio.
@@ -50,6 +52,7 @@ export class Peer {
     { resolve: (v: unknown) => void; reject: (e: Error) => void }
   >();
   private buffer = "";
+  private decoder = new StringDecoder("utf8");
 
   onRequest: RequestHandler = async (method) => {
     throw new Error(`No handler for ${method}`);
@@ -77,7 +80,7 @@ export class Peer {
 
   /** Feed raw bytes from the other side. */
   feed(chunk: string | Buffer): void {
-    this.buffer += chunk.toString("utf8");
+    this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk);
     for (;;) {
       const nl = this.buffer.indexOf("\n");
       if (nl < 0) break;

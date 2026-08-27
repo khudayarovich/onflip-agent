@@ -50,6 +50,8 @@ export interface FileSnapshot {
   /** Null when the file did not exist before the change. */
   before: string | null;
   after: string | null;
+  /** The contents were deliberately omitted from persisted session data. */
+  contentsOmitted?: boolean;
   tool: string;
   at: number;
 }

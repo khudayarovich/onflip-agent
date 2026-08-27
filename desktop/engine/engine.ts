@@ -18,12 +18,12 @@ import {
   ThinkingLevel,
 } from "onflip/dist/models";
 import { resolveAuth, ResolvedAuth } from "onflip/dist/auth/resolve";
+import { takeExtractError } from "onflip/dist/auth/extract";
 import { chooseTransport, Transport } from "onflip/dist/chatgpt/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import {
   configureBrowser,
   closeBrowser,
-  openLoginWindow,
   openConversation,
   checkSignedIn,
   setActiveProject,
@@ -73,6 +73,7 @@ import {
   latestSession,
   recentProjects,
   deriveTitle,
+  snapshotContentsAvailable,
 } from "onflip/dist/agent/store";
 import { openLog, closeLog, logger } from "onflip/dist/log";
 import type { ChatMessage, SessionState, ToolCall, ToolResult, ToolDisplay } from "onflip/dist/types";
@@ -193,7 +194,11 @@ export class Engine {
         // The first send that comes back proves the user's message reached
         // ChatGPT; the "sending…" badge under it becomes "delivered".
         if (this.pendingDelivery) {
-          this.peer.emit("delivery", { id: this.pendingDelivery, state: "sent" });
+          // A streamed delta may already have advanced the badge to "read".
+          // In that case there is no earlier state left to emit.
+          if (this.pendingRead) {
+            this.peer.emit("delivery", { id: this.pendingDelivery, state: "sent" });
+          }
           this.pendingDelivery = null;
           this.pendingRead = null;
         }
@@ -255,14 +260,21 @@ export class Engine {
     }
     try {
       const state = await checkSignedIn(this.auth.cookies);
-      if (state.signedIn) this.emitConnect("ready");
-      else
-        this.emitConnect(
-          "signed-out",
-          state.reachable
-            ? "OnFlip's browser profile is not signed in to ChatGPT. Sign in to chatgpt.com in Chrome, Edge or Firefox, then run `onflip login` in a terminal."
-            : `ChatGPT could not be reached (${state.detail}).`
-        );
+      if (state.signedIn) {
+        this.emitConnect("ready");
+        return;
+      }
+      // Point at the button in this app, not at a terminal command: a
+      // desktop user on a fresh machine has no CLI, and when the cookie
+      // reader could not run at all, saying "no session found" would blame
+      // the account for a missing runtime.
+      const why = takeExtractError();
+      this.emitConnect(
+        "signed-out",
+        state.reachable
+          ? `OnFlip is not signed in to ChatGPT — open the account menu (bottom left) and choose "Sign in to ChatGPT".${why ? ` (${why})` : ""}`
+          : `ChatGPT could not be reached (${state.detail}).`
+      );
     } catch (e) {
       this.emitConnect("error", e instanceof Error ? e.message : String(e));
     }
@@ -593,16 +605,20 @@ export class Engine {
         if (!ids.includes(conversationId)) ids.push(conversationId);
       }
 
-      this.busy = false;
+      const next = this.queue.shift();
+      // Keep the engine busy across the hand-off. If idle were exposed here,
+      // a new send could start beside the queued turn before setImmediate runs.
+      this.busy = next !== undefined;
       this.saveNow();
       this.pushStatus();
       this.maybeAdoptChatTitle();
       this.maybeIdentifyAccount();
 
-      const next = this.queue.shift();
       if (next !== undefined) {
-        this.pushStatus();
-        setImmediate(() => void this.runOneTurn(next));
+        // Start synchronously through the point where runOneTurn installs its
+        // new AbortController. A stop click can then never hit the old turn's
+        // already-finished controller during the queue hand-off.
+        void this.runOneTurn(next);
       }
     }
   }
@@ -832,13 +848,41 @@ export class Engine {
    * a login window nobody can see helps nobody — and the profile keeps the
    * session afterwards, so one sign-in fixes every future send.
    */
-  async openSignIn(): Promise<{ ok: boolean }> {
-    this.assertIdle();
-    await closeBrowser();
-    await openLoginWindow(this.auth.cookies);
-    this.notice(
-      "A ChatGPT window has opened — sign in there, then come back and send your message again. The sign-in is kept by OnFlip's browser profile."
-    );
+  /**
+   * Adopt a session the user just signed into, in the desktop's own sign-in
+   * window (see electron/signin.ts).
+   *
+   * The cookies are written to config the same way `onflip login` writes
+   * them, so the CLI and a later restart both pick the session up, and the
+   * live transport is pointed at them immediately: the cookie array the
+   * transport was constructed with is refilled in place, then the automation
+   * browser is closed so the next send relaunches it carrying the new
+   * session. Rebuilding the transport instead would strand the conversation
+   * this session is attached to.
+   */
+  async applySignIn(cookies: { name: string; value: string }[]): Promise<{ ok: boolean }> {
+    const primary =
+      cookies.find((c) => c.name === "__Secure-next-auth.session-token") ??
+      cookies.find((c) => c.value.length >= 20);
+    if (!primary) throw new Error("The sign-in returned no session cookie.");
+
+    saveConfig({
+      sessionToken: primary.value,
+      sessionCookieName: primary.name,
+      sessionDeviceId: cookies.find((c) => c.name === "oai-did")?.value,
+    });
+
+    if (this.auth) {
+      this.auth.cookies.length = 0;
+      this.auth.cookies.push(...cookies);
+      this.auth.sessionToken = primary.value;
+    }
+    this.transport?.reset();
+    await closeBrowser().catch(() => {});
+
+    this.emitConnect("ready");
+    this.notice("Signed in to ChatGPT — the session is saved and ready to use.");
+    this.pushStatus();
     return { ok: true };
   }
 
@@ -1133,8 +1177,14 @@ export class Engine {
   }
 
   sessionDiff(): FileDiff[] {
+    const unavailableFiles = new Set(
+      this.toolState.snapshots
+        .filter((snapshot) => !snapshotContentsAvailable(snapshot))
+        .map((snapshot) => snapshot.path)
+    );
     const byFile = new Map<string, { before: string | null; after: string | null }>();
     for (const s of this.toolState.snapshots) {
+      if (unavailableFiles.has(s.path)) continue;
       const existing = byFile.get(s.path);
       if (existing) existing.after = s.after;
       else byFile.set(s.path, { before: s.before, after: s.after });
@@ -1143,20 +1193,35 @@ export class Engine {
     for (const [file, { before, after }] of byFile) {
       out.push(buildFileDiff(file, this.cwd, before ?? "", after ?? ""));
     }
+    for (const file of unavailableFiles) {
+      const rel = path.relative(this.cwd, file).replace(/\\/g, "/") || file;
+      out.push({ path: file, rel, added: 0, removed: 0, lines: [], unavailable: true });
+    }
     return out;
   }
 
-  undoPreview(): { rel: string; existedBefore: boolean } | null {
+  undoPreview(): { rel: string; existedBefore: boolean; unavailable?: boolean } | null {
     const snapshot = this.toolState.snapshots[this.toolState.snapshots.length - 1];
     if (!snapshot) return null;
     const rel = path.relative(this.cwd, snapshot.path).replace(/\\/g, "/") || snapshot.path;
-    return { rel, existedBefore: snapshot.before !== null };
+    return {
+      rel,
+      existedBefore: snapshot.before !== null,
+      unavailable: !snapshotContentsAvailable(snapshot) || undefined,
+    };
   }
 
   undoLast(): { ok: boolean; message: string } {
     const snapshot = this.toolState.snapshots.pop();
     if (!snapshot) return { ok: false, message: "Nothing to undo." };
     const rel = path.relative(this.cwd, snapshot.path).replace(/\\/g, "/") || snapshot.path;
+    if (!snapshotContentsAvailable(snapshot)) {
+      this.toolState.snapshots.push(snapshot);
+      return {
+        ok: false,
+        message: `Cannot undo ${rel}: its contents were omitted from the saved session. The file was left unchanged.`,
+      };
+    }
     try {
       if (snapshot.before === null) fs.rmSync(snapshot.path, { force: true });
       else fs.writeFileSync(snapshot.path, snapshot.before, "utf8");

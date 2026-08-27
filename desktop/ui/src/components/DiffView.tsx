@@ -8,6 +8,16 @@ export function DiffView({
   diff: FileDiff;
   showHeader?: boolean;
 }): React.ReactElement {
+  if (diff.unavailable) {
+    return (
+      <div className="diff">
+        {showHeader && <div className="file-head"><span>{diff.rel}</span></div>}
+        <div className="modal-note">
+          Diff unavailable because the saved snapshot omitted the file contents.
+        </div>
+      </div>
+    );
+  }
   return (
     <div className="diff">
       {showHeader && (

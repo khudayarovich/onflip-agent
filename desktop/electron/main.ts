@@ -13,6 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Peer } from "../shared/wire";
+import { runSignIn } from "./signin";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
@@ -401,6 +402,21 @@ function registerIpc(): void {
     return { maximized: win.isMaximized() };
   });
 
+  // Signing in happens in a normal browser window owned by the app (see
+  // signin.ts), never in the automation browser: the cookies it collects go
+  // straight to the engine, so they never pass through the renderer.
+  ipcMain.handle("sign-in", async () => {
+    const result = await runSignIn(win);
+    if (result.ok && result.cookies?.length && peer) {
+      try {
+        await peer.request("applySignIn", { cookies: result.cookies });
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    return { ok: result.ok, reason: result.reason };
+  });
+
   registerTerminal();
 }
 
@@ -417,7 +433,7 @@ function registerIpc(): void {
 let termChild: ChildProcess | null = null;
 
 /** Marks the line carrying the working directory back out of PowerShell. */
-const CWD_SENTINEL = "ONFLIP_CWD:";
+const CWD_SENTINEL = "\x01ONFLIP_CWD:";
 
 function registerTerminal(): void {
   ipcMain.handle("term-run", (_e, payload: { command: string; cwd: string }) => {
@@ -445,7 +461,7 @@ function registerTerminal(): void {
           "& {",
           command,
           "} 2>&1 | Out-String -Stream",
-          'Write-Output ("ONFLIP_" + "CWD:" + (Get-Location).Path)',
+          'Write-Output ([char]1 + "ONFLIP_CWD:" + (Get-Location).Path)',
         ].join("\n");
         const encoded = Buffer.from(script, "utf16le").toString("base64");
         child = spawn(
@@ -456,7 +472,7 @@ function registerTerminal(): void {
       } else {
         // macOS/Linux: a login bash, detached into its own process group so
         // stopping a command can take its whole tree down. Same sentinel.
-        const script = `{ ${command}\n} 2>&1; printf '\\nONFLIP_''CWD:%s\\n' "$PWD"`;
+        const script = `{ ${command}\n} 2>&1; printf '\\n\\001ONFLIP_CWD:%s\\n' "$PWD"`;
         child = spawn("/bin/bash", ["-lc", script], {
           cwd,
           detached: true,

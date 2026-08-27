@@ -285,9 +285,9 @@ export function App(): React.ReactElement {
         case "delivery": {
           const d = data as { id: string; state: "read" | "sent" | "failed" };
           setDeliveries((prev) => {
-            // Never step a badge backwards: a late "read" (from a retry's
-            // stream) must not demote an already-delivered message.
-            if (prev[d.id] === "sent" && d.state === "read") return prev;
+            // Streaming proves the message was read. Later transport
+            // bookkeeping must not regress that fact to sent or failed.
+            if (prev[d.id] === "read" && d.state !== "read") return prev;
             return { ...prev, [d.id]: d.state };
           });
           break;
@@ -487,6 +487,10 @@ export function App(): React.ReactElement {
     void api.undoPreview().then((preview) => {
       if (!preview) {
         notify("Nothing to undo.");
+        return;
+      }
+      if (preview.unavailable) {
+        notifyError(`Cannot undo ${preview.rel}: its contents were omitted from the saved session. The file was left unchanged.`);
         return;
       }
       setConfirm({
@@ -705,7 +709,19 @@ export function App(): React.ReactElement {
         onOpenSettings={() => setModal("settings")}
         onOpenAbout={() => setModal("about")}
         onOpenSkills={() => setModal("skills")}
-        onSignIn={() => guard(api.signIn())}
+        onSignIn={() => {
+          void window.onflip
+            .signIn()
+            .then((r) => {
+              if (r.ok) {
+                refreshStatus();
+                refreshLists();
+              } else if (r.reason && r.reason !== "cancelled") {
+                notifyError(`Sign-in did not complete: ${r.reason}`);
+              }
+            })
+            .catch((e: Error) => notifyError(e.message));
+        }}
       />
 
       <main className="main">

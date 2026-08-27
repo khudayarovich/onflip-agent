@@ -20,8 +20,9 @@ import { ChatMessage, ToolCall } from "../types";
  *    on the way into the DOM — `$_.Size` loses its underscores to emphasis, and
  *    unknown tags get stripped. Fencing the call keeps it verbatim.
  *
- * JSON and the older tag form are still accepted, because a model that has
- * seen a thousand JSON tool schemas will sometimes reach for them anyway.
+ * JSON and the older tag form are still accepted inside an explicit OnFlip
+ * fence or tag. Unmarked JSON is prose: executing examples from an ordinary
+ * answer would cross the model-to-machine trust boundary.
  */
 
 export const FENCE_TAG = "onflip";
@@ -55,7 +56,7 @@ export function parseTurn(raw: string): ParsedTurn {
   let text = raw;
 
   // ---- 1. fenced ```onflip blocks (the documented form) -------------------
-  text = replaceFences(text, [FENCE_TAG, "onflip:tool", "tool", "tool_call"], (body) => {
+  text = replaceFences(text, [FENCE_TAG, "onflip:tool"], (body) => {
     const parsed = parseCallBody(body, problems);
     if (!parsed) return null;
     calls.push(...parsed);
@@ -70,30 +71,7 @@ export function parseTurn(raw: string): ParsedTurn {
     return "";
   });
 
-  // ---- 3. fenced json that happens to contain a tool object ---------------
-  if (calls.length === 0) {
-    text = replaceFences(text, ["json", "jsonc", ""], (body) => {
-      if (!/"?(tool|tool_name|name)"?\s*[:=]/.test(body)) return null;
-      const parsed = parseCallBody(body, problems);
-      if (!parsed) return null;
-      calls.push(...parsed);
-      return "";
-    });
-  }
-
-  // ---- 4. a bare JSON object somewhere in the prose ------------------------
-  if (calls.length === 0) {
-    for (const { json, start, end } of findJsonObjects(text)) {
-      const parsed = tryJson(json);
-      if (parsed) {
-        calls.push(...parsed);
-        text = text.slice(0, start) + text.slice(end);
-        break;
-      }
-    }
-  }
-
-  // ---- 4b. unfenced blocks -------------------------------------------------
+  // ---- 3. unfenced block-form calls ----------------------------------------
   // Models routinely emit blocks correctly but drop the fence, and they batch
   // several in one reply. Each `tool:` at the start of a line opens a new one.
   if (calls.length === 0) {
@@ -104,10 +82,15 @@ export function parseTurn(raw: string): ParsedTurn {
     }
   }
 
-  // ---- 5. a whole reply that is one flattened block ------------------------
+  // ---- 4. a whole reply that is one flattened block ------------------------
   // Nothing above matched and the reply has no line structure left to match
   // against — recover it as a collapsed block rather than losing the call.
-  if (calls.length === 0 && !text.includes("\n") && /\btool\s*:\s*\w/i.test(text)) {
+  if (
+    calls.length === 0 &&
+    !text.includes("\n") &&
+    !/(?:```|~~~)/.test(text) &&
+    /\btool\s*:\s*\w/i.test(text)
+  ) {
     const collapsed = parseCollapsedBlock(text);
     if (collapsed) {
       calls.push(...collapsed);
@@ -117,7 +100,7 @@ export function parseTurn(raw: string): ParsedTurn {
 
   const tidied = tidy(text);
 
-  // ---- 6. an attempt that did not parse -----------------------------------
+  // ---- 5. an attempt that did not parse -----------------------------------
   if (calls.length === 0) {
     const attempt = detectAttempt(raw, problems);
     if (attempt) return { text: tidied, calls, malformed: attempt };
@@ -236,9 +219,10 @@ export function parseBlockCall(body: string): ToolCall[] | null {
  */
 function parseUnfencedBlocks(text: string): { calls: ToolCall[]; prose: string } {
   const lines = text.split("\n");
+  const fenced = fencedLineMask(lines);
   const starts: number[] = [];
   lines.forEach((line, i) => {
-    if (/^[ \t]*tool[ \t]*:[ \t]*\S/i.test(line)) starts.push(i);
+    if (!fenced[i] && /^[ \t]*tool[ \t]*:[ \t]*\S/i.test(line)) starts.push(i);
   });
   if (starts.length === 0) return { calls: [], prose: text };
 
@@ -252,6 +236,48 @@ function parseUnfencedBlocks(text: string): { calls: ToolCall[]; prose: string }
 
   // Anything before the first block was the model narrating.
   return { calls, prose: lines.slice(0, starts[0]).join("\n") };
+}
+
+/** Lines inside any Markdown fence are prose unless the fence was OnFlip's. */
+function fencedLineMask(lines: string[]): boolean[] {
+  const mask = lines.map(() => false);
+  let marker: "`" | "~" | null = null;
+  let markerLength = 0;
+  for (let i = 0; i < lines.length; i++) {
+    if (!marker) {
+      const open = lines[i].match(/^\s*(`{3,}|~{3,})/);
+      if (!open) continue;
+      marker = open[1][0] as "`" | "~";
+      markerLength = open[1].length;
+      mask[i] = true;
+      continue;
+    }
+    mask[i] = true;
+    const close = lines[i].match(/^\s*(`{3,}|~{3,})\s*$/);
+    if (close && close[1][0] === marker && close[1].length >= markerLength) {
+      marker = null;
+      markerLength = 0;
+    }
+  }
+  return mask;
+}
+
+function hasTopLevelFence(input: string, tags: string[]): boolean {
+  const wanted = new Set(tags.map((tag) => tag.toLowerCase()));
+  const lines = input.split("\n");
+  for (let i = 0; i < lines.length; i++) {
+    const open = lines[i].match(/^\s*(`{3,}|~{3,})([^\r\n]*)$/);
+    if (!open) continue;
+    const info = open[2].trim().split(/\s+/, 1)[0].toLowerCase();
+    if (wanted.has(info)) return true;
+    const marker = open[1][0];
+    const markerLength = open[1].length;
+    for (i++; i < lines.length; i++) {
+      const close = lines[i].match(/^\s*(`{3,}|~{3,})\s*$/);
+      if (close && close[1][0] === marker && close[1].length >= markerLength) break;
+    }
+  }
+  return false;
 }
 
 /** Parse a value as JSON when it plainly is some, otherwise keep it as text. */
@@ -524,23 +550,36 @@ function replaceFences(
   const out: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const open = lines[i].match(/^\s*(`{3,}|~{3,})\s*([\w+#.:-]*)\s*$/);
-    if (!open || !wanted.has(open[2].toLowerCase())) {
+    const open = lines[i].match(/^\s*(`{3,}|~{3,})([^\r\n]*)$/);
+    if (!open) {
       out.push(lines[i]);
       continue;
     }
+    const info = open[2].trim().split(/\s+/, 1)[0].toLowerCase();
 
-    const marker = open[1][0].repeat(3);
+    const marker = open[1][0];
+    const markerLength = open[1].length;
     const body: string[] = [];
     let j = i + 1;
     let closed = false;
     for (; j < lines.length; j++) {
-      if (new RegExp(`^\\s*${marker[0] === "\`" ? "`{3,}" : "~{3,}"}\\s*$`).test(lines[j])) {
+      const close = lines[j].match(/^\s*(`{3,}|~{3,})\s*$/);
+      if (close && close[1][0] === marker && close[1].length >= markerLength) {
         closed = true;
         break;
       }
       body.push(lines[j]);
     }
+
+    // Treat every ordinary fence as opaque prose. Otherwise a literal
+    // ```onflip example nested inside a longer fence becomes executable.
+    if (!wanted.has(info)) {
+      out.push(lines[i], ...body);
+      if (closed) out.push(lines[j]);
+      i = closed ? j : lines.length;
+      continue;
+    }
+
     // An unterminated fence is still worth reading — models truncate.
     const replacement = fn(body.join("\n"));
     if (replacement === null) {
@@ -556,6 +595,26 @@ function replaceFences(
 
 /** Replace every open/close delimited region, letting the callback opt out. */
 function replaceTagged(
+  input: string,
+  open: string,
+  close: string,
+  fn: (body: string) => string | null
+): string {
+  const lines = input.split("\n");
+  const fenced = fencedLineMask(lines);
+  const out: string[] = [];
+  for (let i = 0; i < lines.length; ) {
+    const insideFence = fenced[i];
+    let j = i + 1;
+    while (j < lines.length && fenced[j] === insideFence) j++;
+    const chunk = lines.slice(i, j).join("\n");
+    out.push(insideFence ? chunk : replaceTaggedChunk(chunk, open, close, fn));
+    i = j;
+  }
+  return out.join("\n");
+}
+
+function replaceTaggedChunk(
   input: string,
   open: string,
   close: string,
@@ -673,11 +732,16 @@ function findBalancedEnd(s: string, from: number): number {
  * though it were the result.
  */
 function detectAttempt(raw: string, problems: string[]): string | null {
+  const lines = raw.split("\n");
+  const fenced = fencedLineMask(lines);
+  const outsideFences = lines.filter((_line, index) => !fenced[index]).join("\n");
+  const hasUnfencedBlock = lines.some(
+    (line, index) => !fenced[index] && /^\s*tool\s*:\s*\w/i.test(line)
+  );
   const mentionsProtocol =
-    raw.includes("onflip:tool") ||
-    /```\s*onflip/i.test(raw) ||
-    /"tool"\s*:\s*"/.test(raw) ||
-    /^\s*tool\s*:\s*\w/m.test(raw);
+    outsideFences.includes("onflip:tool") ||
+    hasTopLevelFence(raw, [FENCE_TAG, "onflip:tool"]) ||
+    hasUnfencedBlock;
   if (!mentionsProtocol) return null;
 
   const detail = problems.length ? problems[0] : "the tool call could not be parsed";
@@ -694,13 +758,18 @@ function detectAttempt(raw: string, problems: string[]): string | null {
 }
 
 function tidy(s: string): string {
+  const lines = s.split("\n");
+  const fenced = fencedLineMask(lines);
   return (
-    s
+    lines
       // Fence scaffolding the renderer left behind after eating the backticks:
       // a lone "onflip" line is the info string, not something the model said.
-      .split("\n")
-      .filter((line) => !/^\s*(`{3,}\s*)?(onflip(:tool)?|tool_call)\s*`*\s*$/i.test(line))
-      .filter((line) => !/^\s*<\/?onflip:tool>\s*$/i.test(line))
+      .filter(
+        (line, index) =>
+          fenced[index] ||
+          (!/^\s*(`{3,}\s*)?onflip(:tool)?\s*`*\s*$/i.test(line) &&
+            !/^\s*<\/?onflip:tool>\s*$/i.test(line))
+      )
       .join("\n")
       .replace(/\n{3,}/g, "\n\n")
       .replace(/^\s*[\r\n]+/, "")

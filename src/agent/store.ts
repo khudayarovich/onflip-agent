@@ -77,10 +77,17 @@ const MAX_PERSISTED_SNAPSHOT_BYTES = 256 * 1024;
 
 function trimForDisk(snapshots: FileSnapshot[]): FileSnapshot[] {
   return snapshots.slice(-MAX_SNAPSHOTS).map((s) => {
-    const size = (s.before?.length ?? 0) + (s.after?.length ?? 0);
+    const size = Buffer.byteLength(s.before ?? "", "utf8") + Buffer.byteLength(s.after ?? "", "utf8");
     if (size <= MAX_PERSISTED_SNAPSHOT_BYTES) return s;
-    return { ...s, before: null, after: null };
+    return { ...s, before: null, after: null, contentsOmitted: true };
   });
+}
+
+/** Whether a persisted snapshot still has enough information to undo safely. */
+export function snapshotContentsAvailable(snapshot: FileSnapshot): boolean {
+  // Older session files predate `contentsOmitted`; both nulls were the legacy
+  // representation for an oversized snapshot and must never mean "delete".
+  return snapshot.contentsOmitted !== true && !(snapshot.before === null && snapshot.after === null);
 }
 
 export function saveSession(session: StoredSession): void {
@@ -106,6 +113,11 @@ export function loadSession(id: string): StoredSession | null {
     if (!parsed?.id || !Array.isArray(parsed.messages)) return null;
     parsed.todos ??= [];
     parsed.snapshots ??= [];
+    parsed.snapshots = parsed.snapshots.map((snapshot) =>
+      snapshot.before === null && snapshot.after === null
+        ? { ...snapshot, contentsOmitted: true }
+        : snapshot
+    );
     return parsed;
   } catch {
     return null;

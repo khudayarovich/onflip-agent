@@ -9,6 +9,125 @@ const MAX_LIST_ENTRIES = 1_000;
 const MAX_GREP_MATCHES = 300;
 const MAX_GLOB_RESULTS = 500;
 
+interface StreamedSlice {
+  lines: string[];
+  scannedLines: number;
+  hasMore: boolean;
+  aborted: boolean;
+  tooLarge: boolean;
+}
+
+/** Read only the requested line window without loading a large file in full. */
+async function streamTextSlice(
+  file: string,
+  offset: number,
+  limit: number,
+  signal: AbortSignal
+): Promise<StreamedSlice> {
+  if (signal.aborted) {
+    return { lines: [], scannedLines: 0, hasMore: false, aborted: true, tooLarge: false };
+  }
+  const input = fs.createReadStream(file, { encoding: "utf8", highWaterMark: 64 * 1024 });
+  const lines: string[] = [];
+  let lineNumber = 1;
+  let scannedLines = 0;
+  let pending = "";
+  let capturedBytes = 0;
+  let sawData = false;
+  let endedWithNewline = false;
+  let hasMore = false;
+  let aborted = false;
+  let tooLarge = false;
+  let stopped = false;
+
+  const stop = () => {
+    stopped = true;
+    input.destroy();
+  };
+  const onAbort = () => {
+    aborted = true;
+    stop();
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
+
+  const append = (part: string) => {
+    if (lineNumber < offset || lines.length >= limit || !part) return;
+    capturedBytes += Buffer.byteLength(part, "utf8");
+    if (capturedBytes > MAX_READ_BYTES) {
+      tooLarge = true;
+      stop();
+      return;
+    }
+    pending += part;
+  };
+
+  const finishLine = () => {
+    scannedLines = lineNumber;
+    if (lineNumber >= offset) {
+      if (lines.length >= limit) {
+        hasMore = true;
+        stop();
+        return;
+      }
+      if (pending.endsWith("\r")) pending = pending.slice(0, -1);
+      // Line numbers, separators, padding and newlines are output too. A fixed
+      // allowance is conservative even for very large line numbers.
+      capturedBytes += 32;
+      if (capturedBytes > MAX_READ_BYTES) {
+        tooLarge = true;
+        stop();
+        return;
+      }
+      lines.push(pending);
+    }
+    pending = "";
+    lineNumber++;
+  };
+
+  try {
+    for await (const raw of input) {
+      const chunk = String(raw);
+      if (!chunk) continue;
+      sawData = true;
+      endedWithNewline = chunk.endsWith("\n");
+      let start = 0;
+      for (;;) {
+        const newline = chunk.indexOf("\n", start);
+        if (newline < 0) {
+          append(chunk.slice(start));
+          break;
+        }
+        append(chunk.slice(start, newline));
+        if (stopped) break;
+        finishLine();
+        if (stopped) break;
+        start = newline + 1;
+      }
+      if (stopped) break;
+    }
+  } catch (e) {
+    if (!stopped && !aborted) throw e;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    input.destroy();
+  }
+
+  if (!stopped && sawData && !endedWithNewline) finishLine();
+  return { lines, scannedLines, hasMore, aborted, tooLarge };
+}
+
+function binarySample(file: string, size: number): Buffer {
+  const length = Math.min(size, 8 * 1024);
+  const sample = Buffer.alloc(length);
+  const fd = fs.openSync(file, "r");
+  try {
+    const read = fs.readSync(fd, sample, 0, length, 0);
+    return sample.subarray(0, read);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function snapshot(
   ctx: ToolContext,
   file: string,
@@ -20,12 +139,97 @@ function snapshot(
   ctx.session.snapshots.push(entry);
 }
 
-function readIfExists(file: string): string | null {
-  try {
-    return fs.readFileSync(file, "utf8");
-  } catch {
-    return null;
+interface FileRevision {
+  exists: boolean;
+  contents: string | null;
+  pathIdentity: string | null;
+  targetIdentity: string | null;
+  ancestorIdentity: string | null;
+}
+
+function statIdentity(stat: fs.Stats): string {
+  return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
+}
+
+function objectIdentity(stat: fs.Stats): string {
+  return [stat.dev, stat.ino, stat.mode, stat.birthtimeMs].join(":");
+}
+
+function nearestExistingAncestorIdentity(file: string): string {
+  let candidate = path.dirname(file);
+  for (;;) {
+    let entry: fs.Stats;
+    try {
+      entry = fs.lstatSync(candidate);
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      const parent = path.dirname(candidate);
+      if (parent === candidate) throw new Error(`no existing ancestor for ${file}`);
+      candidate = parent;
+      continue;
+    }
+    try {
+      const target = fs.statSync(candidate);
+      return `${candidate}|${objectIdentity(entry)}|${objectIdentity(target)}`;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+        // A dangling symlink is still a path component whose identity matters.
+        return `${candidate}|${objectIdentity(entry)}|dangling`;
+      }
+      throw e;
+    }
   }
+}
+
+/** Capture both the directory entry and followed target, plus its contents. */
+function captureFileRevision(file: string): FileRevision {
+  let entry: fs.Stats;
+  try {
+    entry = fs.lstatSync(file);
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
+      return {
+        exists: false,
+        contents: null,
+        pathIdentity: null,
+        targetIdentity: null,
+        ancestorIdentity: nearestExistingAncestorIdentity(file),
+      };
+    }
+    throw e;
+  }
+  const target = fs.statSync(file);
+  if (!target.isFile()) throw new Error("path is not a regular file");
+  return {
+    exists: true,
+    contents: fs.readFileSync(file, "utf8"),
+    pathIdentity: statIdentity(entry),
+    targetIdentity: statIdentity(target),
+    ancestorIdentity: null,
+  };
+}
+
+function changedDuringApproval(file: string, before: FileRevision): boolean {
+  try {
+    const current = captureFileRevision(file);
+    return (
+      current.exists !== before.exists ||
+      current.contents !== before.contents ||
+      current.pathIdentity !== before.pathIdentity ||
+      current.targetIdentity !== before.targetIdentity ||
+      current.ancestorIdentity !== before.ancestorIdentity
+    );
+  } catch {
+    // Becoming unreadable, a dangling symlink, or another non-file state is a
+    // change too. Never turn a failed revalidation into permission to write.
+    return true;
+  }
+}
+
+function approvalRaceError(ctx: ToolContext, file: string) {
+  return err(
+    `${relative(ctx.cwd, file)} changed while waiting for approval. Nothing was written; read the file again and retry.`
+  );
 }
 
 /**
@@ -60,12 +264,21 @@ export const readTool: ToolDefinition = {
     properties: {
       path: { type: "string", description: "File path, absolute or relative to the working directory" },
       offset: { type: "number", description: "1-based line to start from (optional)" },
-      limit: { type: "number", description: "Maximum lines to return (optional, default 2000)" },
+      limit: { type: "number", description: "Maximum lines to return (optional, default and maximum 2000)" },
     },
     required: ["path"],
   },
   async run(args, ctx) {
     const file = resolveIn(ctx.cwd, args.path);
+    if (ctx.signal.aborted) return err("Read interrupted by the user.");
+    const offsetArg = asNumber(args.offset);
+    const offset = offsetArg === undefined ? 1 : Math.max(1, Math.floor(offsetArg));
+    const limitArg = asNumber(args.limit);
+    const limit =
+      limitArg === undefined
+        ? MAX_READ_LINES
+        : Math.min(MAX_READ_LINES, Math.max(1, Math.floor(limitArg)));
+    const requestedSlice = offsetArg !== undefined || limitArg !== undefined;
     let stat: fs.Stats;
     try {
       stat = fs.statSync(file);
@@ -75,14 +288,39 @@ export const readTool: ToolDefinition = {
     if (stat.isDirectory()) {
       return err(`Path is a directory, not a file: ${relative(ctx.cwd, file)}. Use "list" instead.`);
     }
-    if (stat.size > MAX_READ_BYTES) {
+    if (stat.size > MAX_READ_BYTES && !requestedSlice) {
       return err(
         `File is ${Math.round(stat.size / 1024)}KB, over the ${Math.round(MAX_READ_BYTES / 1024)}KB read limit. Use offset/limit, or "grep" to find the relevant part.`
       );
     }
-    const buf = fs.readFileSync(file);
+    const buf = stat.size > MAX_READ_BYTES ? binarySample(file, stat.size) : fs.readFileSync(file);
     if (isProbablyBinary(buf)) {
       return err(`Cannot read binary file: ${relative(ctx.cwd, file)} (${stat.size} bytes)`);
+    }
+
+    if (stat.size > MAX_READ_BYTES) {
+      const slice = await streamTextSlice(file, offset, limit, ctx.signal);
+      if (slice.aborted) return err("Read interrupted by the user.");
+      if (slice.tooLarge) {
+        return err(
+          `The requested lines exceed the ${Math.round(MAX_READ_BYTES / 1024)}KB output limit. Use a smaller limit or grep for the relevant text.`
+        );
+      }
+      ctx.session.readFiles.set(file, Date.now());
+      if (offset > slice.scannedLines && !slice.hasMore) {
+        return ok(`(no such line — file has ${slice.scannedLines} lines)`, {
+          title: relative(ctx.cwd, file),
+        });
+      }
+
+      const end = offset + slice.lines.length - 1;
+      const width = String(Math.max(offset, end)).length;
+      const body = slice.lines.map((line, i) => `${String(offset + i).padStart(width)}│ ${line}`);
+      if (slice.hasMore) body.push(`… more lines (use offset ${end + 1} to continue)`);
+      return ok(body.join("\n"), {
+        title: `${relative(ctx.cwd, file)} (lines ${offset}-${end})`,
+        display: { kind: "text", lines: body, lang: path.extname(file).slice(1) },
+      });
     }
 
     const text = buf.toString("utf8");
@@ -90,10 +328,6 @@ export const readTool: ToolDefinition = {
     // A trailing newline terminates the last line rather than starting a new
     // one; keeping the empty tail would report every file as one line longer.
     if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
-    const offsetArg = asNumber(args.offset);
-    const offset = offsetArg === undefined ? 1 : Math.max(1, Math.floor(offsetArg));
-    const limitArg = asNumber(args.limit);
-    const limit = limitArg === undefined ? MAX_READ_LINES : Math.max(1, Math.floor(limitArg));
     const end = Math.min(lines.length, offset + limit - 1);
 
     ctx.session.readFiles.set(file, Date.now());
@@ -142,7 +376,13 @@ export const writeTool: ToolDefinition = {
     const file = resolveIn(ctx.cwd, args.path);
     if (typeof args.content !== "string") return err("`content` must be a string");
     const content = args.content;
-    const before = readIfExists(file);
+    let beforeRevision: FileRevision;
+    try {
+      beforeRevision = captureFileRevision(file);
+    } catch (e) {
+      return err(`Cannot inspect ${relative(ctx.cwd, file)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const before = beforeRevision.contents;
 
     const decision = await ctx.requestPermission({
       kind: "write",
@@ -154,6 +394,7 @@ export const writeTool: ToolDefinition = {
     if (!decision.allow) {
       return denied("Write", decision.reason);
     }
+    if (changedDuringApproval(file, beforeRevision)) return approvalRaceError(ctx, file);
 
     fs.mkdirSync(path.dirname(file), { recursive: true });
     fs.writeFileSync(file, content, "utf8");
@@ -277,7 +518,13 @@ export const editTool: ToolDefinition = {
   },
   async run(args, ctx) {
     const file = resolveIn(ctx.cwd, args.path);
-    const before = readIfExists(file);
+    let beforeRevision: FileRevision;
+    try {
+      beforeRevision = captureFileRevision(file);
+    } catch (e) {
+      return err(`Cannot inspect ${relative(ctx.cwd, file)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const before = beforeRevision.contents;
     if (before === null) return err(`File not found: ${relative(ctx.cwd, file)}`);
 
     const oldStr = String(args.old_string ?? "");
@@ -306,6 +553,7 @@ export const editTool: ToolDefinition = {
     if (!decision.allow) {
       return denied("Edit", decision.reason);
     }
+    if (changedDuringApproval(file, beforeRevision)) return approvalRaceError(ctx, file);
 
     const stale = staleReadWarning(ctx, file);
     fs.writeFileSync(file, after, "utf8");
@@ -351,7 +599,13 @@ export const multiEditTool: ToolDefinition = {
   },
   async run(args, ctx) {
     const file = resolveIn(ctx.cwd, args.path);
-    const before = readIfExists(file);
+    let beforeRevision: FileRevision;
+    try {
+      beforeRevision = captureFileRevision(file);
+    } catch (e) {
+      return err(`Cannot inspect ${relative(ctx.cwd, file)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const before = beforeRevision.contents;
     if (before === null) return err(`File not found: ${relative(ctx.cwd, file)}`);
     if (!Array.isArray(args.edits) || args.edits.length === 0) {
       return err("`edits` must be a non-empty array");
@@ -389,6 +643,7 @@ export const multiEditTool: ToolDefinition = {
     if (!decision.allow) {
       return denied("Edits", decision.reason);
     }
+    if (changedDuringApproval(file, beforeRevision)) return approvalRaceError(ctx, file);
 
     const stale = staleReadWarning(ctx, file);
     fs.writeFileSync(file, working, "utf8");

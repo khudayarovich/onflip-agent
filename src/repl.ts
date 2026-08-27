@@ -62,6 +62,7 @@ import {
   latestSession,
   recentProjects,
   relativeTime,
+  snapshotContentsAvailable,
 } from "./agent/store";
 import { openLog, closeLog, logFile, logger } from "./log";
 import { setTheme, THEME_NAMES, theme } from "./ui/theme";
@@ -1274,9 +1275,14 @@ export class Repl {
       return;
     }
 
+    const unavailableFiles = new Set(
+      snapshots.filter((snapshot) => !snapshotContentsAvailable(snapshot)).map((snapshot) => snapshot.path)
+    );
+
     // Collapse repeated edits to the same file into one net diff.
     const byFile = new Map<string, { before: string | null; after: string | null }>();
     for (const s of snapshots) {
+      if (unavailableFiles.has(s.path)) continue;
       const existing = byFile.get(s.path);
       if (existing) existing.after = s.after;
       else byFile.set(s.path, { before: s.before, after: s.after });
@@ -1295,12 +1301,23 @@ export class Repl {
       for (const line of lines) process.stdout.write(`${line}\n`);
       process.stdout.write("\n");
     }
+    for (const file of unavailableFiles) {
+      const rel = path.relative(this.opts.cwd, file).replace(/\\/g, "/") || file;
+      ui.notice(`${rel}: diff unavailable because the saved snapshot omitted the file contents.`);
+    }
   }
 
   private async undo(): Promise<void> {
     const snapshot = this.toolState.snapshots.pop();
     if (!snapshot) {
       ui.info("Nothing to undo.");
+      ui.blank();
+      return;
+    }
+
+    if (!snapshotContentsAvailable(snapshot)) {
+      this.toolState.snapshots.push(snapshot);
+      ui.error("This change cannot be undone because its file contents were omitted from the saved session. The file was left unchanged.");
       ui.blank();
       return;
     }

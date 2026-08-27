@@ -82,14 +82,45 @@ interface BackgroundJob {
 const jobs = new Map<string, BackgroundJob>();
 let jobCounter = 0;
 
+/** Stop the shell and every descendant it started. */
+function killProcessTree(child: ChildProcess, force = false): void {
+  if (!child.pid) return;
+  const fallback = () => {
+    try {
+      child.kill(force ? "SIGKILL" : "SIGTERM");
+    } catch {
+      /* already gone */
+    }
+  };
+
+  if (process.platform === "win32") {
+    try {
+      const killer = spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+        windowsHide: true,
+        stdio: "ignore",
+      });
+      killer.once("error", fallback);
+      killer.once("exit", (code) => {
+        if (code !== 0) fallback();
+      });
+    } catch {
+      fallback();
+    }
+    return;
+  }
+
+  try {
+    // Shells are detached into their own process group on POSIX.
+    process.kill(-child.pid, force ? "SIGKILL" : "SIGTERM");
+  } catch {
+    fallback();
+  }
+}
+
 export function killAllJobs(): void {
   for (const job of jobs.values()) {
     if (job.exitCode === null) {
-      try {
-        job.child.kill();
-      } catch {
-        /* already gone */
-      }
+      killProcessTree(job.child, true);
     }
   }
   jobs.clear();
@@ -128,6 +159,7 @@ function execute(
     const child = spawn(host.file, host.args(command + host.cwdProbe), {
       cwd,
       windowsHide: true,
+      detached: process.platform !== "win32",
       // stdin is closed so a command that waits on input fails fast instead of
       // hanging until the timeout.
       stdio: ["ignore", "pipe", "pipe"],
@@ -142,20 +174,12 @@ function execute(
 
     const timer = setTimeout(() => {
       timedOut = true;
-      try {
-        child.kill(process.platform === "win32" ? undefined : "SIGKILL");
-      } catch {
-        /* already exited */
-      }
+      killProcessTree(child, true);
     }, timeout);
 
     const onAbort = () => {
       aborted = true;
-      try {
-        child.kill();
-      } catch {
-        /* already exited */
-      }
+      killProcessTree(child, true);
     };
     signal.addEventListener("abort", onAbort, { once: true });
 
@@ -305,7 +329,7 @@ function startBackground(command: string, cwd: string): ToolResult {
     cwd,
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
-    detached: false,
+    detached: process.platform !== "win32",
     env: { ...process.env, ONFLIP: "1" },
   });
   const job: BackgroundJob = {
@@ -371,11 +395,7 @@ export const jobOutputTool: ToolDefinition = {
     job.cursor = job.output.length;
 
     if (asBool(args.kill) && job.exitCode === null) {
-      try {
-        job.child.kill();
-      } catch {
-        /* already exited */
-      }
+      killProcessTree(job.child, true);
       job.exitCode = job.exitCode ?? -1;
     }
 
@@ -418,12 +438,7 @@ export const killJobTool: ToolDefinition = {
       return { output: `Job ${id} already exited with code ${job.exitCode}.`, title: id };
     }
     try {
-      if (process.platform === "win32" && job.child.pid) {
-        // child.kill() alone leaves the tree running on Windows.
-        spawn("taskkill", ["/PID", String(job.child.pid), "/T", "/F"], { windowsHide: true });
-      } else {
-        job.child.kill("SIGTERM");
-      }
+      killProcessTree(job.child);
       return { output: `Stopped job ${id} (${job.command}).`, title: id };
     } catch (e) {
       return err(`Could not stop job ${id}: ${e instanceof Error ? e.message : String(e)}`);
