@@ -24,6 +24,7 @@ export function Sidebar({
   onOpenProject,
   onPickFolder,
   onOpenSettings,
+  onOpenAbout,
 }: {
   status: EngineStatus | null;
   connect: ConnectState;
@@ -44,6 +45,7 @@ export function Sidebar({
   onOpenProject: (dir: string) => void;
   onPickFolder: () => void;
   onOpenSettings: () => void;
+  onOpenAbout: () => void;
 }): React.ReactElement {
   const t = useT();
   const projectMenu = useMenu();
@@ -125,6 +127,7 @@ export function Sidebar({
         connLabel={connLabel}
         connectDetail={connectDetail}
         onOpenSettings={onOpenSettings}
+        onOpenAbout={onOpenAbout}
       />
 
 
@@ -241,12 +244,14 @@ function AccountBar({
   connLabel,
   connectDetail,
   onOpenSettings,
+  onOpenAbout,
 }: {
   status: EngineStatus | null;
   connect: ConnectState;
   connLabel: string;
   connectDetail?: string;
   onOpenSettings: () => void;
+  onOpenAbout: () => void;
 }): React.ReactElement {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -309,6 +314,15 @@ function AccountBar({
               }}
             >
               <span className="pop-icon">⚙</span> {t("settings")}
+            </button>
+            <button
+              className="pop-item"
+              onClick={() => {
+                setOpen(false);
+                onOpenAbout();
+              }}
+            >
+              <span className="pop-icon">ⓘ</span> {t("setAbout")}
             </button>
           </div>
         </>

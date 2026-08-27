@@ -25,10 +25,11 @@ import { ChatsModal } from "./components/ChatsModal";
 import { ProjectModal } from "./components/ProjectModal";
 import { TodoList } from "./components/ToolCard";
 import { TerminalPanel } from "./components/TerminalPanel";
+import { AboutModal } from "./components/AboutModal";
 import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
 
-type ModalName = "settings" | "sessions" | "chats" | "project" | "diff" | null;
+type ModalName = "settings" | "sessions" | "chats" | "project" | "diff" | "about" | null;
 
 interface ConfirmState {
   message: string;
@@ -619,6 +620,7 @@ export function App(): React.ReactElement {
         onOpenProject={openProject}
         onPickFolder={pickFolder}
         onOpenSettings={() => setModal("settings")}
+        onOpenAbout={() => setModal("about")}
       />
 
       <main className="main">
@@ -781,6 +783,8 @@ export function App(): React.ReactElement {
         />
       )}
       {modal === "diff" && <DiffModal onClose={() => setModal(null)} />}
+      {modal === "about" && <AboutModal status={status} onClose={() => setModal(null)} />}
+
       {modal === "sessions" && (
         <SessionsModal
           currentId={status?.sessionId}
