@@ -1,5 +1,7 @@
-import React, { useState } from "react";
+import React, { useContext, useState } from "react";
 import type { ChatItem, TodoItemDTO, ToolCallDTO } from "../../../shared/protocol";
+import { LangContext } from "../i18n";
+import { toolLabel } from "../toolNames";
 import { DiffView } from "./DiffView";
 
 const TOOL_ICONS: Record<string, string> = {
@@ -52,6 +54,7 @@ export function ToolCard({
   progress?: string;
 }): React.ReactElement {
   const { call, result } = item;
+  const lang = useContext(LangContext);
   const running = !result;
   // Diffs and todo lists are worth seeing; raw output starts collapsed.
   const richDisplay =
@@ -81,7 +84,7 @@ export function ToolCard({
     <div className="tool-card">
       <button className="head" onClick={() => setOpen(!expanded)}>
         <span className="tool-icon">{TOOL_ICONS[call.tool] ?? "⚙"}</span>
-        <span className="tool-name">{call.tool}</span>
+        <span className="tool-name">{toolLabel(call.tool, lang)}</span>
         <span className="tool-subject">{result?.title ?? call.subject}</span>
         {stateEl}
       </button>

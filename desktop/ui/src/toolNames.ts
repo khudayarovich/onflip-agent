@@ -1,0 +1,90 @@
+import type { Lang } from "./i18n";
+
+/**
+ * Friendly display titles for tool cards — `web_search` is a protocol name,
+ * "Web Search" is what a person should read. Unknown tools (models invent
+ * aliases) fall back to prettified snake_case rather than raw underscores.
+ */
+const NAMES: Record<Lang, Record<string, string>> = {
+  en: {
+    read: "Read File",
+    write: "Write File",
+    edit: "Edit File",
+    multi_edit: "Edit File",
+    list: "List Files",
+    glob: "Find Files",
+    grep: "Search Code",
+    bash: "Run Command",
+    job_output: "Job Output",
+    kill_job: "Stop Job",
+    todo_write: "Update Plan",
+    todo_read: "Read Plan",
+    remember: "Remember",
+    web_fetch: "Fetch Page",
+    web_search: "Web Search",
+    download_file: "Download",
+    browser_open: "Open Browser",
+    browser_snapshot: "Read Page",
+    browser_click: "Click",
+    browser_type: "Type Text",
+    browser_key: "Press Key",
+    browser_screenshot: "Screenshot",
+    browser_close: "Close Browser",
+  },
+  ru: {
+    read: "Чтение файла",
+    write: "Запись файла",
+    edit: "Правка файла",
+    multi_edit: "Правка файла",
+    list: "Список файлов",
+    glob: "Поиск файлов",
+    grep: "Поиск по коду",
+    bash: "Команда",
+    job_output: "Вывод задачи",
+    kill_job: "Остановка задачи",
+    todo_write: "Обновление плана",
+    todo_read: "Чтение плана",
+    remember: "Запоминание",
+    web_fetch: "Загрузка страницы",
+    web_search: "Веб-поиск",
+    download_file: "Скачивание",
+    browser_open: "Открытие браузера",
+    browser_snapshot: "Чтение страницы",
+    browser_click: "Клик",
+    browser_type: "Ввод текста",
+    browser_key: "Нажатие клавиши",
+    browser_screenshot: "Скриншот",
+    browser_close: "Закрытие браузера",
+  },
+  uz: {
+    read: "Fayl o'qish",
+    write: "Fayl yozish",
+    edit: "Fayl tahriri",
+    multi_edit: "Fayl tahriri",
+    list: "Fayllar ro'yxati",
+    glob: "Fayl qidirish",
+    grep: "Kod qidirish",
+    bash: "Buyruq",
+    job_output: "Vazifa chiqishi",
+    kill_job: "Vazifani to'xtatish",
+    todo_write: "Rejani yangilash",
+    todo_read: "Rejani o'qish",
+    remember: "Eslab qolish",
+    web_fetch: "Sahifa yuklash",
+    web_search: "Veb qidiruv",
+    download_file: "Yuklab olish",
+    browser_open: "Brauzer ochish",
+    browser_snapshot: "Sahifa o'qish",
+    browser_click: "Bosish",
+    browser_type: "Matn kiritish",
+    browser_key: "Tugma bosish",
+    browser_screenshot: "Skrinshot",
+    browser_close: "Brauzer yopish",
+  },
+};
+
+export function toolLabel(tool: string, lang: Lang): string {
+  const hit = NAMES[lang][tool] ?? NAMES.en[tool];
+  if (hit) return hit;
+  return tool.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
