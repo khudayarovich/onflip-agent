@@ -123,7 +123,11 @@ function readVersion(): string {
     path.join(__dirname, "..", "..", "..", "package.json"),
   ]) {
     try {
-      const pkg = JSON.parse(fs.readFileSync(candidate, "utf8")) as { version?: string };
+      // A leading byte-order mark is invalid JSON and a normal thing to find
+      // in a file some Windows tool has rewritten. Losing the version over
+      // one is not worth it.
+      const raw = fs.readFileSync(candidate, "utf8").replace(/^﻿/, "");
+      const pkg = JSON.parse(raw) as { version?: string };
       if (typeof pkg.version === "string" && pkg.version) return pkg.version;
     } catch {
       /* try the next location */
