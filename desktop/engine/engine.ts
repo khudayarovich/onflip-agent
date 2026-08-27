@@ -23,6 +23,7 @@ import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import {
   configureBrowser,
   closeBrowser,
+  openLoginWindow,
   openConversation,
   checkSignedIn,
   setActiveProject,
@@ -823,6 +824,22 @@ export class Engine {
     this.pushTranscript();
     this.pushStatus();
     return this.statusPayload();
+  }
+
+  /**
+   * Open a visible ChatGPT window on OnFlip's own browser profile so the
+   * user can sign in by hand. The running headless browser is closed first —
+   * a login window nobody can see helps nobody — and the profile keeps the
+   * session afterwards, so one sign-in fixes every future send.
+   */
+  async openSignIn(): Promise<{ ok: boolean }> {
+    this.assertIdle();
+    await closeBrowser();
+    await openLoginWindow(this.auth.cookies);
+    this.notice(
+      "A ChatGPT window has opened — sign in there, then come back and send your message again. The sign-in is kept by OnFlip's browser profile."
+    );
+    return { ok: true };
   }
 
   removeSession(id: string): { ok: boolean } {

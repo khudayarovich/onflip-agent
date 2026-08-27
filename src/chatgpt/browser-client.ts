@@ -1250,6 +1250,18 @@ export async function waitForReply(
       )
       .catch(() => null)) as { url: string; text: string } | null;
     logger.warn("browser", "send never appeared — page state", pageState ?? { unreadable: true });
+    // The diagnosis this capture was built for, live on its first outing:
+    // a signed-out profile still shows a composer (anonymous mode), accepts
+    // the message into a /uc/ chat, and answers nothing our reader can see.
+    // Retrying into that is pointless; only signing in fixes it.
+    if (
+      pageState &&
+      (/\/uc\//.test(pageState.url) || /\bLog in\b[\s\S]{0,80}\bSign up\b/i.test(pageState.text))
+    ) {
+      throw new ChatGPTBrowserError(
+        "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. Sign in from the account menu (or run `onflip login`), then send again."
+      );
+    }
     throw new ChatGPTBrowserError(
       `The sent message never appeared in the conversation after ${secs}s — the send itself seems to have failed. Retrying.`
     );

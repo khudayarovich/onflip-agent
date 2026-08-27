@@ -85,6 +85,8 @@ peer.onRequest = async (method, rawParams) => {
       return engine.removeSession(String(params.id));
     case "rollback":
       return engine.rollbackMessage(String(params.messageId));
+    case "signIn":
+      return engine.openSignIn();
 
     case "recentProjects":
       return engine.recentProjectList();

@@ -200,6 +200,7 @@ const en = {
   aboutTokensOnFlip:
     "OnFlip's own working sizes: one outbound message tops out near the web composer's real limit (~60–80K characters), so the transcript is summarised automatically once it passes 60,000 characters (≈15K tokens) — adjustable in Settings → “Compact after”. Luna's 1M-token window applies to the API, not chat mode.",
   menuSkills: "Skills",
+  menuSignIn: "Sign in to ChatGPT",
   skillsTitle: "Skill Hub",
   skillsHint:
     "Pick a skill — it lands in the input as an @skill tag; add details and send. In chat the tag shows as a link revealing the full skill. Typing @ in the input opens this list too.",
@@ -381,6 +382,7 @@ const ru: Partial<Record<StringKey, string>> = {
   aboutTokensOnFlip:
     "Рабочие размеры OnFlip: одно исходящее сообщение упирается в реальный лимит веб-композера (~60–80 тыс. символов), поэтому переписка автоматически сжимается после 60 000 символов (≈15K токенов) — настраивается в «Настройки → Сжимать после». Окно Luna в 1M токенов относится к API, а не к чату.",
   menuSkills: "Навыки",
+  menuSignIn: "Войти в ChatGPT",
   skillsTitle: "Хаб навыков",
   skillsHint:
     "Выберите навык — он вставится в поле ввода как @skill-тег: добавьте детали и отправьте. В чате тег отображается ссылкой с полным текстом навыка. Символ @ в поле ввода тоже открывает этот список.",
@@ -560,6 +562,7 @@ const uz: Partial<Record<StringKey, string>> = {
   aboutTokensOnFlip:
     "OnFlip ish hajmlari: bitta yuboriladigan xabar veb-kompozerning haqiqiy chegarasiga (~60–80 ming belgi) yetadi, shuning uchun yozishma 60 000 belgidan (≈15K token) oshsa avtomatik siqiladi — «Sozlamalar → Siqish chegarasi» da o'zgartiriladi. Luna ning 1M tokenli oynasi API ga tegishli, chat rejimiga emas.",
   menuSkills: "Ko'nikmalar",
+  menuSignIn: "ChatGPT ga kirish",
   skillsTitle: "Ko'nikmalar markazi",
   skillsHint:
     "Ko'nikmani tanlang — u kiritish maydoniga @skill teg sifatida tushadi: tafsilot qo'shib yuboring. Chatda teg havola bo'lib, ko'nikmaning to'liq matnini ochadi. Maydonda @ yozish ham shu ro'yxatni ochadi.",

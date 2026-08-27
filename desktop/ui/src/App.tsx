@@ -705,6 +705,7 @@ export function App(): React.ReactElement {
         onOpenSettings={() => setModal("settings")}
         onOpenAbout={() => setModal("about")}
         onOpenSkills={() => setModal("skills")}
+        onSignIn={() => guard(api.signIn())}
       />
 
       <main className="main">

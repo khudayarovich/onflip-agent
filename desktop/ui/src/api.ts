@@ -29,6 +29,7 @@ export const api = {
   resumeSession: (id: string) => call<EngineStatus>("resumeSession", { id }),
   deleteSession: (id: string) => call<{ ok: boolean }>("deleteSession", { id }),
   rollback: (messageId: string) => call<{ text: string }>("rollback", { messageId }),
+  signIn: () => call<{ ok: boolean }>("signIn"),
 
   recentProjects: () => call<RecentProjectDTO[]>("recentProjects"),
   openProject: (dir: string) => call<EngineStatus>("openProject", { dir }),

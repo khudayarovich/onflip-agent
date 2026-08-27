@@ -26,6 +26,7 @@ export function Sidebar({
   onOpenSettings,
   onOpenAbout,
   onOpenSkills,
+  onSignIn,
 }: {
   status: EngineStatus | null;
   connect: ConnectState;
@@ -48,6 +49,7 @@ export function Sidebar({
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onOpenSkills: () => void;
+  onSignIn: () => void;
 }): React.ReactElement {
   const t = useT();
   const projectMenu = useMenu();
@@ -189,6 +191,7 @@ export function Sidebar({
         onOpenSettings={onOpenSettings}
         onOpenAbout={onOpenAbout}
         onOpenSkills={onOpenSkills}
+        onSignIn={onSignIn}
       />
 
 
@@ -349,6 +352,7 @@ function AccountBar({
   onOpenSettings,
   onOpenAbout,
   onOpenSkills,
+  onSignIn,
 }: {
   status: EngineStatus | null;
   connect: ConnectState;
@@ -357,6 +361,7 @@ function AccountBar({
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onOpenSkills: () => void;
+  onSignIn: () => void;
 }): React.ReactElement {
   const t = useT();
   const [open, setOpen] = useState(false);
@@ -411,6 +416,22 @@ function AccountBar({
             </div>
 
             <div className="pop-divider" />
+            <button
+              className="pop-item"
+              onClick={() => {
+                setOpen(false);
+                onSignIn();
+              }}
+            >
+              <span className="pop-icon">
+                <svg {...popIconProps}>
+                  <path d="M15 3h4a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-4" />
+                  <polyline points="10 17 15 12 10 7" />
+                  <line x1="15" y1="12" x2="3" y2="12" />
+                </svg>
+              </span>{" "}
+              {t("menuSignIn")}
+            </button>
             <button
               className="pop-item"
               onClick={() => {
