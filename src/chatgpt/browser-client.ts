@@ -869,6 +869,13 @@ export interface BrowserSendOptions {
    * showing OnFlip its own message rather than the model's answer.
    */
   sent?: string;
+  /**
+   * User-turn count taken *before* the message was typed. Measured after,
+   * the just-sent message is already in the count, "did our turn land?"
+   * can never come true, and the silence guard stays armed against a send
+   * that in fact landed fine.
+   */
+  userTurnsBefore?: number;
 }
 
 /**
@@ -951,6 +958,7 @@ async function sendOn(
   logger.debug("browser", "outgoing payload", { payload });
 
   priorTurnCount = (await assistantTurns(p)).length;
+  const userTurnsBefore = await userTurnCount(p).catch(() => 0);
 
   const typedAt = Date.now();
   await typeMessage(p, payload);
@@ -958,7 +966,11 @@ async function sendOn(
   await submitMessage(p);
 
   const sentAt = Date.now();
-  const reply = await waitForReply(p, priorTurnCount, { ...opts, sent: payload });
+  const reply = await waitForReply(p, priorTurnCount, {
+    ...opts,
+    sent: payload,
+    userTurnsBefore,
+  });
 
   // Group it in the sidebar now that the conversation exists.
   const conversationId = await groupInProject(p);
@@ -1055,9 +1067,13 @@ export async function waitForReply(
   let warnedNeverSent = false;
   let warnedEcho = false;
   let sendLanded = false;
-  const userTurnsBefore = await userTurnCount(p).catch(() => 0);
+  // The pre-typing count when the caller has it; a fresh sample otherwise
+  // (tests call this directly). A fresh sample already contains the sent
+  // message, so with it the landing can never be observed.
+  const userTurnsBefore = opts?.userTurnsBefore ?? (await userTurnCount(p).catch(() => 0));
   let loggedPlaceholder = "";
   let notedLongThink = false;
+  let brokeOnSilence = false;
 
   while (Date.now() < deadline) {
     if (opts?.signal?.aborted) {
@@ -1177,7 +1193,10 @@ export async function waitForReply(
     }
     // Only give up on silence when there is no evidence anything is under
     // way at all. A landed message is evidence.
-    if (!sendLanded && now - lastSignAt > NO_SIGN_MS) break;
+    if (!sendLanded && now - lastSignAt > NO_SIGN_MS) {
+      brokeOnSilence = true;
+      break;
+    }
   }
 
   // Falling out of the loop with only a placeholder means generation stalled.
@@ -1189,9 +1208,18 @@ export async function waitForReply(
   await assertLoggedIn(p);
   const secs = Math.round((Date.now() - started) / 1000);
 
-  // Two different failures wear the same "no reply" face, and they need
-  // different things from the user. Still generating at the deadline is a
-  // budget problem; never generating at all is a page or account problem.
+  // Three different failures wore the same "no reply" face, and they need
+  // different things done about them. Breaking on silence means the sent
+  // message never appeared in the thread — the send is what failed, and a
+  // resend usually lands it, so the message must not read as a budget
+  // problem (it did for real: a 95-second silence was blamed on a
+  // 600-second budget). Still generating at the true deadline is a budget
+  // problem; never generating at all is a page or account problem.
+  if (brokeOnSilence) {
+    throw new ChatGPTBrowserError(
+      `The sent message never appeared in the conversation after ${secs}s — the send itself seems to have failed. Retrying.`
+    );
+  }
   if (sawGeneration) {
     throw new ChatGPTBrowserError(
       `ChatGPT was still working after ${secs}s and the reply budget ran out. Give it longer with \`onflip config replyTimeout ${Math.max(600, secs * 2)}\` (seconds), or lower the reasoning effort with /thinking.`
