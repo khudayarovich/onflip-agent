@@ -494,11 +494,21 @@ a:hover {
   flex: 1;
 }
 .context-strip .strip-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
   padding: 3px 10px;
   border-radius: 6px;
   font-size: 12px;
   color: var(--text-secondary);
   flex-shrink: 0;
+}
+.context-strip .strip-btn svg {
+  opacity: 0.75;
+  flex-shrink: 0;
+}
+.context-strip .strip-btn:hover svg {
+  opacity: 1;
 }
 .context-strip .strip-btn:hover {
   background: var(--bg-hover);

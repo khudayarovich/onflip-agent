@@ -39,6 +39,58 @@ interface ConfirmState {
 
 const IDLE_STREAM: StreamingState = { active: false, iteration: 0, tail: "" };
 
+// -- top-strip icons (13px strokes, lucide-style) ----------------------------
+
+const stripIconProps = {
+  width: 13,
+  height: 13,
+  viewBox: "0 0 24 24",
+  fill: "none",
+  stroke: "currentColor",
+  strokeWidth: 1.9,
+  strokeLinecap: "round" as const,
+  strokeLinejoin: "round" as const,
+  "aria-hidden": true,
+};
+
+function TerminalIcon(): React.ReactElement {
+  return (
+    <svg {...stripIconProps}>
+      <polyline points="4 17 10 11 4 5" />
+      <line x1="12" y1="19" x2="20" y2="19" />
+    </svg>
+  );
+}
+
+function DiffIcon(): React.ReactElement {
+  return (
+    <svg {...stripIconProps}>
+      <path d="M12 4v10" />
+      <path d="M7 9h10" />
+      <path d="M7 20h10" />
+    </svg>
+  );
+}
+
+function UndoIcon(): React.ReactElement {
+  return (
+    <svg {...stripIconProps}>
+      <path d="M9 14 4 9l5-5" />
+      <path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11" />
+    </svg>
+  );
+}
+
+function ExportIcon(): React.ReactElement {
+  return (
+    <svg {...stripIconProps}>
+      <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+      <polyline points="7 10 12 15 17 10" />
+      <line x1="12" y1="15" x2="12" y2="3" />
+    </svg>
+  );
+}
+
 export function App(): React.ReactElement {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [connect, setConnect] = useState<ConnectState>("connecting");
@@ -668,20 +720,20 @@ export function App(): React.ReactElement {
             onClick={() => setTerminalOpen((o) => !o)}
             title={t("stripTerminalTip")}
           >
-            ❯_ {t("stripTerminal")}
+            <TerminalIcon /> {t("stripTerminal")}
           </button>
           <button
             className={`strip-btn${(status?.snapshotCount ?? 0) > 0 ? " badged" : ""}`}
             onClick={() => setModal("diff")}
             title={t("stripDiffTip")}
           >
-            ± {t("stripDiff")}{status?.snapshotCount ? ` (${status.snapshotCount})` : ""}
+            <DiffIcon /> {t("stripDiff")}{status?.snapshotCount ? ` (${status.snapshotCount})` : ""}
           </button>
           <button className="strip-btn" onClick={doUndo} title={t("stripUndoTip")}>
-            {t("stripUndo")}
+            <UndoIcon /> {t("stripUndo")}
           </button>
           <button className="strip-btn" onClick={doExport} title={t("stripExportTip")}>
-            {t("stripExport")}
+            <ExportIcon /> {t("stripExport")}
           </button>
         </div>
 
