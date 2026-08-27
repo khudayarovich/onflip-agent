@@ -239,14 +239,34 @@ export function protocolCorrection(reason: string): string {
 }
 
 /** Instruction used to compact a long conversation into a carry-forward brief. */
-export const COMPACT_INSTRUCTION = [
-  "[OnFlip] Summarise this session so it can continue in a fresh conversation with no history.",
-  "",
-  "Write it as a handover brief covering:",
-  "1. What the user asked for, including anything they corrected or clarified.",
-  "2. What you have already done — files created or changed, commands run, and what their results were.",
-  "3. What you learned about the codebase that would be expensive to rediscover.",
-  "4. What is still outstanding, and the exact next step.",
-  "",
-  "Be specific: real file paths, real function names, real command output. Do not include this instruction in your reply, and do not call any tool — reply with the brief itself.",
-].join("\n");
+/**
+ * Ask for a handover brief — a short one.
+ *
+ * The length limit is the whole point, and it used to be missing. Asked for a
+ * thorough brief with no ceiling, the model wrote one: measured across seven
+ * consecutive compactions, every summary came back between 27k and 29k
+ * characters against a 28k budget. Compaction therefore ended exactly where it
+ * started, the next tool call re-triggered it, and the session spent eight
+ * minutes summarising itself instead of working.
+ *
+ * A brief that does not fit is not a brief.
+ */
+export function compactInstruction(targetChars: number): string {
+  const words = Math.max(150, Math.round(targetChars / 6));
+  return [
+    "[OnFlip] Summarise this session so it can continue in a fresh conversation with no history.",
+    "",
+    `Hard limit: at most ${targetChars} characters (roughly ${words} words). A brief that exceeds this is useless — it leaves no room for the work that follows. Prefer terse notes to prose, and drop anything cheap to rediscover.`,
+    "",
+    "Write it as a handover brief covering:",
+    "1. What the user asked for, including anything they corrected or clarified.",
+    "2. What you have already done — files created or changed, commands run, and what their results were.",
+    "3. What you learned about the codebase that would be expensive to rediscover.",
+    "4. What is still outstanding, and the exact next step.",
+    "",
+    "Be specific but compact: real file paths and names, not transcripts. Never paste command output, file contents or HTML into the brief — describe the finding in a line instead. Do not include this instruction in your reply, and do not call any tool — reply with the brief itself.",
+  ].join("\n");
+}
+
+/** The default shape, for callers with no budget of their own. */
+export const COMPACT_INSTRUCTION = compactInstruction(6_000);

@@ -2,7 +2,7 @@ import { ChatMessage, ToolCall, ToolResult, SessionState } from "../types";
 import { ToolRegistry } from "../tools";
 import { Transport, SendOptions } from "../chatgpt/transport";
 import { newMessage, parseTurn, formatToolResult } from "./protocol";
-import { turnReminder, protocolCorrection, COMPACT_INSTRUCTION } from "./system";
+import { turnReminder, protocolCorrection, compactInstruction } from "./system";
 import { logger } from "../log";
 import {
   classifyFailure,
@@ -671,15 +671,34 @@ function detectFabrication(raw: string): string | null {
 async function compact(history: ChatMessage[], opts: AgentOptions): Promise<void> {
   const systemMessage = history[0]?.role === "system" ? history[0] : null;
 
+  // A summary is only worth having if it leaves room to work: a fifth of the
+  // budget, so a compacted session can take several more turns before it
+  // needs compacting again. Without this the brief filled the budget by
+  // itself and every tool call started another round.
+  const budget = opts.compactAfterChars ?? 28_000;
+  const target = Math.max(2_000, Math.floor(budget * 0.2));
+
   let summary = "";
   try {
     const reply = await opts.transport.send(
-      [...history, newMessage("user", COMPACT_INSTRUCTION)],
+      [...history, newMessage("user", compactInstruction(target))],
       { model: opts.model, thinking: "low", signal: opts.signal }
     );
     summary = parseTurn(reply.content).text.trim();
   } catch {
     // Summarising is best-effort; losing the session would be worse.
+  }
+
+  // Asked for a limit and given more anyway: keep the head, which is where a
+  // handover brief puts the request and the state, and say it was cut.
+  if (summary.length > target * 1.5) {
+    logger.warn("agent", "the summary ignored its length limit", {
+      chars: summary.length,
+      target,
+    });
+    summary = `${summary.slice(0, target)}
+
+… the rest of this brief was cut to fit the context budget …`;
   }
 
   opts.transport.reset();

@@ -1530,7 +1530,10 @@ export class Engine {
     parts.push(`- Started: ${new Date(this.session.createdAt).toISOString()}`);
     parts.push(`- Model: ${this.model}`);
     parts.push(`- Directory: ${this.session.cwd}`, "");
-    for (const m of this.history) {
+    // The whole conversation, not just the part still in context: an export
+    // taken after a compaction held two messages and looked like the session
+    // had been thrown away.
+    for (const m of [...this.archived, ...this.history]) {
       if (m.role === "system") continue;
       if (m.content.startsWith("<onflip:result")) {
         parts.push("### Tool result", "", "```", m.content.slice(0, 4000), "```", "");

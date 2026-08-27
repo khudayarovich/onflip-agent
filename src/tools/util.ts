@@ -115,7 +115,15 @@ export function isProbablyBinary(buf: Buffer): boolean {
 }
 
 /** Clip long tool output to a line budget, keeping head and tail. */
-export function clip(text: string, maxLines: number, maxChars = 30_000): string {
+/**
+ * Trim a tool result to something a context can hold.
+ *
+ * 30,000 characters was more than the whole compaction budget, so one broad
+ * command could push a session over the limit by itself — and did, seven
+ * times in eight minutes. A single result now takes a fraction of the budget,
+ * which is what keeps the room a conversation needs.
+ */
+export function clip(text: string, maxLines: number, maxChars = 12_000): string {
   let out = text;
   const lines = out.split("\n");
   if (lines.length > maxLines) {
