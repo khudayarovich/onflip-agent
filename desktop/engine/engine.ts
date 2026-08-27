@@ -109,7 +109,29 @@ import { replayItems, stripMentionNote } from "./replay";
 import { expandSkillToken } from "../shared/skills";
 import { subjectFor } from "./subjects";
 
-export const ENGINE_VERSION = "0.1.0";
+/**
+ * The app's version, read from the package it ships in.
+ *
+ * It was a hand-written constant, so it still said 0.1.0 six releases later
+ * — in the About panel, the status line and every log header. A number that
+ * has to be remembered is a number that goes stale.
+ */
+function readVersion(): string {
+  for (const candidate of [
+    path.join(__dirname, "..", "..", "package.json"),
+    path.join(__dirname, "..", "..", "..", "package.json"),
+  ]) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(candidate, "utf8")) as { version?: string };
+      if (typeof pkg.version === "string" && pkg.version) return pkg.version;
+    } catch {
+      /* try the next location */
+    }
+  }
+  return "0.0.0";
+}
+
+export const ENGINE_VERSION = readVersion();
 
 /**
  * The desktop engine: the OnFlip core assembled the same way the REPL

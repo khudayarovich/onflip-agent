@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useEffect, useState } from "react";
 import type { EngineStatus } from "../../../shared/protocol";
 import { Modal } from "./common";
 import { useT } from "../i18n";
@@ -16,6 +16,16 @@ export function AboutModal({
   onClose: () => void;
 }): React.ReactElement {
   const t = useT();
+  // The engine reports the shipped version; this is only for the moment
+  // before it has answered, and must not be a number of its own.
+  const [version, setVersion] = useState<string>(status?.version ?? "");
+  useEffect(() => {
+    if (status?.version) {
+      setVersion(status.version);
+      return;
+    }
+    void window.onflip.appInfo().then((info) => setVersion(info.version)).catch(() => {});
+  }, [status?.version]);
   return (
     <Modal title={t("setAbout")} onClose={onClose}>
       <div className="about-hero">
@@ -23,7 +33,7 @@ export function AboutModal({
         <div>
           <div className="about-name">OnFlip Desktop</div>
           <div className="about-version">
-            v{status?.version ?? "0.2.0"}
+            {version ? `v${version}` : ""}
             {status?.transport ? ` · ${status.transport}` : ""}
           </div>
         </div>

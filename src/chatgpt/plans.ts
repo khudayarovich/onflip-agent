@@ -2,11 +2,21 @@
  * What each ChatGPT plan gives you to work with.
  *
  * The context window is the model's; how much of it OnFlip can actually use is
- * a second question, and the smaller of the two governs. A transcript reaches
- * ChatGPT by being typed into the web composer, and that has its own ceiling —
- * measured on real sends, 4k characters go in about a second, 35k arrived as
- * "0 of 580 lines", and 56k took 64 seconds. So a Pro plan's 128k window does
- * not mean 128k can be sent: it means the plan is not the binding constraint.
+ * a second question, and on every paid plan the second one governs.
+ *
+ * A transcript reaches ChatGPT by being typed into the web composer, and that
+ * is where the real limit sits. Measured on real sends, with the composer
+ * working properly and insertText winning every attempt intact:
+ *
+ *     27k characters   8.6s
+ *     34k characters  29.9s
+ *     33k characters  67.7s
+ *
+ * Slow, and worse than slow: unpredictable, the same size costing eight
+ * seconds once and sixty-eight the next time. So a Pro plan's 128k-token
+ * window is not reachable through this transport — not because the plan is
+ * misread, but because a transcript that large cannot be typed. The ceiling
+ * sits just under where the times stop being tolerable.
  */
 
 export interface PlanProfile {
@@ -42,7 +52,7 @@ const CHARS_PER_TOKEN = 4;
  * Without a known plan the composer ceiling stands on its own, which is what
  * OnFlip did before it could read the plan at all.
  */
-export const COMPOSER_CEILING_CHARS = 45_000;
+export const COMPOSER_CEILING_CHARS = 28_000;
 /** Leave room in the window for the turn itself, not just its history. */
 const USABLE_FRACTION = 0.55;
 
