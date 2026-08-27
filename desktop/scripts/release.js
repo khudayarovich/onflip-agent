@@ -82,11 +82,15 @@ function restore() {
 }
 
 function main() {
+  // --mac builds the macOS artifacts; it only produces working apps when run
+  // ON macOS (the .app carries symlinks and dmg needs hdiutil), which is why
+  // CI runs it on a macos runner rather than this ever running on Windows.
+  const mac = process.argv.includes("--mac");
   run("npx tsc -p tsconfig.json");
   run("npx vite build");
   materialise();
   try {
-    run("npx electron-builder --win --x64");
+    run(mac ? "npx electron-builder --mac --arm64 --x64" : "npx electron-builder --win --x64");
   } finally {
     restore();
   }

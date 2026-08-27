@@ -1,0 +1,53 @@
+name: macOS desktop build
+
+# Builds the OnFlip Desktop macOS artifacts (dmg + zip, arm64 and x64) on a
+# real Mac — an .app carries symlinks and dmg needs hdiutil, so this cannot
+# be cross-built from Windows — and attaches them to an existing
+# desktop-v<version> release.
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach the artifacts to (e.g. desktop-v0.3.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    env:
+      ONFLIP_SKIP_BROWSER_DOWNLOAD: "1"
+      # No signing certificate in CI; build unsigned rather than fail.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      # Builds the dispatching branch (not the tag): the version in
+      # package.json is what names the artifacts, and mac support may land
+      # in commits after the tag being attached to.
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install core dependencies (builds dist/)
+        run: npm install --no-audit --no-fund
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Build macOS artifacts
+        working-directory: desktop
+        run: node scripts/release.js --mac
+
+      - name: Upload artifacts to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ls -la desktop/release
+          gh release upload "${{ github.event.inputs.tag }}" \
+            desktop/release/OnFlip-*-mac-*.dmg \
+            desktop/release/OnFlip-*-mac-*.zip \
+            --clobber

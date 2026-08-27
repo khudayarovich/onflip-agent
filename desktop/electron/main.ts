@@ -425,32 +425,44 @@ function registerTerminal(): void {
       return { ok: false, error: "A command is still running — stop it first." };
     }
     const { command, cwd } = payload;
-    // -EncodedCommand sidesteps every quoting hazard in the user's command.
-    // The prelude makes output land as UTF-8 whatever the system codepage is —
-    // without it, Cyrillic (and any non-ASCII) arrives in the OEM encoding and
-    // renders as mojibake. Progress records are silenced because a redirected
-    // PowerShell serialises them as CLIXML blobs on stderr; the command's real
-    // errors are merged into stdout as plain text instead. The sentinel line
-    // rides at the end so `cd` persists between commands.
-    const script = [
-      "$ProgressPreference = 'SilentlyContinue'",
-      "try { $null = chcp 65001 } catch {}",
-      "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
-      "try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
-      "& {",
-      command,
-      "} 2>&1 | Out-String -Stream",
-      'Write-Output ("ONFLIP_" + "CWD:" + (Get-Location).Path)',
-    ].join("\n");
-    const encoded = Buffer.from(script, "utf16le").toString("base64");
 
     let child: ChildProcess;
     try {
-      child = spawn(
-        "powershell.exe",
-        ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
-        { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
-      );
+      if (process.platform === "win32") {
+        // -EncodedCommand sidesteps every quoting hazard in the user's
+        // command. The prelude makes output land as UTF-8 whatever the
+        // system codepage is — without it, Cyrillic (and any non-ASCII)
+        // arrives in the OEM encoding and renders as mojibake. Progress
+        // records are silenced because a redirected PowerShell serialises
+        // them as CLIXML blobs on stderr; the command's real errors are
+        // merged into stdout as plain text instead. The sentinel line rides
+        // at the end so `cd` persists between commands.
+        const script = [
+          "$ProgressPreference = 'SilentlyContinue'",
+          "try { $null = chcp 65001 } catch {}",
+          "try { [Console]::OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
+          "try { $OutputEncoding = [System.Text.Encoding]::UTF8 } catch {}",
+          "& {",
+          command,
+          "} 2>&1 | Out-String -Stream",
+          'Write-Output ("ONFLIP_" + "CWD:" + (Get-Location).Path)',
+        ].join("\n");
+        const encoded = Buffer.from(script, "utf16le").toString("base64");
+        child = spawn(
+          "powershell.exe",
+          ["-NoLogo", "-NoProfile", "-ExecutionPolicy", "Bypass", "-EncodedCommand", encoded],
+          { cwd, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }
+        );
+      } else {
+        // macOS/Linux: a login bash, detached into its own process group so
+        // stopping a command can take its whole tree down. Same sentinel.
+        const script = `{ ${command}\n} 2>&1; printf '\\nONFLIP_''CWD:%s\\n' "$PWD"`;
+        child = spawn("/bin/bash", ["-lc", script], {
+          cwd,
+          detached: true,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      }
     } catch (e) {
       return { ok: false, error: e instanceof Error ? e.message : String(e) };
     }
@@ -508,24 +520,33 @@ function registerTerminal(): void {
   ipcMain.handle("term-kill", () => {
     const child = termChild;
     if (!child?.pid) return false;
-    // /T takes the whole tree down — the shell plus whatever it started.
-    try {
-      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
-    } catch {
-      child.kill();
-    }
+    killTree(child);
     return true;
   });
 
   app.on("before-quit", () => {
-    if (termChild?.pid) {
-      try {
-        spawn("taskkill", ["/PID", String(termChild.pid), "/T", "/F"], { windowsHide: true });
-      } catch {
-        termChild.kill();
-      }
-    }
+    if (termChild) killTree(termChild);
   });
+}
+
+/** Stop a terminal command and everything it started. */
+function killTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  try {
+    if (process.platform === "win32") {
+      // /T takes the whole tree down — the shell plus whatever it started.
+      spawn("taskkill", ["/PID", String(child.pid), "/T", "/F"], { windowsHide: true });
+    } else {
+      // Detached spawn made the child a group leader; signal the group.
+      process.kill(-child.pid, "SIGKILL");
+    }
+  } catch {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -565,12 +586,19 @@ if (!singleInstance) {
   void app.whenReady().then(() => {
     registerIpc();
     createWindow();
-    createTray();
+    // The tray icon is a Windows .ico; macOS keeps the app in the dock
+    // instead, which is that platform's own version of background mode.
+    if (process.platform === "win32") createTray();
     startEngine(loadState().lastCwd || os.homedir());
   });
 
   // A tray app outlives its window: all-closed just means "in the background".
   app.on("window-all-closed", () => {});
+
+  // macOS: clicking the dock icon brings the hidden window back.
+  app.on("activate", () => {
+    showWindow();
+  });
 
   let engineStopped = false;
   app.on("before-quit", (e) => {
