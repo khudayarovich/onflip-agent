@@ -382,9 +382,14 @@ async function waitForConversationId(p: Page, timeout = 8_000): Promise<string |
 
 /** The account's most recent conversation ids, newest first. */
 async function recentConversationIds(p: Page, limit = 20): Promise<string[]> {
+  // One token probe only. This runs at chat-open, on the coldest page of the
+  // session, where the full five-attempt wait (with its reload) costs up to
+  // ten seconds before typing can even start — and the snapshot is
+  // best-effort anyway: without it, filing falls back to the URL id.
   const json = (await backendApi(
     p,
-    `/backend-api/conversations?offset=0&limit=${limit}&order=updated`
+    `/backend-api/conversations?offset=0&limit=${limit}&order=updated`,
+    { tokenAttempts: 1 }
   )) as { items?: { id?: unknown }[] };
   const out: string[] = [];
   for (const item of json.items ?? []) {
@@ -1608,13 +1613,13 @@ async function warmSession(): Promise<boolean> {
 async function backendApi(
   p: Page,
   path: string,
-  init?: { method?: string; body?: unknown }
+  init?: { method?: string; body?: unknown; tokenAttempts?: number }
 ): Promise<unknown> {
   // Fetched out here, where an empty answer can be waited out. It also has to
   // be: the page has no access to this module's constants, so the signed-out
   // message it used to return by name was a ReferenceError that masked every
   // real diagnosis with a stack trace.
-  const token = await pageAccessToken(p);
+  const token = await pageAccessToken(p, init?.tokenAttempts ?? 5);
   if (!token) throw new ChatGPTBrowserError(SIGNED_OUT_MESSAGE);
 
   const result = await p.evaluate(

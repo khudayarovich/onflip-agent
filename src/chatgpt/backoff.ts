@@ -69,6 +69,17 @@ export function classifyFailure(message: string): Classification {
     };
   }
 
+  // The composer refusing the message is the page not being ready yet — the
+  // exact failure a short retry fixes, measured on every cold start of this
+  // machine. It must be tested before the fatal patterns below: its advice
+  // text ends "run `onflip login --headed`", and that word "login" made the
+  // fatal test swallow it, so the one error that most wants a retry was the
+  // one error that never got it. The user's manual resend always worked,
+  // which is precisely what the retry should have been.
+  if (/could not be entered into the ChatGPT composer/i.test(m)) {
+    return { kind: "retry", seconds: 0, reason: m };
+  }
+
   if (/log ?in|signed out|Cloudflare|Interrupted/i.test(m)) {
     return { kind: "fatal", seconds: 0, reason: m };
   }
