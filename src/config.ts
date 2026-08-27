@@ -26,6 +26,8 @@ export interface OnFlipConfig {
    * silently sign the user back in and logout would mean nothing.
    */
   signedOut?: boolean;
+  /** The plan ChatGPT reports, e.g. "plus" or "chatgptproplan". */
+  planType?: string;
   accountName?: string;
   accountEmail?: string;
 

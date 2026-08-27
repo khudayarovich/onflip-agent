@@ -86,6 +86,7 @@ async function ensurePage(): Promise<Page> {
   page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(20_000);
   logger.info("browser-tool", "opened the automation browser", { headless });
+  void startScreencast(page);
   return page;
 }
 
@@ -96,6 +97,7 @@ export async function closeAutomationBrowser(): Promise<void> {
   } catch {
     /* already gone */
   } finally {
+    await stopScreencast();
     context = null;
     page = null;
     frameSink?.({ closed: true });
@@ -125,12 +127,74 @@ export interface BrowserFrame {
   title?: string;
   note?: string;
   closed?: boolean;
+  /** True for a streamed frame, false for a still taken after an action. */
+  live?: boolean;
 }
 
 let frameSink: ((frame: BrowserFrame) => void) | null = null;
+/** The live screencast, when one is running. */
+let cast: { session: import("playwright").CDPSession; page: Page } | null = null;
 
 export function setBrowserFrameSink(sink: ((frame: BrowserFrame) => void) | null): void {
   frameSink = sink;
+  if (!sink) void stopScreencast();
+}
+
+/**
+ * Stream the agent's browser, rather than photographing it.
+ *
+ * A screenshot after each action shows where the page ended up and nothing of
+ * how it got there — scrolling, typing and page loads all happen between
+ * frames, so it reads as a slideshow rather than a browser. Chrome's own
+ * screencast pushes a frame whenever the page actually changes, which is what
+ * makes it look live, and it costs less than polling: nothing is captured
+ * while the page is still.
+ *
+ * It is still a view. The stream carries pixels one way; clicks in the panel
+ * would land in a page the agent is mid-way through reasoning about, against
+ * element refs taken from a snapshot before them.
+ */
+async function startScreencast(p: Page): Promise<void> {
+  if (!frameSink || cast?.page === p) return;
+  await stopScreencast();
+  try {
+    const session = await p.context().newCDPSession(p);
+    session.on("Page.screencastFrame", (frame: { data: string; sessionId: number }) => {
+      // Acknowledge first: Chrome sends no further frames until it is.
+      void session.send("Page.screencastFrameAck", { sessionId: frame.sessionId }).catch(() => {});
+      frameSink?.({
+        image: `data:image/jpeg;base64,${frame.data}`,
+        url: p.url(),
+        live: true,
+      });
+    });
+    await session.send("Page.startScreencast", {
+      format: "jpeg",
+      quality: 55,
+      maxWidth: 1280,
+      maxHeight: 900,
+      everyNthFrame: 1,
+    });
+    cast = { session, page: p };
+    logger.info("browser-tool", "streaming the browser to the desktop panel");
+  } catch (e) {
+    // A stream is a nicety; the per-action frames below still work.
+    logger.debug("browser-tool", "could not start the screencast", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+async function stopScreencast(): Promise<void> {
+  const current = cast;
+  cast = null;
+  if (!current) return;
+  try {
+    await current.session.send("Page.stopScreencast");
+    await current.session.detach();
+  } catch {
+    /* the page is already gone */
+  }
 }
 
 /** Capture the page and push it to the panel. Never throws into a tool run. */

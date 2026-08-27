@@ -826,8 +826,20 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
   // preserved every line of every payload in practice; the synthetic paste
   // event is kept as a fallback because ProseMirror handles real pastes well,
   // but it is not what the live composer responds to, so it goes second.
+  /** Nothing in the composer gets to hang the send. */
+  const capped = <T>(work: Promise<T>, ms: number, what: string): Promise<T> =>
+    Promise.race([
+      work,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`${what} did not return within ${ms}ms`)), ms)
+      ),
+    ]);
+
   const insertText = { name: "insertText", run: () => p.keyboard.insertText(text) };
-  const paste = { name: "paste", run: () => composer.evaluate(PASTE_INTO, text) };
+  const paste = {
+    name: "paste",
+    run: () => capped(composer.evaluate(PASTE_INTO, text), 6_000, "paste"),
+  };
   const fill = { name: "fill", run: () => composer.fill(text, { timeout: 8_000 }) };
 
   /**
@@ -842,13 +854,42 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
    */
   const LARGE_PAYLOAD_CHARS = 8_000;
   const costly = text.length > LARGE_PAYLOAD_CHARS;
-  const strategies: { name: string; run: () => Promise<unknown> }[] = costly
-    ? [paste, insertText, fill]
-    : [insertText, paste, fill];
+  /**
+   * insertText first, at every size.
+   *
+   * Paste was tried first for large payloads on the theory that one
+   * transaction beats a stream of input. Measured against the real composer
+   * it does not even return: `evaluate` ran past a thirty-second timeout with
+   * a large string, which is most of the minute a big send was taking. It
+   * stays as a fallback, on a leash it cannot exceed.
+   *
+   * insertText is also only now reachable — the focus check that gates it had
+   * been answering false since it was written, which is what left `fill`
+   * doing every send.
+   */
+  const strategies: { name: string; run: () => Promise<unknown> }[] = [
+    insertText,
+    paste,
+    fill,
+  ];
 
 
   // Keep the best attempt rather than failing on the first imperfect one.
   let best: { check: ComposerCheck; text: string } | null = null;
+  /** What each strategy cost, reported when composing turns out slow. */
+  const attempts: { name: string; ms: number; intact?: boolean; failed?: boolean }[] = [];
+  const startedAt = Date.now();
+  const report = () => {
+    const total = Date.now() - startedAt;
+    // Only when it hurt: a fast compose has nothing to explain.
+    if (total < 3_000) return;
+    logger.info("browser", "composing was slow", {
+      totalMs: total,
+      chars: text.length,
+      lines: text.split("\n").length,
+      attempts,
+    });
+  };
 
   // Two full rounds. A round can fail for reasons that pass on their own — the
   // box not yet editable, focus still settling — and burning a whole transport
@@ -870,14 +911,17 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
         logger.debug("browser", "composer would not take focus", { strategy: strategy.name });
         continue;
       }
+      const strategyStart = Date.now();
       try {
         await strategy.run();
-      } catch {
+      } catch (e) {
+        attempts.push({ name: strategy.name, ms: Date.now() - strategyStart, failed: true });
         continue;
       }
       await p.waitForTimeout(150);
       const seen = await readComposer(p);
       const check = inspectComposer(seen, text);
+      attempts.push({ name: strategy.name, ms: Date.now() - strategyStart, intact: check.intact });
       logger.debug("browser", `composer via ${strategy.name}`, {
         strategy: strategy.name,
         round,
@@ -888,7 +932,10 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
       });
 
       // Perfect: characters and line structure both survived.
-      if (check.intact && check.linesKept) return;
+      if (check.intact && check.linesKept) {
+        report();
+        return;
+      }
       if (!best || (check.intact && !best.check.intact)) best = { check, text: seen };
       // Intact but reflowed, on a payload where another attempt costs more
       // than the line breaks are worth: take it and move on.
@@ -900,6 +947,7 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
 
   // Losing the line structure is survivable — the reply parser can recover a
   // flattened block — so only a genuine loss of content is worth failing on.
+  report();
   if (best?.check.intact) {
     if (!best.check.linesKept) {
       lastComposerWarning = `The composer flattened the message (${best.check.wantLines} lines in, ${best.check.gotLines} out). Replies may come back malformed.`;
@@ -1739,6 +1787,26 @@ export async function fetchModelsViaBrowser(cookies: SessionCookie[]): Promise<R
   // one place for it to be wrong.
   const p = await pageOnChatGpt(cookies);
   return (await backendApi(p, "/backend-api/models")) as Record<string, unknown>;
+}
+
+/**
+ * Which plan the account is on.
+ *
+ * Context windows differ by plan, so how much transcript is worth keeping
+ * differs with it too. ChatGPT states the plan on the account endpoint; there
+ * is no need to guess it from behaviour.
+ */
+export async function fetchAccountPlan(cookies: SessionCookie[]): Promise<string | null> {
+  const p = await pageOnChatGpt(cookies);
+  const json = (await backendApi(p, "/backend-api/accounts/check/v4-2023-04-08")) as {
+    accounts?: Record<string, { account?: { plan_type?: string; structure?: string } }>;
+  };
+  const accounts = json?.accounts ?? {};
+  for (const key of ["default", ...Object.keys(accounts)]) {
+    const plan = accounts[key]?.account?.plan_type;
+    if (typeof plan === "string" && plan.trim()) return plan.trim().toLowerCase();
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------

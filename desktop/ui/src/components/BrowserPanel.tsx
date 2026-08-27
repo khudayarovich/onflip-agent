@@ -22,6 +22,8 @@ export interface BrowserFrameDTO {
   title?: string;
   note?: string;
   closed?: boolean;
+  /** A streamed frame rather than a still taken after an action. */
+  live?: boolean;
 }
 
 export function BrowserPanel({
@@ -37,13 +39,15 @@ export function BrowserPanel({
   const [zoom, setZoom] = useState(false);
   const seenRef = useRef<string | undefined>(undefined);
 
-  // A new frame lands: drop any zoom so the fresh page is shown whole.
+  // A new *page* drops any zoom so it is shown whole. Keyed on the URL, not
+  // the image: a live stream replaces the image several times a second, and
+  // resetting on that would undo the zoom before it could be looked at.
   useEffect(() => {
-    if (frame?.image && frame.image !== seenRef.current) {
-      seenRef.current = frame.image;
+    if (frame?.url && frame.url !== seenRef.current) {
+      seenRef.current = frame.url;
       setZoom(false);
     }
-  }, [frame?.image]);
+  }, [frame?.url]);
 
   const host = (() => {
     if (!frame?.url) return "";
@@ -61,6 +65,7 @@ export function BrowserPanel({
         <span className="term-cwd" title={frame?.url ?? ""}>
           {host}
         </span>
+        {frame?.live && <span className="browser-live" title={t("browserLive")} />}
         {frame?.image && (
           <button
             className="term-btn"

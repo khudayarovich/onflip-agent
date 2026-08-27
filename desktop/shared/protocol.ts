@@ -207,7 +207,14 @@ export type EngineEvent =
   | { event: "todos"; data: { items: TodoItemDTO[] } }
   | {
       event: "browser-frame";
-      data: { image?: string; url?: string; title?: string; note?: string; closed?: boolean };
+      data: {
+        image?: string;
+        url?: string;
+        title?: string;
+        note?: string;
+        closed?: boolean;
+        live?: boolean;
+      };
     }
   | { event: "log"; data: { line: string } };
 

@@ -23,6 +23,7 @@ import { spawnExtractToken, takeExtractError } from "onflip/dist/auth/extract";
 import { fetchAccessToken } from "onflip/dist/auth/access";
 import { chooseTransport, Transport } from "onflip/dist/chatgpt/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
+import { compactionBudget, describePlan } from "onflip/dist/chatgpt/plans";
 import {
   configureBrowser,
   closeBrowser,
@@ -34,6 +35,7 @@ import {
   listProjectConversations,
   listProjects,
   createProject,
+  fetchAccountPlan,
   takeComposerWarning,
   queueAttachments,
   takeReplyImages,
@@ -281,8 +283,34 @@ export class Engine {
    * session settle on a slug the account actually has.
    */
   private async learnAccountModels(): Promise<void> {
-    if (loadConfig().discoveredModels?.length) return;
     if (!this.transport || this.transport.name !== "browser") return;
+    const cfg = loadConfig();
+
+    // The plan decides how much transcript is worth keeping. Learned on its
+    // own schedule: gating it behind the model list meant an account that
+    // already knew its models — every account after the first run — would
+    // never read its plan at all.
+    if (!cfg.planType) {
+      try {
+        const plan = await fetchAccountPlan(this.auth.cookies);
+        if (plan) {
+          saveConfig({ planType: plan });
+          logger.info("engine", "account plan", {
+            plan,
+            described: describePlan(plan),
+            compactAt: compactionBudget(plan),
+          });
+        }
+      } catch (e) {
+        // A plan OnFlip cannot read simply leaves the composer ceiling in
+        // charge, which is what it used before it could read one.
+        logger.warn("engine", "could not read the account plan", {
+          error: e instanceof Error ? e.message : String(e),
+        });
+      }
+    }
+
+    if (cfg.discoveredModels?.length) return;
     try {
       await this.refreshModels();
       const wanted = defaultModel();
@@ -819,12 +847,16 @@ export class Engine {
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
       signal: this.abort.signal,
       compactAfterMessages: this.config.compactAfter ?? 60,
-      // 30k, not 60k. The ceiling is not the model's limit but the
-      // composer's: measured on real sends, 4k characters are typed in 1.3s,
-      // 35k arrived as "0 of 580 lines", and 56k took 64 seconds. A
-      // transcript allowed to grow to 60k produces exactly the payloads that
-      // cannot be typed, so it is summarised while it is still sendable.
-      compactAfterChars: this.config.compactAfterChars ?? 30_000,
+      // The ceiling here is the composer's, not the model's — OnFlip cannot
+      // read the account's plan, so this is a local heuristic about what can
+      // be typed, nothing to do with the context window the plan grants.
+      // 30k compacted too eagerly, and compacting is not cheap either
+      // (measured: ~2 minutes). 45k sits between a payload that types and a
+      // summary run often enough to be its own tax.
+      // Set by the user, or derived from the plan: a bigger window is worth
+      // more transcript, and the composer's own ceiling caps both.
+      compactAfterChars:
+        this.config.compactAfterChars ?? compactionBudget(loadConfig().planType),
       events: {
         onThinking: (iteration) => this.peer.emit("thinking", { iteration }),
         onDelta: (full) => {
@@ -1264,7 +1296,7 @@ export class Engine {
       browserHeadless: cfg.browserHeadless ?? true,
       maxIterations: firstPositiveInt([cfg.maxIterations], 40),
       replyTimeout: firstPositiveInt([cfg.replyTimeout], 600),
-      compactAfterChars: firstPositiveInt([cfg.compactAfterChars], 30_000),
+      compactAfterChars: firstPositiveInt([cfg.compactAfterChars], 45_000),
       rules,
       allowedCommands: cfg.allowedCommands ?? [],
       allowedWriteDirs: cfg.allowedWriteDirs ?? [],
@@ -1277,7 +1309,7 @@ export class Engine {
       browserHeadless: (v) => ({ browserHeadless: Boolean(v) }),
       maxIterations: (v) => ({ maxIterations: firstPositiveInt([v as number], 40) }),
       replyTimeout: (v) => ({ replyTimeout: firstPositiveInt([v as number], 600) }),
-      compactAfterChars: (v) => ({ compactAfterChars: firstPositiveInt([v as number], 30_000) }),
+      compactAfterChars: (v) => ({ compactAfterChars: firstPositiveInt([v as number], 45_000) }),
       allowedCommands: (v) => ({ allowedCommands: Array.isArray(v) ? v.map(String) : [] }),
       allowedWriteDirs: (v) => ({ allowedWriteDirs: Array.isArray(v) ? v.map(String) : [] }),
     };

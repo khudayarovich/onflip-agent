@@ -2635,3 +2635,18 @@ a:hover {
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
+
+/* A quiet pulse while the browser is streaming. */
+.browser-live {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--green);
+  flex: none;
+  margin-right: 2px;
+  animation: browser-live-pulse 1.8s ease-in-out infinite;
+}
+@keyframes browser-live-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.35; }
+}
