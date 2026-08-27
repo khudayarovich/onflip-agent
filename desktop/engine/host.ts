@@ -90,6 +90,8 @@ peer.onRequest = async (method, rawParams) => {
       return engine.rollbackMessage(String(params.messageId));
     case "importBrowserSession":
       return engine.importBrowserSession();
+    case "setBrowserViewport":
+      return engine.setBrowserViewport(Number(params.width), Number(params.height));
     case "applySignOut":
       return engine.applySignOut();
     case "applySignIn":

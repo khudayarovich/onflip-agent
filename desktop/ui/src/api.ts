@@ -30,6 +30,9 @@ export const api = {
   resumeSession: (id: string) => call<EngineStatus>("resumeSession", { id }),
   deleteSession: (id: string) => call<{ ok: boolean }>("deleteSession", { id }),
   rollback: (messageId: string) => call<{ text: string }>("rollback", { messageId }),
+  /** Tell the agent's browser what shape the panel is, so pages fill it. */
+  setBrowserViewport: (width: number, height: number) =>
+    call<{ ok: boolean }>("setBrowserViewport", { width, height }),
   /** Try Chrome, Edge and Firefox for a session already signed in. */
   importBrowserSession: () =>
     call<{ ok: boolean; source?: string; reason?: string }>("importBrowserSession"),

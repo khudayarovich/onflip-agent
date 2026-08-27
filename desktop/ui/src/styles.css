@@ -2484,18 +2484,21 @@ a:hover {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  padding: 10px;
+  /* No padding: the page is rendered at this element's size, so any inset
+     here would make the viewport disagree with the space it is drawn in. */
+  padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 8px;
 }
 
 .browser-shot {
   width: 100%;
-  height: auto;
+  height: 100%;
+  /* The page is rendered at the panel's own shape, so it fills it rather than
+     sitting as a letterboxed still at the top. */
+  object-fit: contain;
+  object-position: top center;
   display: block;
-  border: 1px solid var(--border);
-  border-radius: 8px;
   background: #ffffff;
   cursor: zoom-in;
 }
@@ -2507,6 +2510,8 @@ a:hover {
 }
 
 .browser-note {
+  padding: 4px 8px;
+  border-top: 1px solid var(--border);
   font-size: 11.5px;
   color: var(--text-muted);
   padding: 0 2px;

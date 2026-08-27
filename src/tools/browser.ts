@@ -25,6 +25,47 @@ import { err, ok, denied, asBool, asNumber, clip } from "./util";
 let context: BrowserContext | null = null;
 let page: Page | null = null;
 
+/**
+ * The size the agent's browser renders at.
+ *
+ * Portrait by default, and narrow enough that sites serve their mobile
+ * layout — because the desktop shows this browser in a side panel, and a
+ * 1280x900 desktop page shrunk into a tall column is unreadable. The panel
+ * reports its own size as it is dragged, so the page reflows to fill it
+ * rather than being letterboxed inside it.
+ */
+let viewport = { width: 430, height: 932 };
+
+/** A narrow viewport is a phone, and should be told so to get mobile layouts. */
+function isMobileShape(w: number): boolean {
+  return w < 700;
+}
+
+const MOBILE_UA =
+  "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) " +
+  "Chrome/131.0.0.0 Mobile Safari/537.36";
+
+/**
+ * Match the agent's browser to the panel showing it.
+ *
+ * Applied live where possible; a change of shape between phone and desktop
+ * also changes the user agent and touch support, which only a relaunch can
+ * pick up, so that is deferred to the next launch rather than forced.
+ */
+export async function setBrowserViewport(width: number, height: number): Promise<void> {
+  const next = {
+    width: Math.max(320, Math.min(2000, Math.round(width))),
+    height: Math.max(480, Math.min(2000, Math.round(height))),
+  };
+  if (next.width === viewport.width && next.height === viewport.height) return;
+  viewport = next;
+  if (page && !page.isClosed()) {
+    await page.setViewportSize(next).catch(() => {
+      /* the page is busy; the next launch picks it up */
+    });
+  }
+}
+
 /** Refs are only meaningful for the snapshot that created them. */
 let snapshotSerial = 0;
 
@@ -55,9 +96,15 @@ function shotsDir(): string {
  */
 async function launch(headless: boolean): Promise<BrowserContext> {
   const preferred = process.env.ONFLIP_BROWSER_CHANNEL ?? "chromium";
+  const mobile = isMobileShape(viewport.width);
   const options = {
     headless,
-    viewport: { width: 1280, height: 900 },
+    viewport: { ...viewport },
+    // A phone-shaped viewport that still claims to be a desktop gets desktop
+    // HTML reflowed into a column, which is the worst of both.
+    ...(mobile
+      ? { userAgent: MOBILE_UA, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
+      : {}),
     args: ["--disable-blink-features=AutomationControlled", "--no-first-run"],
   };
   if (preferred !== "chromium") {
@@ -85,7 +132,11 @@ async function ensurePage(): Promise<Page> {
   context = await launch(headless);
   page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(20_000);
-  logger.info("browser-tool", "opened the automation browser", { headless });
+  logger.info("browser-tool", "opened the automation browser", {
+    headless,
+    viewport,
+    mobile: isMobileShape(viewport.width),
+  });
   void startScreencast(page);
   return page;
 }
@@ -171,8 +222,8 @@ async function startScreencast(p: Page): Promise<void> {
     await session.send("Page.startScreencast", {
       format: "jpeg",
       quality: 55,
-      maxWidth: 1280,
-      maxHeight: 900,
+      maxWidth: viewport.width,
+      maxHeight: viewport.height,
       everyNthFrame: 1,
     });
     cast = { session, page: p };

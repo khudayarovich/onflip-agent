@@ -45,7 +45,7 @@ import {
   deleteConversations,
   RemoteProject,
 } from "onflip/dist/chatgpt/browser-client";
-import { setBrowserFrameSink, BrowserFrame } from "onflip/dist/tools/browser";
+import { setBrowserFrameSink, setBrowserViewport, BrowserFrame } from "onflip/dist/tools/browser";
 import { recordSend, usageSummary, associateAccount, UNKNOWN_ACCOUNT } from "./usage";
 import {
   createToolRegistry,
@@ -481,6 +481,12 @@ export class Engine {
     if (this.auth?.cookies.length) return true;
     if (loadConfig().sessionToken) return true;
     return this.probeSignedIn === true;
+  }
+
+  /** The panel telling the browser what shape to render at. */
+  async setBrowserViewport(width: number, height: number): Promise<{ ok: boolean }> {
+    await setBrowserViewport(width, height);
+    return { ok: true };
   }
 
   private accountKey(): string {

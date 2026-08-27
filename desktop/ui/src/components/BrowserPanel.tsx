@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { api } from "../api";
 import { useT } from "../i18n";
 
 /**
@@ -49,6 +50,32 @@ export function BrowserPanel({
     }
   }, [frame?.url]);
 
+  // The browser renders at whatever size this panel is, so a page fills the
+  // column instead of being a desktop screenshot shrunk into it. Debounced:
+  // a drag would otherwise resize the page on every mouse move.
+  const bodyRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const el = bodyRef.current;
+    if (!el || !open) return;
+    let timer: number | undefined;
+    const report = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const rect = el.getBoundingClientRect();
+        if (rect.width > 40 && rect.height > 40) {
+          void api.setBrowserViewport(Math.round(rect.width), Math.round(rect.height)).catch(() => {});
+        }
+      }, 350);
+    };
+    report();
+    const observer = new ResizeObserver(report);
+    observer.observe(el);
+    return () => {
+      window.clearTimeout(timer);
+      observer.disconnect();
+    };
+  }, [open]);
+
   const host = (() => {
     if (!frame?.url) return "";
     try {
@@ -80,7 +107,7 @@ export function BrowserPanel({
         </button>
       </div>
 
-      <div className="browser-body">
+      <div className="browser-body" ref={bodyRef}>
         {frame?.image ? (
           <>
             <img
