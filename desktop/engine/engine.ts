@@ -1241,7 +1241,9 @@ export class Engine {
       .map(([pattern, action]) => ({ pattern, action: action as ConfigView["rules"][number]["action"] }));
     return {
       headed: cfg.headed ?? false,
-      browserHeadless: cfg.browserHeadless ?? false,
+      // Matches the tool's own default: windowless, since the desktop
+      // mirrors that browser in its panel.
+      browserHeadless: cfg.browserHeadless ?? true,
       maxIterations: firstPositiveInt([cfg.maxIterations], 40),
       replyTimeout: firstPositiveInt([cfg.replyTimeout], 600),
       compactAfterChars: firstPositiveInt([cfg.compactAfterChars], 60_000),

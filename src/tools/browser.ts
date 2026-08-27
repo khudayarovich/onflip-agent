@@ -41,14 +41,20 @@ function shotsDir(): string {
 }
 
 /**
- * Prefer real Chrome, fall back to the bundled build.
+ * The agent's own browser — the bundled Chromium, not the user's Chrome.
  *
- * The same reasoning as the transport's launcher, but deliberately its own
- * copy: this one owns a different profile, so the "already open" advice it has
- * to give names a different directory, and the two must be able to run at once.
+ * It used to launch `channel: "chrome"`, which starts the Chrome the user has
+ * installed. The profile was still separate, but the application was theirs,
+ * so a web fetch opened what looked like their own browser. Playwright's
+ * bundled build is unmistakably the app's, and with the desktop panel
+ * mirroring it there is no longer a reason to borrow Chrome for this.
+ *
+ * The transport's launcher still prefers real Chrome — that one is talking to
+ * ChatGPT, where a familiar browser earns its Cloudflare clearance more
+ * easily. `ONFLIP_BROWSER_CHANNEL` overrides this when a site needs Chrome.
  */
 async function launch(headless: boolean): Promise<BrowserContext> {
-  const preferred = process.env.ONFLIP_BROWSER_CHANNEL ?? "chrome";
+  const preferred = process.env.ONFLIP_BROWSER_CHANNEL ?? "chromium";
   const options = {
     headless,
     viewport: { width: 1280, height: 900 },
@@ -71,8 +77,11 @@ async function ensurePage(): Promise<Page> {
   if (page && !page.isClosed()) return page;
   // The env var wins so a script can drive this without touching config;
   // a window that steals focus is fine for a person and not for a test.
+  // Windowless by default: the desktop shows this browser in its own panel,
+  // so a second window popping up in front of the app is noise rather than
+  // information. Settings has a switch for anyone who wants the window.
   const forced = process.env.ONFLIP_BROWSER_HEADLESS;
-  const headless = forced ? forced !== "0" && forced !== "false" : loadConfig().browserHeadless ?? false;
+  const headless = forced ? forced !== "0" && forced !== "false" : loadConfig().browserHeadless ?? true;
   context = await launch(headless);
   page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(20_000);

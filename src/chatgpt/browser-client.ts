@@ -743,7 +743,19 @@ async function waitForComposerReady(p: Page, timeout = 20_000) {
   }
 }
 
-async function typeMessage(p: Page, text: string): Promise<void> {
+/**
+ * Stop here if the user has pressed stop.
+ *
+ * Composing used to ignore the signal entirely: the abort arrived, typing and
+ * submitting carried on regardless, and a message the user had just cancelled
+ * was delivered to ChatGPT anyway. Seen in the log as `interrupted by user`
+ * followed by `submitted`.
+ */
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new ChatGPTBrowserError("Interrupted.");
+}
+
+async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise<void> {
   const composer = await waitForComposerReady(p);
   if (!composer) {
     throw new ChatGPTBrowserError("The ChatGPT message box disappeared before the message could be sent.");
@@ -773,8 +785,13 @@ async function typeMessage(p: Page, text: string): Promise<void> {
       await composer.focus({ timeout: 1_000 }).catch(() => {});
     }
     if (!(await composerFocused(p))) return false;
-    await p.keyboard.press("Control+A").catch(() => {});
-    await p.keyboard.press("Delete").catch(() => {});
+    // Select-all-and-delete is slow on a large document and pointless on an
+    // empty one, which is what the box normally is on the first attempt.
+    const existing = await readComposer(p).catch(() => "");
+    if (existing.trim()) {
+      await p.keyboard.press("Control+A").catch(() => {});
+      await p.keyboard.press("Delete").catch(() => {});
+    }
     return true;
   };
 
@@ -788,6 +805,21 @@ async function typeMessage(p: Page, text: string): Promise<void> {
     { name: "fill", run: () => composer.fill(text, { timeout: 8_000 }) },
   ];
 
+  /**
+   * Above this, a second attempt is not worth what it costs.
+   *
+   * Every attempt re-clears and re-types the whole payload, and in the live
+   * composer that is not free the way it is in a bare contenteditable: 60k
+   * characters go into one of those in about a second, while a real send of
+   * 55,781 characters spent 65.9 seconds inside this function. So for a large
+   * payload an intact-but-reflowed result is taken as it is — the parser
+   * recovers a flattened block, and the warning below says it happened —
+   * rather than paying another minute for the chance of tidier line breaks.
+   * Small payloads keep trying, because there the extra attempt is cheap.
+   */
+  const RETYPE_BUDGET_CHARS = 8_000;
+  const costly = text.length > RETYPE_BUDGET_CHARS;
+
   // Keep the best attempt rather than failing on the first imperfect one.
   let best: { check: ComposerCheck; text: string } | null = null;
 
@@ -795,6 +827,7 @@ async function typeMessage(p: Page, text: string): Promise<void> {
   // box not yet editable, focus still settling — and burning a whole transport
   // attempt (and its two-second backoff) on that is what the user was seeing.
   for (let round = 0; round < 2; round++) {
+    throwIfAborted(signal);
     if (round > 0) {
       logger.debug("browser", "composer not ready, retrying", { round });
       await p.waitForTimeout(600);
@@ -802,6 +835,7 @@ async function typeMessage(p: Page, text: string): Promise<void> {
     }
 
     for (const strategy of strategies) {
+      throwIfAborted(signal);
       const focused = await clear();
       if (!focused && strategy.name === "insertText") {
         // Typing without focus lands somewhere else entirely; skip to a
@@ -829,6 +863,9 @@ async function typeMessage(p: Page, text: string): Promise<void> {
       // Perfect: characters and line structure both survived.
       if (check.intact && check.linesKept) return;
       if (!best || (check.intact && !best.check.intact)) best = { check, text: seen };
+      // Intact but reflowed, on a payload where another attempt costs more
+      // than the line breaks are worth: take it and move on.
+      if (costly && check.intact) break;
     }
 
     if (best?.check.intact) break;
@@ -994,7 +1031,7 @@ export interface BrowserSendOptions {
  * only trustworthy signal that the message was accepted, so each method is
  * tried and then verified.
  */
-async function submitMessage(p: Page): Promise<void> {
+async function submitMessage(p: Page, signal?: AbortSignal): Promise<void> {
   const methods: { name: string; run: () => Promise<void> }[] = [
     {
       // Clicking the real control is the most faithful to what a user does,
@@ -1013,6 +1050,7 @@ async function submitMessage(p: Page): Promise<void> {
   ];
 
   for (const method of methods) {
+    throwIfAborted(signal);
     try {
       await method.run();
     } catch (e) {
@@ -1022,7 +1060,9 @@ async function submitMessage(p: Page): Promise<void> {
       continue;
     }
 
-    // The composer clears when ChatGPT accepts the message.
+    // The composer clears when ChatGPT accepts the message. Past this point
+    // the message is with ChatGPT, so an abort is handled by waitForReply,
+    // which stops the generation on the page rather than abandoning it.
     for (let i = 0; i < 12; i++) {
       await p.waitForTimeout(250);
       const remaining = (await readComposer(p).catch(() => "")).trim();
@@ -1226,7 +1266,9 @@ export async function sendViaBrowser(
 
   // Checked before typing, not after the send has already disappeared into a
   // logged-out page and cost the turn.
+  throwIfAborted(opts?.signal);
   await recoverAnonymousPage(p, cookies);
+  throwIfAborted(opts?.signal);
 
   return sendOn(p, message, opts);
 }
@@ -1256,11 +1298,14 @@ async function sendOn(
   }
 
   const typedAt = Date.now();
-  await typeMessage(p, payload);
+  throwIfAborted(opts?.signal);
+  await typeMessage(p, payload, opts?.signal);
   const typedMs = Date.now() - typedAt;
   await p.waitForTimeout(200);
+  // The last moment where stopping is free: after this the message is gone.
+  throwIfAborted(opts?.signal);
   const submitStart = Date.now();
-  await submitMessage(p);
+  await submitMessage(p, opts?.signal);
   const submitMs = Date.now() - submitStart;
 
   const sentAt = Date.now();
