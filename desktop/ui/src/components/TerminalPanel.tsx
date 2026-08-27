@@ -141,7 +141,13 @@ export function TerminalPanel({
         {lines.length === 0 && <div className="term-hint">{t("termHint")}</div>}
         {lines.map((line) => (
           <pre key={line.id} className={`term-line ${line.kind}`}>
-            {line.kind === "cmd" ? `❯ ${line.text}` : line.text}
+            {line.kind === "cmd" ? (
+              <>
+                <span className="mark">❯</span> {line.text}
+              </>
+            ) : (
+              line.text
+            )}
           </pre>
         ))}
         {running && <span className="spinner tiny term-spin" />}

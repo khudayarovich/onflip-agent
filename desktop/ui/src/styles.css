@@ -1179,38 +1179,49 @@ a:hover {
 .term-btn.stop {
   color: var(--red);
 }
+/* The output surface stays a true dark terminal in both themes — the
+   professional look, with a GitHub-dark-terminal palette for contrast. */
 .term-out {
   flex: 1;
   overflow-y: auto;
-  padding: 10px 12px;
+  padding: 12px 14px;
+  background: #0c0d10;
   font-family: var(--mono, ui-monospace, Consolas, monospace);
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 12.5px;
+  line-height: 1.6;
+  letter-spacing: 0.01em;
   cursor: text;
+}
+.term-out ::selection {
+  background: rgba(126, 231, 135, 0.22);
 }
 .term-line {
   margin: 0;
   white-space: pre-wrap;
   word-break: break-word;
-  color: var(--text-secondary);
+  color: #d8dbe0;
 }
 .term-line.cmd {
-  color: var(--accent);
+  color: #f2f4f8;
   font-weight: 600;
-  margin-top: 6px;
+  margin-top: 8px;
+}
+.term-line .mark {
+  color: #7ee787;
+  font-weight: 700;
 }
 .term-line.err {
-  color: var(--red);
+  color: #ff7b72;
 }
 .term-line.info {
-  color: var(--text-muted);
+  color: #8b949e;
   font-style: italic;
 }
 .term-hint {
   font-size: 11.5px;
-  color: var(--text-muted);
+  color: #8b949e;
   line-height: 1.6;
-  font-family: var(--font, inherit);
+  font-family: var(--sans, inherit);
 }
 .term-spin {
   display: inline-block;
@@ -1220,11 +1231,12 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 9px 12px;
-  border-top: 1px solid var(--border);
+  padding: 10px 14px;
+  background: #0c0d10;
+  border-top: 1px solid #1d1f24;
 }
 .term-input-row .prompt {
-  color: var(--accent);
+  color: #7ee787;
   font-family: var(--mono, ui-monospace, Consolas, monospace);
   font-weight: 700;
 }
@@ -1233,9 +1245,13 @@ a:hover {
   background: none;
   border: none;
   outline: none;
-  color: var(--text);
+  color: #f2f4f8;
+  caret-color: #7ee787;
   font-family: var(--mono, ui-monospace, Consolas, monospace);
   font-size: 12.5px;
+}
+.term-input-row input::placeholder {
+  color: #6b7280;
 }
 
 /* -- plan panel above the composer ----------------------------------------- */
