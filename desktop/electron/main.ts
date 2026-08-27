@@ -13,7 +13,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { Peer } from "../shared/wire";
-import { runSignIn } from "./signin";
+import { runSignIn, clearSignIn } from "./signin";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
@@ -415,6 +415,21 @@ function registerIpc(): void {
       }
     }
     return { ok: result.ok, reason: result.reason };
+  });
+
+  // Signing out clears the window's partition here and the stored session
+  // plus the automation profile in the engine — all three, or the next send
+  // simply signs back in.
+  ipcMain.handle("sign-out", async () => {
+    await clearSignIn();
+    if (peer) {
+      try {
+        await peer.request("applySignOut", {});
+      } catch (e) {
+        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      }
+    }
+    return { ok: true };
   });
 
   registerTerminal();

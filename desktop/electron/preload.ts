@@ -17,6 +17,7 @@ export interface OnFlipBridge {
   appInfo(): Promise<{ version: string; platform: string }>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
+  signOut(): Promise<{ ok: boolean; reason?: string }>;
   winControl(action: "minimize" | "maximize" | "close" | "query"): Promise<{ maximized: boolean }>;
   onWinState(listener: (state: { maximized: boolean }) => void): () => void;
   termRun(command: string, cwd: string): Promise<{ ok: boolean; error?: string }>;
@@ -60,6 +61,7 @@ const bridge: OnFlipBridge = {
 
   setTheme: (theme) => ipcRenderer.invoke("set-theme", { theme }),
   signIn: () => ipcRenderer.invoke("sign-in"),
+  signOut: () => ipcRenderer.invoke("sign-out"),
   winControl: (action) => ipcRenderer.invoke("win-control", { action }),
   onWinState: (listener) => {
     const handler = (_e: unknown, state: { maximized: boolean }) => listener(state);

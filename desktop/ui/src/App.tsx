@@ -709,6 +709,21 @@ export function App(): React.ReactElement {
         onOpenSettings={() => setModal("settings")}
         onOpenAbout={() => setModal("about")}
         onOpenSkills={() => setModal("skills")}
+        onSignOut={() =>
+          setConfirm({
+            message: t("signOutConfirm"),
+            danger: true,
+            action: () => {
+              void window.onflip
+                .signOut()
+                .then((r) => {
+                  if (!r.ok && r.reason) notifyError(r.reason);
+                  refreshStatus();
+                })
+                .catch((e: Error) => notifyError(e.message));
+            },
+          })
+        }
         onSignIn={() => {
           void window.onflip
             .signIn()

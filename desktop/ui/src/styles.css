@@ -1883,6 +1883,13 @@ a:hover {
 .pop-item:hover {
   background: var(--bg-hover);
 }
+.pop-item.danger {
+  color: var(--red);
+}
+.pop-item.danger:hover {
+  background: var(--red-bg);
+}
+
 .pop-item .pop-icon {
   opacity: 0.8;
   display: flex;

@@ -1916,6 +1916,30 @@ export async function openLoginWindow(cookies: SessionCookie[]): Promise<void> {
   await p.goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
 }
 
+/**
+ * Forget the signed-in automation profile.
+ *
+ * Signing out has to reach here as well as the stored token: the persistent
+ * profile keeps its own ChatGPT session (that is the point of it), so a
+ * logout that left it behind would sign the user back in on the next send.
+ * The browser is closed first — the directory is held open while it runs.
+ */
+export async function clearBrowserProfile(): Promise<void> {
+  await closeBrowser();
+  const dir = profileDir();
+  try {
+    fs.rmSync(dir, { recursive: true, force: true });
+    logger.info("browser", "cleared the automation profile", { dir });
+  } catch (e) {
+    // A file still held by a dying browser is not worth failing the logout:
+    // the token is gone either way, and the next launch overwrites this.
+    logger.warn("browser", "could not fully clear the automation profile", {
+      dir,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
 export async function closeBrowser(): Promise<void> {
   try {
     if (page && !page.isClosed()) await page.close().catch(() => {});

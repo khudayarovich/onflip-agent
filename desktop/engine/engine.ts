@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import {
   loadConfig,
   saveConfig,
+  clearConfigKeys,
   firstPositiveInt,
   OnFlipConfig,
 } from "onflip/dist/config";
@@ -24,6 +25,7 @@ import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import {
   configureBrowser,
   closeBrowser,
+  clearBrowserProfile,
   openConversation,
   checkSignedIn,
   setActiveProject,
@@ -882,6 +884,42 @@ export class Engine {
 
     this.emitConnect("ready");
     this.notice("Signed in to ChatGPT — the session is saved and ready to use.");
+    this.pushStatus();
+    return { ok: true };
+  }
+
+  /**
+   * Sign out: forget the session everywhere it is kept.
+   *
+   * Three places hold it, and leaving any one of them behind signs the user
+   * straight back in — the stored token, the automation browser's persistent
+   * profile, and (cleared by the caller, which owns it) the sign-in window's
+   * partition.
+   */
+  async applySignOut(): Promise<{ ok: boolean }> {
+    clearConfigKeys([
+      "sessionToken",
+      "sessionCookieName",
+      "sessionDeviceId",
+      "accessToken",
+      "accessTokenExpiry",
+      "accountName",
+      "accountEmail",
+    ]);
+    if (this.auth) {
+      this.auth.cookies.length = 0;
+      this.auth.sessionToken = "";
+      this.auth.accessToken = "";
+    }
+    this.account = null;
+    this.transport?.reset();
+    await clearBrowserProfile().catch(() => {});
+
+    this.emitConnect(
+      "signed-out",
+      'Signed out of ChatGPT. Use "Sign in to ChatGPT" in the account menu when you want to work again.'
+    );
+    this.notice("Signed out — the stored session and the browser profile have been cleared.");
     this.pushStatus();
     return { ok: true };
   }
