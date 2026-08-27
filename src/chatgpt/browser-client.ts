@@ -1150,17 +1150,32 @@ export async function waitForReply(
     }
 
     if (text.trim() && !placeholder) {
-      // Fast path: the composer is back to idle and the text has settled.
+      // A reasoning model pauses mid-stream — measured: a reply was accepted
+      // at "I'll re", seven characters into its first sentence, because the
+      // text held still through the quiet window while the model thought
+      // about the rest. So patience scales with the evidence: while the page
+      // says it is generating, a pause is thinking, not completion (but
+      // still bounded — a lingering stop indicator must not hang the loop);
+      // and a very short reply needs longer stillness before it is believed,
+      // because almost-nothing is what a mid-thought pause looks like.
+      const shortReply = text.trim().length < 200;
       if (!generating) {
+        // Fast path: the composer is back to idle and the text has settled.
         const sendBack = await anyVisible(p, SEND_SELECTORS).catch(() => false);
-        if (sendBack && quietFor >= IDLE_QUIET_MS) {
+        const idleNeed = shortReply ? Math.max(IDLE_QUIET_MS, 5_000) : IDLE_QUIET_MS;
+        if (sendBack && quietFor >= idleNeed) {
           logger.debug("browser", "reply complete (composer idle)", { quietFor, chars: text.length });
           return text.trim();
         }
       }
       // Backstop: the text simply stopped growing. This is what guarantees the
       // loop terminates no matter what the page chrome is doing.
-      if (quietFor >= QUIET_MS) {
+      const quietNeed = generating
+        ? Math.max(QUIET_MS, 30_000)
+        : shortReply
+          ? Math.max(QUIET_MS, 12_000)
+          : QUIET_MS;
+      if (quietFor >= quietNeed) {
         logger.debug("browser", "reply complete (text settled)", {
           quietFor,
           chars: text.length,

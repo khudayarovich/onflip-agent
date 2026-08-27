@@ -589,6 +589,20 @@ function detectAbandonedTurn(raw: string): string | null {
   if (/\bi'?ll (leave|let you|let the|need you|wait|stop|hold|defer)\b/i.test(text)) return null;
   if (/\byou'?ll need to\b|\bover to you\b/i.test(text)) return null;
 
+  // A reply that stops mid-clause is a truncated stream, not an answer.
+  // Live: a paused generation was accepted seven characters in — "I'll re" —
+  // and no verb-based pattern can see a verb that never finished arriving.
+  if (
+    text.length < 100 &&
+    /\b(i'?ll|i will|i'?m going to|let me)\s+\w{0,12}$/i.test(text) &&
+    !/[.!?…)"']$/.test(text)
+  ) {
+    return (
+      "your reply appears to be cut off mid-sentence — send the complete reply, " +
+      "continuing from where it stopped, with the tool call included"
+    );
+  }
+
   const announcesNextStep =
     /\b(i'?ll|i will|i'?m going to|i am going to|let me|next,? i'?ll)\b[^.]{0,40}\b(restore|rebuild|re-?read|read|run|fix|patch|apply|edit|update|write|create|add|remove|delete|check|verify|inspect|search|look|build|test|install|revert|continue|implement|refactor|rename|move|open|list|grep|start|try)\b/i;
   if (!announcesNextStep.test(text)) return null;
