@@ -1602,7 +1602,39 @@ async function sendOn(
   // The last moment where stopping is free: after this the message is gone.
   throwIfAborted(opts?.signal);
   const submitStart = Date.now();
-  await submitMessage(p, opts?.signal, { attached: attachments.length > 0 });
+  try {
+    await submitMessage(p, opts?.signal, { attached: attachments.length > 0 });
+  } catch (e) {
+    if (!(e instanceof ChatGPTBrowserError) || !/would not accept it/.test(e.message)) throw e;
+    // The user's own workaround, done programmatically: leave the page and
+    // come back. Mid-conversation the composer sometimes refuses every send
+    // while the page looks perfectly normal, and switching away and back
+    // made the same message send first try — so a reload of the same
+    // conversation is tried first (no replay cost), with the message
+    // retyped since the draft does not survive the reload.
+    logger.warn("browser", "composer refused the send; reloading the page and retrying", {
+      url: p.url(),
+    });
+    await p.reload({ waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
+    await p.waitForTimeout(1_200);
+    throwIfAborted(opts?.signal);
+    if (attachments.length > 0) await attachFiles(p, attachments);
+    await typeMessage(p, payload, opts?.signal);
+    await p.waitForTimeout(200);
+    throwIfAborted(opts?.signal);
+    try {
+      await submitMessage(p, opts?.signal, { attached: attachments.length > 0 });
+    } catch (e2) {
+      if (e2 instanceof ChatGPTBrowserError && /would not accept it/.test(e2.message)) {
+        // The reload did not unstick it — this conversation page is done
+        // taking input. Abandoning it makes the transport's next retry open
+        // a fresh thread and replay, which is the switch-away-and-back that
+        // is known to work.
+        inConversation = false;
+      }
+      throw e2;
+    }
+  }
   const submitMs = Date.now() - submitStart;
 
   const sentAt = Date.now();
