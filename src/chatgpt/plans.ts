@@ -68,6 +68,19 @@ export const UPLOAD_CEILING_CHARS = 160_000;
 /** Leave room in the window for the turn itself, not just its history. */
 const USABLE_FRACTION = 0.55;
 
+/**
+ * The ceiling for models with a published window in the hundreds of
+ * thousands of tokens.
+ *
+ * Not the window: the practical cost. Every fresh thread re-uploads the
+ * whole transcript and the model re-reads it before answering, so a
+ * transcript sized to Sol's full 1.05M-token window would spend minutes per
+ * thread on the reading alone. 400k characters (~100k tokens) keeps that to
+ * seconds while compacting an order of magnitude less often than the
+ * unknown-plan default.
+ */
+export const LARGE_MODEL_UPLOAD_CEILING_CHARS = 400_000;
+
 export function planProfile(planId: string | undefined): PlanProfile | null {
   if (!planId) return null;
   const id = planId.toLowerCase();
@@ -93,7 +106,19 @@ export function planProfile(planId: string | undefined): PlanProfile | null {
  */
 const UNKNOWN_PLAN_UPLOAD_BUDGET = 45_000;
 
-export function compactionBudget(planId: string | undefined, canUpload = false): number {
+export function compactionBudget(
+  planId: string | undefined,
+  canUpload = false,
+  modelTokens?: number | null
+): number {
+  // A model with a published window outranks the plan table: the table's
+  // rows date from the GPT-4 era, and Sol's real window is thirty times the
+  // Plus row. Only meaningful with uploads — a transcript this size cannot
+  // be typed.
+  if (canUpload && modelTokens && modelTokens > 0) {
+    const fromModel = Math.floor(modelTokens * CHARS_PER_TOKEN * USABLE_FRACTION);
+    return Math.max(12_000, Math.min(fromModel, LARGE_MODEL_UPLOAD_CEILING_CHARS));
+  }
   const ceiling = canUpload ? UPLOAD_CEILING_CHARS : COMPOSER_CEILING_CHARS;
   const profile = planProfile(planId);
   if (!profile) return canUpload ? UNKNOWN_PLAN_UPLOAD_BUDGET : COMPOSER_CEILING_CHARS;

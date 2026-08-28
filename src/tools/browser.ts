@@ -200,10 +200,6 @@ export function setBrowserFrameSink(sink: ((frame: BrowserFrame) => void) | null
  * screencast pushes a frame whenever the page actually changes, which is what
  * makes it look live, and it costs less than polling: nothing is captured
  * while the page is still.
- *
- * It is still a view. The stream carries pixels one way; clicks in the panel
- * would land in a page the agent is mid-way through reasoning about, against
- * element refs taken from a snapshot before them.
  */
 async function startScreencast(p: Page): Promise<void> {
   if (!frameSink || cast?.page === p) return;
@@ -233,6 +229,69 @@ async function startScreencast(p: Page): Promise<void> {
     logger.debug("browser-tool", "could not start the screencast", {
       error: e instanceof Error ? e.message : String(e),
     });
+  }
+}
+
+/**
+ * The user acting on the streamed page, straight from the panel.
+ *
+ * The stream used to carry pixels one way, and the panel said so: a view,
+ * not a control surface. But a browser you can watch and not touch is a
+ * broken vending machine — the page asks for a cookie choice or a scroll,
+ * and the user can only tell the agent to do it in words. Coordinates
+ * arrive as fractions of the frame so the panel's own scaling never has to
+ * agree with the viewport; keys arrive in Playwright's spelling, composed
+ * by the panel. The agent may be driving the same page — that is the same
+ * contract as a human touching a browser Codex is using, and the agent
+ * re-snapshots before every action anyway.
+ */
+export interface BrowserUserInput {
+  kind: "click" | "dblclick" | "contextmenu" | "wheel" | "key" | "text";
+  /** Position as a fraction of the frame, 0..1. */
+  x?: number;
+  y?: number;
+  deltaX?: number;
+  deltaY?: number;
+  /** A Playwright key name, modifiers composed ("Control+a"). */
+  key?: string;
+  text?: string;
+}
+
+export async function dispatchBrowserInput(input: BrowserUserInput): Promise<boolean> {
+  const p = page;
+  if (!p || p.isClosed()) return false;
+  const size = p.viewportSize() ?? viewport;
+  const px = Math.round(Math.max(0, Math.min(1, input.x ?? 0)) * size.width);
+  const py = Math.round(Math.max(0, Math.min(1, input.y ?? 0)) * size.height);
+  try {
+    switch (input.kind) {
+      case "click":
+        await p.mouse.click(px, py);
+        break;
+      case "dblclick":
+        await p.mouse.dblclick(px, py);
+        break;
+      case "contextmenu":
+        await p.mouse.click(px, py, { button: "right" });
+        break;
+      case "wheel":
+        await p.mouse.move(px, py);
+        await p.mouse.wheel(input.deltaX ?? 0, input.deltaY ?? 0);
+        break;
+      case "key":
+        if (input.key) await p.keyboard.press(input.key);
+        break;
+      case "text":
+        if (input.text) await p.keyboard.insertText(input.text);
+        break;
+    }
+    return true;
+  } catch (e) {
+    logger.debug("browser-tool", "panel input did not land", {
+      kind: input.kind,
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return false;
   }
 }
 

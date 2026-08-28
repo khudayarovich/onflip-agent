@@ -124,6 +124,23 @@ export function defaultModel(): string {
   return luna?.slug ?? DEFAULT_MODEL;
 }
 
+/**
+ * A model's published context window, when one is known.
+ *
+ * Matched against the slug and the account's own title for it, because the
+ * web app spells the same model many ways (`gpt-5-6`, `gpt-5-6-thinking`
+ * and `gpt-5.6-sol-wm` are all titled "GPT-5.6 Sol"). Only windows that
+ * are actually published get claimed — anything else answers null and the
+ * plan table decides. Sol: 1,050,000 tokens (announced August 2026).
+ */
+export function modelContextTokens(slug: string | undefined): number | null {
+  if (!slug || slug === "auto") return null;
+  const entry = allModels().find((m) => m.slug === slug);
+  const name = `${slug} ${entry?.label ?? ""}`.toLowerCase();
+  if (/\bsol\b|-sol\b/.test(name)) return 1_050_000;
+  return null;
+}
+
 export const THINKING_LEVELS = ["off", "low", "medium", "high"] as const;
 export type ThinkingLevel = (typeof THINKING_LEVELS)[number];
 

@@ -148,6 +148,7 @@ const en = {
   contextUsed: "In context",
   contextCompactsAt: "Compacts at",
   modelWorkOnly: "ChatGPT Work only",
+  browserInteractTip: "Click, type and scroll — this drives the agent's browser",
   workedFor: "Worked for {time}",
   workedUntilStopped: "Stopped after {time}",
   // approval modal
@@ -369,6 +370,7 @@ const ru: Partial<Record<StringKey, string>> = {
   contextUsed: "В контексте",
   contextCompactsAt: "Сжатие при",
   modelWorkOnly: "Только ChatGPT Work",
+  browserInteractTip: "Кликайте, печатайте, прокручивайте — это управляет браузером агента",
   workedFor: "Работал {time}",
   workedUntilStopped: "Остановлено через {time}",
   allowOnce: "Разрешить раз",
@@ -585,6 +587,7 @@ const uz: Partial<Record<StringKey, string>> = {
   contextUsed: "Kontekstda",
   contextCompactsAt: "Siqish chegarasi",
   modelWorkOnly: "Faqat ChatGPT Work",
+  browserInteractTip: "Bosing, yozing, aylantiring — bu agent brauzerini boshqaradi",
   workedFor: "{time} ishladi",
   workedUntilStopped: "{time} dan keyin to'xtatildi",
   allowOnce: "Bir marta ruxsat",

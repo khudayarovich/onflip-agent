@@ -34,6 +34,8 @@ export const api = {
   /** Tell the agent's browser what shape the panel is, so pages fill it. */
   setBrowserViewport: (width: number, height: number) =>
     call<{ ok: boolean }>("setBrowserViewport", { width, height }),
+  /** A click, key or scroll from the panel, replayed on the agent's page. */
+  browserInput: (input: Record<string, unknown>) => call<boolean>("browserInput", input),
   /** Try Chrome, Edge and Firefox for a session already signed in. */
   importBrowserSession: () =>
     call<{ ok: boolean; source?: string; reason?: string }>("importBrowserSession"),

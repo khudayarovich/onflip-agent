@@ -15,6 +15,7 @@ import {
   allModels,
   normalizeModel,
   defaultModel,
+  modelContextTokens,
   isThinkingLevel,
   cacheModels,
   ThinkingLevel,
@@ -48,7 +49,13 @@ import {
   deleteConversations,
   RemoteProject,
 } from "onflip/dist/chatgpt/browser-client";
-import { setBrowserFrameSink, setBrowserViewport, BrowserFrame } from "onflip/dist/tools/browser";
+import {
+  setBrowserFrameSink,
+  setBrowserViewport,
+  dispatchBrowserInput,
+  BrowserFrame,
+  BrowserUserInput,
+} from "onflip/dist/tools/browser";
 import { recordSend, usageSummary, associateAccount, UNKNOWN_ACCOUNT } from "./usage";
 import {
   createToolRegistry,
@@ -464,9 +471,12 @@ export class Engine {
 
   /** The transcript size at which compaction fires — one number, two users. */
   private contextBudgetChars(): number {
+    // An explicit setting wins; otherwise the model's published window,
+    // then the plan, size the budget — 45k on a million-token Sol was
+    // compacting every few turns of real work.
     return (
       this.config.compactAfterChars ??
-      compactionBudget(loadConfig().planType, uploadsAvailable())
+      compactionBudget(loadConfig().planType, uploadsAvailable(), modelContextTokens(this.model))
     );
   }
 
@@ -532,6 +542,11 @@ export class Engine {
   async setBrowserViewport(width: number, height: number): Promise<{ ok: boolean }> {
     await setBrowserViewport(width, height);
     return { ok: true };
+  }
+
+  /** A click, key or scroll from the browser panel, replayed on the page. */
+  async browserInput(input: BrowserUserInput): Promise<boolean> {
+    return dispatchBrowserInput(input);
   }
 
   private accountKey(): string {
@@ -1006,6 +1021,10 @@ export class Engine {
           if (call.tool.startsWith("todo")) {
             this.peer.emit("todos", { items: this.toolState.todos });
           }
+          // Tool output is what fills the context, so this is the moment the
+          // ring moves. Pushed only at turn boundaries, it sat still through
+          // exactly the turns that were filling it.
+          this.pushStatus();
         },
         onNotice: (noticeText) => this.notice(noticeText),
         // Compaction empties the context, not the conversation: keep what it

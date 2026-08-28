@@ -2667,6 +2667,18 @@ a:hover {
   font-size: 12px;
 }
 
+/* ---- interactive browser shot --------------------------------------------- */
+
+.browser-shot.interactive {
+  cursor: default;
+  outline: none;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.browser-shot.interactive:focus {
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
 /* ---- read-only session peek ---------------------------------------------- */
 
 .peek-transcript {
