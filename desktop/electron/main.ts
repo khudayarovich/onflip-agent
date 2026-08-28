@@ -7,6 +7,8 @@ import {
   nativeTheme,
   Tray,
   Menu,
+  IpcMainInvokeEvent,
+  IpcMainEvent,
 } from "electron";
 import { spawn, ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
@@ -17,22 +19,53 @@ import { runSignIn, clearSignIn } from "./signin";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
- * The Electron main process is deliberately thin: it owns the window and the
- * engine child, and relays messages between the renderer and the engine. All
- * agent behaviour lives in the engine, which runs the OnFlip core under plain
- * Node — the same runtime the CLI uses, so everything behaves identically.
+ * The Electron main process is deliberately thin: it owns windows and their
+ * engine children, and relays messages between each renderer and its engine.
+ * All agent behaviour lives in the engine, which runs the OnFlip core under
+ * plain Node — the same runtime the CLI uses, so everything behaves
+ * identically.
+ *
+ * One window, one engine. That pairing is what makes two sessions genuinely
+ * concurrent: each window's engine has its own browser, its own working
+ * directory and its own running turn, the way two ChatGPT tabs are two
+ * conversations. The processes share nothing but the account — and the
+ * account-level state that must be shared (the session cookies, the send
+ * cooldown) already lives in ~/.onflip where every engine reads it.
  */
 
-let win: BrowserWindow | null = null;
-let engine: ChildProcess | null = null;
-let peer: Peer | null = null;
-let engineExited = false;
+interface Workspace {
+  win: BrowserWindow;
+  engine: ChildProcess | null;
+  peer: Peer | null;
+  engineExited: boolean;
+  /** The built-in terminal's running command, one per window. */
+  termChild: ChildProcess | null;
+}
+
+const workspaces = new Map<number, Workspace>();
+/** The window most recently focused — where the tray and dock actions go. */
+let lastActiveId: number | null = null;
 let tray: Tray | null = null;
-/** Set once the user chose Quit; before that, closing the window hides it. */
+/** Set once the user chose Quit; before that, closing the last window hides it. */
 let quitting = false;
 
 function appIcon(): string {
   return path.join(__dirname, "..", "..", "buildResources", "icon.ico");
+}
+
+/** The workspace an IPC message came from. */
+function wsOf(e: IpcMainInvokeEvent | IpcMainEvent): Workspace | null {
+  const win = BrowserWindow.fromWebContents(e.sender);
+  return win ? (workspaces.get(win.id) ?? null) : null;
+}
+
+/** The workspace the user is looking at, or the likeliest one. */
+function frontWorkspace(): Workspace | null {
+  const focused = BrowserWindow.getFocusedWindow();
+  if (focused && workspaces.has(focused.id)) return workspaces.get(focused.id)!;
+  if (lastActiveId !== null && workspaces.has(lastActiveId)) return workspaces.get(lastActiveId)!;
+  for (const ws of workspaces.values()) return ws;
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -106,21 +139,22 @@ function spawnEngineViaElectron(args: string[], cwd: string): ChildProcess {
   });
 }
 
-function sendToRenderer(channel: string, payload: unknown): void {
-  if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
+function sendTo(ws: Workspace, channel: string, payload: unknown): void {
+  if (!ws.win.isDestroyed()) ws.win.webContents.send(channel, payload);
 }
 
 /**
- * Everything the engine prints to stderr, kept on disk.
+ * Everything the engines print to stderr, kept on disk.
  *
  * It used to go only to the renderer's debug panel, which is how an engine
  * death took its evidence with it: the process vanished mid-turn with nothing
  * in any log, because the one channel that carries a native crash or an
  * out-of-memory abort — stderr — was never persisted. JS-level failures are
  * caught and survive; the ones that kill a process outright only ever say why
- * here.
+ * here. One shared file across windows; the pid in each marker tells the
+ * engines apart.
  */
-function engineStderrLog(): fs.WriteStream | null {
+function engineStderrLog(pid: number | undefined): fs.WriteStream | null {
   try {
     const file = path.join(app.getPath("userData"), "engine-stderr.log");
     // Fresh engine, bounded file: keep the previous run's tail, not a year's.
@@ -130,22 +164,22 @@ function engineStderrLog(): fs.WriteStream | null {
       /* first run */
     }
     const stream = fs.createWriteStream(file, { flags: "a" });
-    stream.write(`\n--- engine started ${new Date().toISOString()} ---\n`);
+    stream.write(`\n--- engine pid ${pid ?? "?"} started ${new Date().toISOString()} ---\n`);
     return stream;
   } catch {
     return null;
   }
 }
 
-function startEngine(cwd: string): void {
-  engineExited = false;
+function startEngine(ws: Workspace, cwd: string): void {
+  ws.engineExited = false;
   let child = spawnEngine(cwd);
-  const stderrLog = engineStderrLog();
+  const stderrLog = engineStderrLog(child.pid);
 
   const wire = new Peer((chunk) => {
     child.stdin?.write(chunk);
   });
-  peer = wire;
+  ws.peer = wire;
 
   const attach = (c: ChildProcess) => {
     c.stdout?.on("data", (chunk: Buffer) => wire.feed(chunk));
@@ -155,79 +189,84 @@ function startEngine(cwd: string): void {
       } catch {
         /* the copy on disk is best-effort */
       }
-      sendToRenderer("engine-event", { event: "log", data: { line: chunk.toString("utf8") } });
+      sendTo(ws, "engine-event", { event: "log", data: { line: chunk.toString("utf8") } });
     });
     c.on("error", (e: NodeJS.ErrnoException) => {
       // No system Node — retry once inside Electron's own Node.
       if (e.code === "ENOENT" && c === child) {
         const fallback = spawnEngineViaElectron([engineEntry(), "--cwd", cwd], cwd);
         child = fallback;
-        engine = fallback;
+        ws.engine = fallback;
         attach(fallback);
         return;
       }
-      sendToRenderer("engine-event", {
+      sendTo(ws, "engine-event", {
         event: "connect",
         data: { state: "error", detail: `Engine failed to start: ${e.message}` },
       });
     });
     c.on("exit", (code) => {
       if (c !== child) return;
-      engineExited = true;
+      ws.engineExited = true;
       try {
-        stderrLog?.write(`--- engine exited ${new Date().toISOString()} code ${code ?? "unknown"} ---\n`);
+        stderrLog?.write(
+          `--- engine pid ${c.pid ?? "?"} exited ${new Date().toISOString()} code ${code ?? "unknown"} ---\n`
+        );
         stderrLog?.end();
       } catch {
         /* best-effort */
       }
       wire.failAll(`The engine exited (code ${code ?? "unknown"}).`);
-      sendToRenderer("engine-exit", { code });
+      sendTo(ws, "engine-exit", { code });
     });
   };
   attach(child);
-  engine = child;
+  ws.engine = child;
 
   wire.onEvent = (event, data) => {
     if (event === "status") {
       const status = data as EngineStatus;
       if (status.cwd) saveState({ lastCwd: status.cwd });
     }
-    sendToRenderer("engine-event", { event, data });
+    sendTo(ws, "engine-event", { event, data });
   };
 
-  // The engine's own requests — approvals — go to the renderer and wait there.
+  // The engine's own requests — approvals — go to this window and wait there.
   wire.onRequest = async (method, params) => {
     if (method === "approval") {
-      return await askRendererForApproval(params);
+      return await askRendererForApproval(ws, params);
     }
     throw new Error(`Unknown engine->app request: ${method}`);
   };
 
   wire.onNoise = (line) => {
-    sendToRenderer("engine-event", { event: "log", data: { line } });
+    sendTo(ws, "engine-event", { event: "log", data: { line } });
   };
 }
 
-// Pending approval prompts, answered by the renderer.
+// Pending approval prompts, answered by the renderers. Ids are global so a
+// response cannot be credited to the wrong window's prompt.
 let nextApprovalId = 1;
 const approvalWaiters = new Map<number, (d: ApprovalDecisionDTO) => void>();
 
-function askRendererForApproval(request: unknown): Promise<ApprovalDecisionDTO> {
+function askRendererForApproval(ws: Workspace, request: unknown): Promise<ApprovalDecisionDTO> {
   const id = nextApprovalId++;
   return new Promise<ApprovalDecisionDTO>((resolve) => {
     approvalWaiters.set(id, resolve);
-    sendToRenderer("approval-request", { id, request });
-    win?.show();
-    win?.focus();
+    sendTo(ws, "approval-request", { id, request });
+    if (!ws.win.isDestroyed()) {
+      ws.win.show();
+      ws.win.focus();
+    }
   });
 }
 
-async function stopEngine(): Promise<void> {
-  const child = engine;
+async function stopEngine(ws: Workspace): Promise<void> {
+  const child = ws.engine;
   if (!child) return;
-  engine = null;
-  const wire = peer;
-  peer = null;
+  ws.engine = null;
+  const wire = ws.peer;
+  ws.peer = null;
   wire?.failAll("The engine is restarting.");
   try {
     child.stdin?.end();
@@ -251,18 +290,22 @@ async function stopEngine(): Promise<void> {
 }
 
 // ---------------------------------------------------------------------------
-// window
+// windows
 // ---------------------------------------------------------------------------
 
-function createWindow(): void {
+function createWindow(cwd?: string): Workspace {
   const state = loadState();
   nativeTheme.themeSource = "dark";
 
-  win = new BrowserWindow({
+  // Later windows cascade off the saved bounds rather than stacking exactly
+  // on top of the first.
+  const offset = workspaces.size * 28;
+
+  const win = new BrowserWindow({
     width: state.bounds?.width ?? 1280,
     height: state.bounds?.height ?? 840,
-    x: state.bounds?.x,
-    y: state.bounds?.y,
+    x: state.bounds?.x !== undefined ? state.bounds.x + offset : undefined,
+    y: state.bounds?.y !== undefined ? state.bounds.y + offset : undefined,
     minWidth: 760,
     minHeight: 520,
     show: false,
@@ -279,10 +322,19 @@ function createWindow(): void {
     },
   });
 
-  win.once("ready-to-show", () => win?.show());
+  const ws: Workspace = { win, engine: null, peer: null, engineExited: false, termChild: null };
+  workspaces.set(win.id, ws);
+  lastActiveId = win.id;
+  win.on("focus", () => {
+    lastActiveId = win.id;
+  });
+
+  win.once("ready-to-show", () => {
+    if (!win.isDestroyed()) win.show();
+  });
   // The custom maximise button swaps its glyph with the real window state.
-  win.on("maximize", () => win?.webContents.send("win-state", { maximized: true }));
-  win.on("unmaximize", () => win?.webContents.send("win-state", { maximized: false }));
+  win.on("maximize", () => sendTo(ws, "win-state", { maximized: true }));
+  win.on("unmaximize", () => sendTo(ws, "win-state", { maximized: false }));
   // Surface renderer logs on stdout when launched with ONFLIP_DESKTOP_DEBUG,
   // so a headless launch (CI, a terminal) can see what the window sees.
   if (process.env.ONFLIP_DESKTOP_DEBUG) {
@@ -297,25 +349,34 @@ function createWindow(): void {
   // Debug aid: capture the window to a PNG a few seconds after load, so a
   // headless launch can be verified without eyes on the screen.
   const shot = process.env.ONFLIP_DESKTOP_SHOT;
-  if (shot) {
+  if (shot && workspaces.size === 1) {
     win.webContents.on("did-finish-load", () => {
       setTimeout(() => {
-        void win?.webContents.capturePage().then((image) => {
+        void win.webContents.capturePage().then((image) => {
           fs.writeFileSync(shot, image.toPNG());
           process.stdout.write(`[shot] ${shot}\n`);
         });
       }, 9_000);
     });
   }
-  // Closing the window keeps OnFlip alive in the tray — the engine (and any
-  // running turn) carries on in the background, the way Codex does it.
+  // Closing the last window keeps OnFlip alive in the tray — its engine (and
+  // any running turn) carries on in the background, the way Codex does it.
+  // Closing one of several windows really closes it: that window's engine is
+  // its own, and a hidden window nobody can reopen would keep it alive
+  // invisibly.
   win.on("close", (e) => {
-    if (!win) return;
+    if (win.isDestroyed()) return;
     saveState({ bounds: win.getBounds() });
-    if (!quitting) {
+    if (!quitting && workspaces.size <= 1) {
       e.preventDefault();
       win.hide();
     }
+  });
+  win.on("closed", () => {
+    workspaces.delete(win.id);
+    if (lastActiveId === win.id) lastActiveId = null;
+    if (ws.termChild) killTree(ws.termChild);
+    void stopEngine(ws);
   });
 
   // External links open in the user's real browser, never inside the app.
@@ -327,6 +388,9 @@ function createWindow(): void {
   const devServer = process.env.VITE_DEV_SERVER_URL;
   if (devServer) void win.loadURL(devServer);
   else void win.loadFile(path.join(__dirname, "..", "..", "ui-dist", "index.html"));
+
+  startEngine(ws, cwd || loadState().lastCwd || os.homedir());
+  return ws;
 }
 
 // ---------------------------------------------------------------------------
@@ -334,13 +398,14 @@ function createWindow(): void {
 // ---------------------------------------------------------------------------
 
 function showWindow(): void {
-  if (!win || win.isDestroyed()) {
+  const ws = frontWorkspace();
+  if (!ws || ws.win.isDestroyed()) {
     createWindow();
     return;
   }
-  if (win.isMinimized()) win.restore();
-  win.show();
-  win.focus();
+  if (ws.win.isMinimized()) ws.win.restore();
+  ws.win.show();
+  ws.win.focus();
 }
 
 function createTray(): void {
@@ -349,6 +414,7 @@ function createTray(): void {
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open OnFlip", click: showWindow },
+      { label: "New window", click: () => void createWindow() },
       { type: "separator" },
       {
         label: "Quit OnFlip",
@@ -363,13 +429,14 @@ function createTray(): void {
 }
 
 // ---------------------------------------------------------------------------
-// IPC surface for the renderer
+// IPC surface for the renderers
 // ---------------------------------------------------------------------------
 
 function registerIpc(): void {
-  ipcMain.handle("engine-call", async (_e, payload: { method: string; params?: unknown }) => {
-    if (!peer || engineExited) throw new Error("The engine is not running.");
-    return await peer.request(payload.method, payload.params ?? {});
+  ipcMain.handle("engine-call", async (e, payload: { method: string; params?: unknown }) => {
+    const ws = wsOf(e);
+    if (!ws?.peer || ws.engineExited) throw new Error("The engine is not running.");
+    return await ws.peer.request(payload.method, payload.params ?? {});
   });
 
   ipcMain.on("approval-response", (_e, payload: { id: number; decision: ApprovalDecisionDTO }) => {
@@ -379,9 +446,16 @@ function registerIpc(): void {
     waiter(payload.decision);
   });
 
-  ipcMain.handle("pick-folder", async () => {
-    if (!win) return null;
-    const result = await dialog.showOpenDialog(win, {
+  // Another window, another engine, another concurrent session.
+  ipcMain.handle("new-window", () => {
+    createWindow();
+    return true;
+  });
+
+  ipcMain.handle("pick-folder", async (e) => {
+    const ws = wsOf(e);
+    if (!ws) return null;
+    const result = await dialog.showOpenDialog(ws.win, {
       title: "Open project folder",
       properties: ["openDirectory"],
     });
@@ -390,9 +464,10 @@ function registerIpc(): void {
 
   ipcMain.handle(
     "save-file",
-    async (_e, payload: { suggestedName: string; content: string }) => {
-      if (!win) return null;
-      const result = await dialog.showSaveDialog(win, {
+    async (e, payload: { suggestedName: string; content: string }) => {
+      const ws = wsOf(e);
+      if (!ws) return null;
+      const result = await dialog.showSaveDialog(ws.win, {
         title: "Export transcript",
         defaultPath: path.join(os.homedir(), payload.suggestedName),
         filters: [{ name: "Markdown", extensions: ["md"] }],
@@ -406,9 +481,10 @@ function registerIpc(): void {
   // Attachments: the picker returns paths, and the engine hands them to the
   // ChatGPT composer. Nothing is copied — the file is uploaded from where it
   // already lives.
-  ipcMain.handle("pick-files", async () => {
-    if (!win) return [];
-    const result = await dialog.showOpenDialog(win, {
+  ipcMain.handle("pick-files", async (e) => {
+    const ws = wsOf(e);
+    if (!ws) return [];
+    const result = await dialog.showOpenDialog(ws.win, {
       title: "Attach files",
       properties: ["openFile", "multiSelections"],
       filters: [
@@ -429,12 +505,13 @@ function registerIpc(): void {
   // on the ChatGPT page rather than on disk.
   ipcMain.handle(
     "save-image",
-    async (_e, payload: { dataUrl: string; suggestedName: string }) => {
-      if (!win) return null;
+    async (e, payload: { dataUrl: string; suggestedName: string }) => {
+      const ws = wsOf(e);
+      if (!ws) return null;
       const match = /^data:image\/([a-z+]+);base64,(.+)$/i.exec(payload.dataUrl ?? "");
       if (!match) return null;
       const ext = match[1].toLowerCase() === "jpeg" ? "jpg" : match[1].toLowerCase();
-      const result = await dialog.showSaveDialog(win, {
+      const result = await dialog.showSaveDialog(ws.win, {
         title: "Save image",
         defaultPath: path.join(
           app.getPath("downloads"),
@@ -453,10 +530,11 @@ function registerIpc(): void {
   // editing the document it just delivered.
   ipcMain.handle(
     "save-artifact",
-    async (_e, payload: { path: string; suggestedName: string }) => {
-      if (!win) return null;
+    async (e, payload: { path: string; suggestedName: string }) => {
+      const ws = wsOf(e);
+      if (!ws) return null;
       if (!payload?.path || !fs.existsSync(payload.path)) return null;
-      const result = await dialog.showSaveDialog(win, {
+      const result = await dialog.showSaveDialog(ws.win, {
         title: "Save file",
         defaultPath: path.join(
           app.getPath("downloads"),
@@ -475,10 +553,12 @@ function registerIpc(): void {
     return error === "";
   });
 
-  ipcMain.handle("restart-engine", async (_e, payload: { cwd?: string }) => {
+  ipcMain.handle("restart-engine", async (e, payload: { cwd?: string }) => {
+    const ws = wsOf(e);
+    if (!ws) return false;
     const cwd = payload?.cwd || loadState().lastCwd || os.homedir();
-    await stopEngine();
-    startEngine(cwd);
+    await stopEngine(ws);
+    startEngine(ws, cwd);
     return true;
   });
 
@@ -494,37 +574,42 @@ function registerIpc(): void {
   });
 
   // Window controls for the frameless titlebar. Close goes through the same
-  // close path as the OS button, so it hides to the tray rather than quitting.
-  ipcMain.handle("win-control", (_e, payload: { action: string }) => {
-    if (!win) return { maximized: false };
+  // close path as the OS button, so the last window hides to the tray rather
+  // than quitting.
+  ipcMain.handle("win-control", (e, payload: { action: string }) => {
+    const ws = wsOf(e);
+    if (!ws) return { maximized: false };
     switch (payload.action) {
       case "minimize":
-        win.minimize();
+        ws.win.minimize();
         break;
       case "maximize":
-        if (win.isMaximized()) win.unmaximize();
-        else win.maximize();
+        if (ws.win.isMaximized()) ws.win.unmaximize();
+        else ws.win.maximize();
         break;
       case "close":
-        win.close();
+        ws.win.close();
         break;
     }
-    return { maximized: win.isMaximized() };
+    return { maximized: ws.win.isDestroyed() ? false : ws.win.isMaximized() };
   });
 
   // Signing in happens in a normal browser window owned by the app (see
   // signin.ts), never in the automation browser: the cookies it collects go
-  // straight to the engine, so they never pass through the renderer.
-  ipcMain.handle("sign-in", async () => {
-    const result = await runSignIn(win);
-    if (result.ok && result.cookies?.length && peer) {
+  // straight to the engine, so they never pass through the renderer. The
+  // session lands in ~/.onflip, so other windows' engines pick it up when
+  // they next need it.
+  ipcMain.handle("sign-in", async (e) => {
+    const ws = wsOf(e);
+    const result = await runSignIn(ws?.win ?? null);
+    if (result.ok && result.cookies?.length && ws?.peer) {
       try {
-        await peer.request("applySignIn", {
+        await ws.peer.request("applySignIn", {
           cookies: result.cookies,
           account: result.account,
         });
-      } catch (e) {
-        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
     }
     return { ok: result.ok, reason: result.reason };
@@ -533,13 +618,14 @@ function registerIpc(): void {
   // Signing out clears the window's partition here and the stored session
   // plus the automation profile in the engine — all three, or the next send
   // simply signs back in.
-  ipcMain.handle("sign-out", async () => {
+  ipcMain.handle("sign-out", async (e) => {
+    const ws = wsOf(e);
     await clearSignIn();
-    if (peer) {
+    if (ws?.peer) {
       try {
-        await peer.request("applySignOut", {});
-      } catch (e) {
-        return { ok: false, reason: e instanceof Error ? e.message : String(e) };
+        await ws.peer.request("applySignOut", {});
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
       }
     }
     return { ok: true };
@@ -556,16 +642,18 @@ function registerIpc(): void {
  * A line-based command runner, not a full PTY: each command runs through
  * PowerShell with output streamed to the panel. That covers what a built-in
  * terminal is for — builds, tests, git — without a native pty dependency.
- * These are the user's own keystrokes, so no approval layer applies.
+ * These are the user's own keystrokes, so no approval layer applies. One
+ * running command per window, like one terminal panel per window.
  */
-let termChild: ChildProcess | null = null;
 
 /** Marks the line carrying the working directory back out of PowerShell. */
 const CWD_SENTINEL = "\x01ONFLIP_CWD:";
 
 function registerTerminal(): void {
-  ipcMain.handle("term-run", (_e, payload: { command: string; cwd: string }) => {
-    if (termChild) {
+  ipcMain.handle("term-run", (e, payload: { command: string; cwd: string }) => {
+    const ws = wsOf(e);
+    if (!ws) return { ok: false, error: "No window." };
+    if (ws.termChild) {
       return { ok: false, error: "A command is still running — stop it first." };
     }
     const { command, cwd } = payload;
@@ -607,10 +695,10 @@ function registerTerminal(): void {
           stdio: ["ignore", "pipe", "pipe"],
         });
       }
-    } catch (e) {
-      return { ok: false, error: e instanceof Error ? e.message : String(e) };
+    } catch (err) {
+      return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
-    termChild = child;
+    ws.termChild = child;
 
     let finalCwd = cwd;
     let pendingOut = "";
@@ -628,7 +716,7 @@ function registerTerminal(): void {
         visible.push(line);
       }
       if (visible.length) {
-        win?.webContents.send("term-data", { kind: "out", text: `${visible.join("\n")}\n` });
+        sendTo(ws, "term-data", { kind: "out", text: `${visible.join("\n")}\n` });
       }
     };
     child.stdout?.on("data", forwardOut);
@@ -644,32 +732,35 @@ function registerTerminal(): void {
         return;
       }
       text = text.replace(/<Objs[\s\S]*?<\/Objs>\r?\n?/g, "");
-      if (text.trim()) win?.webContents.send("term-data", { kind: "err", text });
+      if (text.trim()) sendTo(ws, "term-data", { kind: "err", text });
     });
     child.on("close", (code) => {
       if (pendingOut.trim() && !pendingOut.includes(CWD_SENTINEL)) {
-        win?.webContents.send("term-data", { kind: "out", text: `${pendingOut}\n` });
+        sendTo(ws, "term-data", { kind: "out", text: `${pendingOut}\n` });
       }
-      termChild = null;
-      win?.webContents.send("term-exit", { code: code ?? 0, cwd: finalCwd });
+      ws.termChild = null;
+      sendTo(ws, "term-exit", { code: code ?? 0, cwd: finalCwd });
     });
-    child.on("error", (e) => {
-      termChild = null;
-      win?.webContents.send("term-data", { kind: "err", text: `${e.message}\n` });
-      win?.webContents.send("term-exit", { code: -1, cwd: finalCwd });
+    child.on("error", (err) => {
+      ws.termChild = null;
+      sendTo(ws, "term-data", { kind: "err", text: `${err.message}\n` });
+      sendTo(ws, "term-exit", { code: -1, cwd: finalCwd });
     });
     return { ok: true };
   });
 
-  ipcMain.handle("term-kill", () => {
-    const child = termChild;
+  ipcMain.handle("term-kill", (e) => {
+    const ws = wsOf(e);
+    const child = ws?.termChild;
     if (!child?.pid) return false;
     killTree(child);
     return true;
   });
 
   app.on("before-quit", () => {
-    if (termChild) killTree(termChild);
+    for (const ws of workspaces.values()) {
+      if (ws.termChild) killTree(ws.termChild);
+    }
   });
 }
 
@@ -733,10 +824,9 @@ if (!singleInstance) {
     // The tray icon is a Windows .ico; macOS keeps the app in the dock
     // instead, which is that platform's own version of background mode.
     if (process.platform === "win32") createTray();
-    startEngine(loadState().lastCwd || os.homedir());
   });
 
-  // A tray app outlives its window: all-closed just means "in the background".
+  // A tray app outlives its windows: all-closed just means "in the background".
   app.on("window-all-closed", () => {});
 
   // macOS: clicking the dock icon brings the hidden window back.
@@ -744,14 +834,14 @@ if (!singleInstance) {
     showWindow();
   });
 
-  let engineStopped = false;
+  let enginesStopped = false;
   app.on("before-quit", (e) => {
     quitting = true;
-    if (engineStopped) return;
-    // Give the engine a clean shutdown (session save, browser close) first.
+    if (enginesStopped) return;
+    // Give every engine a clean shutdown (session save, browser close) first.
     e.preventDefault();
-    void stopEngine().then(() => {
-      engineStopped = true;
+    void Promise.all([...workspaces.values()].map((ws) => stopEngine(ws))).then(() => {
+      enginesStopped = true;
       tray?.destroy();
       app.quit();
     });

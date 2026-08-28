@@ -1018,6 +1018,24 @@ export class Engine {
     return listSessions({ limit: limit ?? 30 });
   }
 
+  /**
+   * Read a session's transcript without switching to it.
+   *
+   * Deliberately free of assertIdle: this is how a history stays readable
+   * while a turn is running. Nothing engine-side moves — the transcript is
+   * rebuilt from the stored session on disk, exactly the way resuming would
+   * rebuild it, and the running session never notices.
+   */
+  peekSession(id: string): { title: string; cwd: string; items: ChatItem[] } {
+    const stored = loadSession(id);
+    if (!stored) throw new Error("That session could not be read.");
+    return {
+      title: deriveTitle(stored),
+      cwd: stored.cwd,
+      items: replayItems([...(stored.archived ?? []), ...stored.messages]),
+    };
+  }
+
   async resumeSession(id: string): Promise<EngineStatus> {
     this.assertIdle();
     const restored = loadSession(id);

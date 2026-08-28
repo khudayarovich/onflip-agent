@@ -28,6 +28,7 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { BrowserPanel, BrowserFrameDTO } from "./components/BrowserPanel";
 import { AboutModal } from "./components/AboutModal";
 import { SkillsModal } from "./components/SkillsModal";
+import { SessionPeekModal } from "./components/SessionPeekModal";
 import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
 
@@ -135,6 +136,8 @@ export function App(): React.ReactElement {
   const [approval, setApproval] = useState<{ id: number; request: ApprovalRequestDTO } | null>(null);
   const [modal, setModal] = useState<ModalName>(null);
   const [confirm, setConfirm] = useState<ConfirmState | null>(null);
+  /** A session opened read-only while a turn runs elsewhere. */
+  const [peek, setPeek] = useState<string | null>(null);
   const [engineDown, setEngineDown] = useState(false);
   const [sidebarHidden, setSidebarHidden] = useState(false);
   /** Set while a session/project switch is in flight; drives the spinners. */
@@ -532,13 +535,20 @@ export function App(): React.ReactElement {
   const resumeSession = useCallback(
     (id: string) => {
       if (loading) return;
+      // Switching tears the current session down, which the engine refuses
+      // mid-turn — and the refusal used to reach the user as a raw error.
+      // While a turn runs, another session's history opens read-only instead.
+      if (turnActive || status?.busy) {
+        setPeek(id);
+        return;
+      }
       setLoading({ label: translate(loadLang(), "openingSession"), sessionId: id });
       void api
         .resumeSession(id)
         .catch((e: Error) => notifyError(e.message))
         .finally(() => setLoading(null));
     },
-    [loading, notifyError]
+    [loading, notifyError, turnActive, status?.busy]
   );
 
   const openProject = useCallback(
@@ -1058,6 +1068,17 @@ export function App(): React.ReactElement {
       )}
       {modal === "diff" && <DiffModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutModal status={status} onClose={() => setModal(null)} />}
+      {peek && (
+        <SessionPeekModal
+          id={peek}
+          busy={busy}
+          onClose={() => setPeek(null)}
+          onSwitch={(id) => {
+            setPeek(null);
+            resumeSession(id);
+          }}
+        />
+      )}
 
       {modal === "cookie" && (
         <CookieSignInModal

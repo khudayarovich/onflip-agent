@@ -96,6 +96,8 @@ peer.onRequest = async (method, rawParams) => {
       return engine.listSessionSummaries(params.limit as number | undefined);
     case "resumeSession":
       return engine.resumeSession(String(params.id));
+    case "peekSession":
+      return engine.peekSession(String(params.id));
     case "deleteSession":
       return engine.removeSession(String(params.id));
     case "rollback":

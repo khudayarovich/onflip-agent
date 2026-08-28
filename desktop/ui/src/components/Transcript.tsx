@@ -358,7 +358,7 @@ function UserMessage({
   );
 }
 
-function TranscriptItem({
+export function TranscriptItem({
   item,
   toolProgress,
 }: {

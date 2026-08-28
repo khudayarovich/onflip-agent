@@ -218,6 +218,13 @@ export function Sidebar({
               label: t("newScratchChat"),
               onPick: onNewScratchChat,
             },
+            {
+              key: "_window",
+              label: t("newWindow"),
+              // A shell action, not an engine one — each window runs its own
+              // engine, which is what makes two sessions truly concurrent.
+              onPick: () => void window.onflip.newWindow(),
+            },
             { key: "_d", divider: true, label: "" },
             { key: "_h", heading: t("recentProjects"), label: "" },
             ...projects.map((p) => ({

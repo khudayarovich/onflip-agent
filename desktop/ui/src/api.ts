@@ -1,5 +1,6 @@
 import type {
   ApprovalMode,
+  ChatItem,
   ChatProjectDTO,
   ConfigView,
   EngineStatus,
@@ -46,6 +47,8 @@ export const api = {
   recentProjects: () => call<RecentProjectDTO[]>("recentProjects"),
   openProject: (dir: string) => call<EngineStatus>("openProject", { dir }),
   openScratch: () => call<EngineStatus>("openScratch"),
+  peekSession: (id: string) =>
+    call<{ title: string; cwd: string; items: ChatItem[] }>("peekSession", { id }),
   changeCwd: (dir: string) => call<EngineStatus>("changeCwd", { dir }),
 
   listModels: () => call<ModelDTO[]>("listModels"),
