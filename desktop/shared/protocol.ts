@@ -91,6 +91,8 @@ export interface ModelDTO {
   label: string;
   description: string;
   discovered?: boolean;
+  /** A ChatGPT Work variant regular chat cannot use; pickers hide these. */
+  workOnly?: boolean;
 }
 
 export interface SessionSummaryDTO {

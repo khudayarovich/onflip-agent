@@ -16,6 +16,22 @@ export interface ModelInfo {
   description: string;
   /** True when the entry came from the user's account rather than the defaults. */
   discovered?: boolean;
+  /**
+   * A ChatGPT Work variant the regular chat page will not honour.
+   *
+   * The account's list reports `-wm` slugs (Work mode) alongside the real
+   * ones, and they look like the better choice — `gpt-5.6-luna-wm` reads as
+   * Luna. But regular chat silently ignores a slug it does not serve and
+   * falls back to the plan's default: a session pinned to that "Luna" ran
+   * every turn on Sol, discovered only when the model introduced itself.
+   * Pickers hide these; typing one explicitly still works as an override.
+   */
+  workOnly?: boolean;
+}
+
+/** The account's Work-mode variants, which regular chat cannot use. */
+export function isWorkOnlySlug(slug: string): boolean {
+  return /-wm$/i.test(slug);
 }
 
 const BUILTIN_MODELS: ModelInfo[] = [
@@ -44,12 +60,20 @@ export function allModels(): ModelInfo[] {
   const cached = loadConfig().discoveredModels;
   if (!cached || cached.length === 0) return BUILTIN_MODELS;
 
-  const discovered: ModelInfo[] = cached.map((m) => ({
-    slug: m.slug,
-    label: m.title || m.slug,
-    description: m.description || "",
-    discovered: true,
-  }));
+  const discovered: ModelInfo[] = cached.map((m) => {
+    const workOnly = isWorkOnlySlug(m.slug);
+    return {
+      slug: m.slug,
+      label: m.title || m.slug,
+      description: workOnly
+        ? `ChatGPT Work only — regular chat ignores this slug and runs the plan's default instead${
+            m.description ? `. ${m.description}` : ""
+          }`
+        : m.description || "",
+      discovered: true,
+      ...(workOnly ? { workOnly: true } : {}),
+    };
+  });
 
   const hasAuto = discovered.some((m) => m.slug === "auto");
   return hasAuto ? discovered : [BUILTIN_MODELS[0], ...discovered];
@@ -83,20 +107,20 @@ export const DEFAULT_MODEL = "auto";
 /**
  * What a session runs on when nothing was chosen.
  *
- * Luna, because it is the tier with unlimited text chat — the agent's many
- * tool round-trips burn through capped models' windows fast. The account's
- * own list is preferred when it has been refreshed: the web app's slug for
- * Luna can differ from the public one (measured: `gpt-5.6-luna-wm`), and a
- * slug ChatGPT does not recognise silently falls back to its own default.
+ * Luna when the account reports a slug regular chat can actually serve —
+ * it is the tier with unlimited text chat, and the agent's many tool
+ * round-trips burn through capped models' windows fast. An earlier version
+ * preferred any slug containing "luna" and landed on `gpt-5.6-luna-wm`,
+ * which is a ChatGPT Work variant: regular chat ignored it and ran every
+ * turn on Sol, wearing Luna's name in the chip the whole time. Work-only
+ * slugs are excluded now, and with no usable Luna the default is `auto` —
+ * honest about letting ChatGPT choose, which for regular chat on a paid
+ * plan means Sol either way.
  */
 export function defaultModel(): string {
-  const luna = loadConfig().discoveredModels?.find((m) => /luna/i.test(m.slug));
-  // Only ever a slug the account actually reports. A guessed public name is
-  // worse than none: `?model=` is ignored silently when ChatGPT does not
-  // recognise it, so a fresh machine ran on whatever the web app fell back
-  // to — measured, the real slug here is `gpt-5.6-luna-wm`, and the public
-  // `gpt-5.6-luna` is not in the account's list at all. `auto` is honest
-  // about letting ChatGPT choose.
+  const luna = loadConfig().discoveredModels?.find(
+    (m) => !isWorkOnlySlug(m.slug) && (/luna/i.test(m.slug) || /luna/i.test(m.title ?? ""))
+  );
   return luna?.slug ?? DEFAULT_MODEL;
 }
 

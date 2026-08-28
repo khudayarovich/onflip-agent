@@ -563,13 +563,19 @@ export function Composer({
           openUp
           entries={[
             { key: "_h", heading: t("menuModel"), label: "" },
-            ...models.map((m) => ({
-              key: m.slug,
-              label: m.label,
-              hint: m.slug,
-              checked: m.slug === status?.model,
-              onPick: () => onSetModel(m.slug),
-            })),
+            // Work-only slugs are hidden — regular chat silently ignores
+            // them and runs the plan's default wearing the wrong name. The
+            // one currently selected stays visible, labelled for what it is,
+            // so the session's state is never invisible.
+            ...models
+              .filter((m) => !m.workOnly || m.slug === status?.model)
+              .map((m) => ({
+                key: m.slug,
+                label: m.label,
+                hint: m.workOnly ? `${m.slug} · ${t("modelWorkOnly")}` : m.slug,
+                checked: m.slug === status?.model,
+                onPick: () => onSetModel(m.slug),
+              })),
           ]}
         />
       )}
