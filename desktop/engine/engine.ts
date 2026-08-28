@@ -723,10 +723,14 @@ export class Engine {
     // the turn never finished it vanished without a trace.
     this.saveNow();
 
+    // Kept for the workspace scan below: files the answer names by hand are
+    // deliverables even when nothing on disk changed this turn.
+    let finalAnswer = "";
     try {
       // Before anything can open a chat: the project the chat files into.
       await this.ensureOnFlipProject();
       const result = await runTurn(this.history, this.agentOptions());
+      finalAnswer = result.finalAnswer;
       if (result.interrupted) {
         this.notice("Interrupted. The work done so far is kept — say what to do next.");
         this.peer.emit("turn", { state: "end", interrupted: true, iterations: result.iterations });
@@ -772,6 +776,9 @@ export class Engine {
       if (scratchBefore && inScratch(this.cwd)) {
         try {
           const files = scratchArtifacts(this.cwd, scratchBefore);
+          for (const mentioned of mentionedArtifacts(this.cwd, finalAnswer)) {
+            if (!files.some((f) => f.path === mentioned.path)) files.push(mentioned);
+          }
           if (files.length > 0) {
             this.peer.emit("item", { type: "files", id: randomUUID(), files } satisfies ChatItem);
           }
@@ -1335,8 +1342,9 @@ export class Engine {
           this.context.environment,
           "",
           "This is a folder-less chat session. The working directory is a private scratch workspace; the user has not opened any project. " +
-            "Every file you create or change in this workspace is offered to the user in the chat as a download after the turn. " +
-            "When asked to produce a document, spreadsheet, image, or any other file, write it as a real file in the working directory rather than pasting its content into the reply.",
+            "Every file you create or change in this workspace is offered to the user in the chat as a download after the turn, and any workspace file you name in your final answer gets its download button again. " +
+            "When asked to produce a document, spreadsheet, image, or any other file, write it as a real file in the working directory rather than pasting its content into the reply. " +
+            "Never copy files into the user's own folders (Downloads, Desktop, Documents) — when the user asks to download a file, make sure it exists in the working directory and state its file name in your answer; the app handles the download from there.",
         ].join("\n"),
       };
     }
@@ -1931,6 +1939,42 @@ export function scratchArtifacts(
   for (const [full, sig] of scratchIndex(dir)) {
     if (out.length >= cap) break;
     if (before.get(full) === sig) continue;
+    try {
+      out.push({ name: path.relative(dir, full), path: full, size: fs.statSync(full).size });
+    } catch {
+      /* deleted between scans */
+    }
+  }
+  return out;
+}
+
+/**
+ * Workspace files the reply names, offered again as downloads.
+ *
+ * The diff catches what a turn created; this catches what a turn was asked
+ * for. "Can I download that file?" about a workbook already sitting in the
+ * workspace changes nothing on disk, so the diff rightly stays silent — and
+ * the user was left with a path in prose and no button. A file the model
+ * mentions by name in its final answer is being handed over, whenever it
+ * was made.
+ */
+export function mentionedArtifacts(
+  dir: string,
+  answer: string,
+  cap = 20
+): { name: string; path: string; size: number }[] {
+  const text = (answer ?? "").trim();
+  if (!text) return [];
+  const out: { name: string; path: string; size: number }[] = [];
+  for (const [full] of scratchIndex(dir)) {
+    if (out.length >= cap) break;
+    const base = path.basename(full);
+    // Short names ("a.txt") match prose by accident; a real handover names
+    // the file properly. The boundary check keeps "report.docx" from
+    // matching inside "other-report.docx".
+    if (base.length < 5) continue;
+    const escaped = base.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (!new RegExp(`(?<![\\p{L}\\p{N}_-])${escaped}`, "u").test(text)) continue;
     try {
       out.push({ name: path.relative(dir, full), path: full, size: fs.statSync(full).size });
     } catch {
