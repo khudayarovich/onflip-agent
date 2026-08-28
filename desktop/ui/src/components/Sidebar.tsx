@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useRef, useState } from "react";
 import type {
   ConnectState,
   EngineStatus,
@@ -62,29 +62,41 @@ export function Sidebar({
   const projectName = status ? baseName(status.cwd) : "…";
   const home = status?.home ?? "";
 
-  // Codex-style grouping: the open folder's sessions first, then other
-  // project folders as named groups, and home-directory sessions as plain
-  // ungrouped "chats" — a chat without a project is just a chat.
-  const currentSessions = sessions.filter(
-    (s) => !status || samePath(s.cwd, status.cwd)
-  );
-  const otherSessions = sessions.filter(
-    (s) => status && !samePath(s.cwd, status.cwd)
-  );
-  const looseChats = otherSessions.filter((s) => home && samePath(s.cwd, home));
+  // Grouping that holds still. Every project folder is a named group and the
+  // active one is highlighted in place — the old layout hoisted the active
+  // project's sessions into a separate top section and re-sorted the rest by
+  // recency, so every selection rearranged the entire list under the
+  // pointer. A chat without a project — the home directory, or a folder-less
+  // scratch chat — is just a chat.
+  const isChat = (s: SessionSummaryDTO) =>
+    (home && samePath(s.cwd, home)) || /[\\/]\.onflip[\\/]scratch([\\/]|$)/i.test(s.cwd);
+  const looseChats = sessions.filter(isChat);
+  const groupOrder = useRef(new Map<string, number>());
   const projectGroups = (() => {
     const groups = new Map<string, { dir: string; sessions: SessionSummaryDTO[] }>();
-    for (const s of otherSessions) {
-      if (home && samePath(s.cwd, home)) continue;
+    for (const s of sessions) {
+      if (isChat(s)) continue;
       const key = s.cwd.replace(/[\\/]+$/, "").toLowerCase();
       const group = groups.get(key) ?? { dir: s.cwd, sessions: [] };
       group.sessions.push(s);
       groups.set(key, group);
     }
-    // The store lists sessions newest-first, so a group's first entry is its
-    // most recent — order groups by that.
-    return [...groups.values()]
-      .sort((a, b) => (b.sessions[0]?.updatedAt ?? 0) - (a.sessions[0]?.updatedAt ?? 0))
+    // First seen, first placed: a group keeps its position for the life of
+    // the window. The initial order is by recency (the store lists sessions
+    // newest-first, so a group's first entry is its most recent); a project
+    // opened later slots in at the top instead of reshuffling the rest.
+    const order = groupOrder.current;
+    const byRecency = [...groups.entries()].sort(
+      (a, b) => (b[1].sessions[0]?.updatedAt ?? 0) - (a[1].sessions[0]?.updatedAt ?? 0)
+    );
+    const firstFill = order.size === 0;
+    let position = 0;
+    for (const [key] of byRecency) {
+      if (!order.has(key)) order.set(key, firstFill ? position++ : -(order.size + 1));
+    }
+    return byRecency
+      .sort((a, b) => (order.get(a[0]) ?? 0) - (order.get(b[0]) ?? 0))
+      .map(([, group]) => group)
       .slice(0, 8);
   })();
 
@@ -110,82 +122,71 @@ export function Sidebar({
         </button>
       </div>
 
-      <div className="section-label">
-        {status && home && samePath(status.cwd, home) ? t("chatsSection") : t("sessions")}
-      </div>
       <div className="sessions">
-        {currentSessions.map((s) => (
-          <SessionRow
-            key={s.id}
-            session={s}
-            active={s.id === status?.sessionId}
-            resuming={s.id === resumingId}
-            switching={switching}
-            working={s.id === workingId}
-            failed={s.id === failedId}
-            onResume={onResumeSession}
-            onDelete={onDeleteSession}
-          />
-        ))}
-        {currentSessions.length === 0 && (
-          <div className="modal-note" style={{ padding: "4px 10px" }}>
-            {t("noSessions")}
-          </div>
-        )}
-
         {projectGroups.length > 0 && (
           <>
-            <div className="section-label" style={{ padding: "14px 8px 6px" }}>
-              {t("projectsSection")}
-            </div>
-            {projectGroups.map((group) => (
-              <div key={group.dir} className="project-group">
-                <button
-                  className="project-group-head"
-                  title={group.dir}
-                  onClick={() => {
-                    if (!switching) onOpenProject(group.dir);
-                  }}
-                >
-                  <span className="folder">🗀</span>
-                  <span className="group-name">{baseName(group.dir)}</span>
-                  <span className="group-count">{group.sessions.length}</span>
-                </button>
-                {group.sessions.slice(0, 5).map((s) => (
-                  <SessionRow
-                    key={s.id}
-                    session={s}
-                    active={false}
-                    resuming={s.id === resumingId}
-                    switching={switching}
-                    failed={s.id === failedId}
-                    onResume={onResumeSession}
-                    onDelete={onDeleteSession}
-                  />
-                ))}
-              </div>
-            ))}
+            <div className="section-label">{t("projectsSection")}</div>
+            {projectGroups.map((group) => {
+              const current = status ? samePath(group.dir, status.cwd) : false;
+              return (
+                <div key={group.dir} className="project-group">
+                  <button
+                    className={`project-group-head${current ? " current" : ""}`}
+                    title={group.dir}
+                    onClick={() => {
+                      if (!switching && !current) onOpenProject(group.dir);
+                    }}
+                  >
+                    <span className="folder">🗀</span>
+                    <span className="group-name">{baseName(group.dir)}</span>
+                    <span className="group-count">{group.sessions.length}</span>
+                  </button>
+                  {group.sessions.slice(0, current ? 12 : 5).map((s) => (
+                    <SessionRow
+                      key={s.id}
+                      session={s}
+                      active={s.id === status?.sessionId}
+                      resuming={s.id === resumingId}
+                      switching={switching}
+                      working={s.id === workingId}
+                      failed={s.id === failedId}
+                      onResume={onResumeSession}
+                      onDelete={onDeleteSession}
+                    />
+                  ))}
+                </div>
+              );
+            })}
           </>
         )}
 
         {looseChats.length > 0 && (
           <>
-            <div className="section-label" style={{ padding: "14px 8px 6px" }}>
+            <div
+              className="section-label"
+              style={projectGroups.length > 0 ? { padding: "14px 8px 6px" } : undefined}
+            >
               {t("chatsSection")}
             </div>
             {looseChats.slice(0, 12).map((s) => (
               <SessionRow
                 key={s.id}
                 session={s}
-                active={false}
+                active={s.id === status?.sessionId}
                 resuming={s.id === resumingId}
                 switching={switching}
+                working={s.id === workingId}
                 failed={s.id === failedId}
                 onResume={onResumeSession}
                 onDelete={onDeleteSession}
               />
             ))}
           </>
+        )}
+        {sessions.length === 0 && (
+          <div className="modal-note" style={{ padding: "4px 10px" }}>
+            {t("noSessions")}
+          </div>
         )}
       </div>
 
