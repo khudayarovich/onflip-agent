@@ -259,6 +259,10 @@ export function App(): React.ReactElement {
       .then((s) => {
         setStatus(s);
         refreshLists();
+        // The model chip renders its label from this list; loaded only when
+        // the dropdown first opened, the chip spent every session's first
+        // minutes showing the raw slug instead of the model's name.
+        void api.listModels().then(setModels).catch(() => {});
       })
       .catch((e: Error) => {
         setConnect("error");
