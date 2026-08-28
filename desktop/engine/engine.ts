@@ -59,7 +59,7 @@ import {
 import { buildSystemPrompt } from "onflip/dist/agent/system";
 import { loadProjectContext, ProjectContext } from "onflip/dist/agent/context";
 import { newMessage } from "onflip/dist/agent/protocol";
-import { runTurn, compactNow, transcriptChars, AgentOptions } from "onflip/dist/agent/run";
+import { runTurn, compactNow, reducibleChars, AgentOptions } from "onflip/dist/agent/run";
 import {
   ApprovalMode,
   isApprovalMode,
@@ -475,7 +475,12 @@ export class Engine {
       version: ENGINE_VERSION,
       cwd: this.cwd,
       scratch: inScratch(this.cwd) || undefined,
-      contextChars: transcriptChars(this.history),
+      // The same measure the compaction trigger uses — the reclaimable part
+      // of the transcript, excluding the system prompt it keeps verbatim.
+      // Counting the whole transcript pinned the ring at 100% while nothing
+      // compacted, because a 20k prompt inside a 45k budget starts the
+      // gauge half-full on an empty conversation.
+      contextChars: reducibleChars(this.history),
       contextBudget: this.contextBudgetChars(),
       home: os.homedir(),
       sessionId: this.session?.id ?? "",
