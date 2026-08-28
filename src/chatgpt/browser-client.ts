@@ -2018,14 +2018,41 @@ export async function fetchModelsViaBrowser(cookies: SessionCookie[]): Promise<R
  */
 export async function fetchAccountPlan(cookies: SessionCookie[]): Promise<string | null> {
   const p = await pageOnChatGpt(cookies);
-  const json = (await backendApi(p, "/backend-api/accounts/check/v4-2023-04-08")) as {
-    accounts?: Record<string, { account?: { plan_type?: string; structure?: string } }>;
+  // The dated endpoint was retired — every start logged HTTP 500 "Invalid
+  // version: v4-2023-04-08" — and with the plan unreadable the compaction
+  // budget silently sat at the unknown-plan default whatever the account
+  // actually grants. The undated spelling goes first; the dated one stays
+  // as the fallback for backends that still serve it.
+  for (const endpoint of [
+    "/backend-api/accounts/check",
+    "/backend-api/accounts/check/v4-2023-04-08",
+  ]) {
+    let json: unknown;
+    try {
+      json = await backendApi(p, endpoint);
+    } catch {
+      continue;
+    }
+    const plan = planFromAccountsPayload(json);
+    if (plan) return plan;
+  }
+  return null;
+}
+
+/** The plan, out of either shape the accounts endpoint has answered with. */
+export function planFromAccountsPayload(json: unknown): string | null {
+  const root = json as {
+    accounts?: Record<string, { account?: { plan_type?: string } }>;
+    account_plan?: { subscription_plan?: string };
+    plan_type?: string;
   };
-  const accounts = json?.accounts ?? {};
+  const accounts = root?.accounts ?? {};
   for (const key of ["default", ...Object.keys(accounts)]) {
     const plan = accounts[key]?.account?.plan_type;
     if (typeof plan === "string" && plan.trim()) return plan.trim().toLowerCase();
   }
+  const flat = root?.plan_type ?? root?.account_plan?.subscription_plan;
+  if (typeof flat === "string" && flat.trim()) return flat.trim().toLowerCase();
   return null;
 }
 
