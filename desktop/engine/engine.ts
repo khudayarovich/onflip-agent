@@ -43,6 +43,7 @@ import {
   takeReplyImages,
   takeProjectWarning,
   currentConversationId,
+  sweepConversationsIntoProject,
   pageSessionUser,
   deleteConversations,
   RemoteProject,
@@ -685,6 +686,22 @@ export class Engine {
 
   private runningToolId: string | null = null;
   private toolIds = new Map<ToolCall, string>();
+  /** The one wide sweep per process has run; later passes stay narrow. */
+  private sweptAllSessions = false;
+
+  /** Every ChatGPT conversation any stored session opened, current included. */
+  private allKnownChatIds(): string[] {
+    const ids = new Set<string>(this.session?.chatIds ?? []);
+    try {
+      for (const summary of listSessions({ limit: 200 })) {
+        const stored = loadSession(summary.id);
+        for (const id of stored?.chatIds ?? []) ids.add(id);
+      }
+    } catch {
+      /* sweep what we have */
+    }
+    return [...ids];
+  }
 
   private async runOneTurn(text: string, attachments?: string[]): Promise<void> {
     this.busy = true;
@@ -804,6 +821,18 @@ export class Engine {
       if (conversationId && this.session) {
         const ids = (this.session.chatIds ??= []);
         if (!ids.includes(conversationId)) ids.push(conversationId);
+      }
+      // Every chat this session ever opened belongs in the project, not just
+      // the one still on screen — a filing that failed under a throttle used
+      // to be abandoned the moment compaction opened the next thread. The
+      // first pass of a process goes wider and sweeps every stored session's
+      // chats, so strays left behind by earlier runs come home too.
+      const sweepIds = this.sweptAllSessions
+        ? (this.session?.chatIds ?? [])
+        : this.allKnownChatIds();
+      this.sweptAllSessions = true;
+      if (sweepIds.length) {
+        await sweepConversationsIntoProject(sweepIds).catch(() => {});
       }
 
       const next = this.queue.shift();

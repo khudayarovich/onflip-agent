@@ -573,9 +573,27 @@ export function newestUnseen(recent: string[], before: Set<string> | null): stri
   return recent.find((id) => !before.has(id)) ?? null;
 }
 
+/**
+ * The conversation list, with one retry across a throttle.
+ *
+ * A 429 here is momentary — the same request answers seconds later — but its
+ * cost was not: without the list a new chat's id cannot be told apart, the
+ * filing is skipped, and the chat sits in the main list for good. Seen in
+ * every session that hit the account throttle.
+ */
+async function recentIdsWithRetry(p: Page): Promise<string[]> {
+  try {
+    return await recentConversationIds(p);
+  } catch (e) {
+    if (!/HTTP 429/.test(e instanceof Error ? e.message : "")) throw e;
+    await p.waitForTimeout(3_500);
+    return await recentConversationIds(p);
+  }
+}
+
 async function snapshotConversations(p: Page): Promise<Set<string> | null> {
   try {
-    return new Set(await recentConversationIds(p));
+    return new Set(await recentIdsWithRetry(p));
   } catch (e) {
     // Best effort. Without it a chat whose id the URL withholds cannot be
     // identified, which costs the filing — not the turn.
@@ -608,7 +626,7 @@ async function resolveConversationId(p: Page): Promise<string | null> {
   const before = conversationsBeforeChat;
   if (!before) return null;
   try {
-    const fresh = newestUnseen(await recentConversationIds(p), before);
+    const fresh = newestUnseen(await recentIdsWithRetry(p), before);
     if (fresh) {
       logger.info("browser", "identified the chat from the conversation list", {
         conversation: fresh,
@@ -664,6 +682,66 @@ async function fileIntoProject(p: Page, conversationId: string, project: RemoteP
       error: e instanceof Error ? e.message : String(e),
     });
     warnProjectUnavailable(project.name, e instanceof Error ? e.message : String(e));
+  }
+}
+
+/** Conversations confirmed inside the project (or gone), per process. */
+const sweptConversations = new Set<string>();
+
+/**
+ * File every conversation a session has opened, not just the newest one.
+ *
+ * Per-turn filing covers the chat in front of us, and its failures were
+ * being abandoned: a throttle or an unidentified id left the chat in the
+ * main list, and once compaction opened the next thread nothing ever went
+ * back for it. The session remembers every id it opened (chatIds), so this
+ * walks that list and moves what is still outside the project. Verified
+ * ids are remembered per process — steady state is one read per chat,
+ * once, and a 429 ends the pass early rather than hammering a throttle.
+ */
+export async function sweepConversationsIntoProject(ids: string[]): Promise<void> {
+  if (!activeProject || !page || page.isClosed()) return;
+  const project = activeProject;
+  const p = page;
+  for (const id of ids) {
+    if (!id || sweptConversations.has(id)) continue;
+    try {
+      const convo = (await backendApi(p, `/backend-api/conversation/${id}`)) as {
+        gizmo_id?: string | null;
+      };
+      if (convo?.gizmo_id === project.id) {
+        sweptConversations.add(id);
+        continue;
+      }
+      await backendApi(p, `/backend-api/conversation/${id}`, {
+        method: "PATCH",
+        body: { gizmo_id: project.id },
+      });
+      // Trust the read, not the status code — same lesson as fileIntoProject.
+      const after = (await backendApi(p, `/backend-api/conversation/${id}`)) as {
+        gizmo_id?: string | null;
+      };
+      if (after?.gizmo_id === project.id) {
+        sweptConversations.add(id);
+        logger.info("browser", "swept a stray chat into the project", {
+          conversation: id,
+          project: project.id,
+        });
+      }
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // A conversation that no longer exists is not coming back; stop asking.
+      if (/HTTP 404/.test(message)) {
+        sweptConversations.add(id);
+        continue;
+      }
+      logger.warn("browser", "could not sweep chat into the project", {
+        conversation: id,
+        error: message.replace(/\s+/g, " ").slice(0, 160),
+      });
+      // A throttle now is a throttle for the rest of the list too.
+      if (/HTTP 429/.test(message)) return;
+    }
   }
 }
 
