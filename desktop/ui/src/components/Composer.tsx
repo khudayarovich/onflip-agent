@@ -60,6 +60,41 @@ function thinkingInfo(level: ThinkingLevel | null | undefined) {
 
 // -- chip icons (14px inline strokes, lucide-style) --------------------------
 
+/**
+ * The context ring: how full the conversation is, at a glance.
+ *
+ * Quiet at low usage, amber past 70%, red past 90% — by 100% the next turn
+ * triggers a compaction, which costs real time, so the colour is a nudge to
+ * wrap up or /compact deliberately.
+ */
+function ContextRing({ pct }: { pct: number }): React.ReactElement {
+  const r = 5.5;
+  const c = 2 * Math.PI * r;
+  const filled = (Math.max(0, Math.min(100, pct)) / 100) * c;
+  const color = pct >= 90 ? "#e5484d" : pct >= 70 ? "#f5a524" : "currentColor";
+  return (
+    <svg width="13" height="13" viewBox="0 0 14 14">
+      <circle cx="7" cy="7" r={r} fill="none" stroke="currentColor" strokeOpacity="0.25" strokeWidth="2.4" />
+      <circle
+        cx="7"
+        cy="7"
+        r={r}
+        fill="none"
+        stroke={color}
+        strokeWidth="2.4"
+        strokeLinecap="round"
+        strokeDasharray={`${filled} ${c - filled}`}
+        transform="rotate(-90 7 7)"
+      />
+    </svg>
+  );
+}
+
+/** 18_400 → "18.4k chars"; 950 → "950 chars". */
+function formatKChars(n: number): string {
+  return n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`;
+}
+
 const iconProps = {
   width: 13,
   height: 13,
@@ -190,6 +225,7 @@ export function Composer({
   const modelMenu = useMenu();
   const thinkingMenu = useMenu();
   const approvalMenu = useMenu();
+  const contextMenu = useMenu();
 
   const slashMatches = useMemo(() => {
     if (!text.startsWith("/") || text.includes("\n")) return [];
@@ -330,6 +366,12 @@ export function Composer({
 
   const modelSlug = status?.model ?? "auto";
   const modelLabel = models.find((m) => m.slug === modelSlug)?.label ?? modelSlug;
+
+  // How full the conversation is, against the size at which it compacts.
+  const contextPct =
+    status?.contextBudget && status.contextBudget > 0
+      ? Math.min(100, Math.round(((status.contextChars ?? 0) / status.contextBudget) * 100))
+      : null;
   const placeholder = busy ? t("hintBusy") : t("composerPlaceholder");
 
   return (
@@ -479,10 +521,41 @@ export function Composer({
               {t("shellOff")}
             </span>
           )}
+          {contextPct !== null && (
+            <button
+              className="chip icon-only"
+              data-tip={`${t("contextTip")} — ${contextPct}%`}
+              onClick={contextMenu.open}
+            >
+              <ContextRing pct={contextPct} />
+            </button>
+          )}
         </div>
       </div>
       <div className="composer-hint">{busy ? t("hintBusy") : t("hintIdle")}</div>
 
+      {contextMenu.anchor && contextPct !== null && status && (
+        <Menu
+          anchor={contextMenu.anchor}
+          onClose={contextMenu.close}
+          openUp
+          entries={[
+            { key: "_h", heading: `${t("contextTip")} — ${contextPct}%`, label: "" },
+            {
+              key: "_used",
+              label: t("contextUsed"),
+              hint: `${formatKChars(status.contextChars ?? 0)} · ~${formatKChars(
+                Math.round((status.contextChars ?? 0) / 4)
+              )} tokens`,
+            },
+            {
+              key: "_budget",
+              label: t("contextCompactsAt"),
+              hint: formatKChars(status.contextBudget ?? 0),
+            },
+          ]}
+        />
+      )}
       {modelMenu.anchor && (
         <Menu
           anchor={modelMenu.anchor}

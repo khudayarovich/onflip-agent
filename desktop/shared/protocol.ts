@@ -126,6 +126,9 @@ export interface EngineStatus {
   cwd: string;
   /** True when this is a folder-less chat in a private scratch workspace. */
   scratch?: boolean;
+  /** Transcript size in characters, and the size at which compaction fires. */
+  contextChars?: number;
+  contextBudget?: number;
   home: string;
   sessionId: string;
   sessionTitle: string;

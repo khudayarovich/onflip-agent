@@ -59,7 +59,7 @@ import {
 import { buildSystemPrompt } from "onflip/dist/agent/system";
 import { loadProjectContext, ProjectContext } from "onflip/dist/agent/context";
 import { newMessage } from "onflip/dist/agent/protocol";
-import { runTurn, compactNow, AgentOptions } from "onflip/dist/agent/run";
+import { runTurn, compactNow, transcriptChars, AgentOptions } from "onflip/dist/agent/run";
 import {
   ApprovalMode,
   isApprovalMode,
@@ -461,12 +461,22 @@ export class Engine {
   // status
   // =========================================================================
 
+  /** The transcript size at which compaction fires — one number, two users. */
+  private contextBudgetChars(): number {
+    return (
+      this.config.compactAfterChars ??
+      compactionBudget(loadConfig().planType, uploadsAvailable())
+    );
+  }
+
   statusPayload(): EngineStatus {
     const cfg = loadConfig();
     return {
       version: ENGINE_VERSION,
       cwd: this.cwd,
       scratch: inScratch(this.cwd) || undefined,
+      contextChars: transcriptChars(this.history),
+      contextBudget: this.contextBudgetChars(),
       home: os.homedir(),
       sessionId: this.session?.id ?? "",
       sessionTitle: this.session ? deriveTitle(this.session) : "",
@@ -910,9 +920,7 @@ export class Engine {
       // Set by the user, or derived from the plan: a bigger window is worth
       // more transcript, and the composer's own ceiling caps both.
       // Uploads lift the typing ceiling, so the plan gets to be the limit.
-      compactAfterChars:
-        this.config.compactAfterChars ??
-        compactionBudget(loadConfig().planType, uploadsAvailable()),
+      compactAfterChars: this.contextBudgetChars(),
       events: {
         onThinking: (iteration) => this.peer.emit("thinking", { iteration }),
         onDelta: (full) => {
