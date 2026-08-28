@@ -75,6 +75,8 @@ export type ChatItem =
   | { type: "narration"; id: string; text: string }
   | { type: "tool"; id: string; call: ToolCallDTO; result?: ToolResultDTO }
   | { type: "image"; id: string; dataUrl: string; name: string }
+  /** Files a folder-less chat produced this turn, offered as downloads. */
+  | { type: "files"; id: string; files: { name: string; path: string; size: number }[] }
   /** How long a finished turn took, rendered as a quiet line under it. */
   | { type: "duration"; id: string; ms: number; interrupted?: boolean }
   | { type: "notice"; id: string; text: string }
@@ -122,6 +124,8 @@ export interface RemoteChatDTO {
 export interface EngineStatus {
   version: string;
   cwd: string;
+  /** True when this is a folder-less chat in a private scratch workspace. */
+  scratch?: boolean;
   home: string;
   sessionId: string;
   sessionTitle: string;

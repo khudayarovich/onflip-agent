@@ -385,6 +385,8 @@ function TranscriptItem({
       return <ToolCard item={item} progress={toolProgress[item.id]} />;
     case "image":
       return <GeneratedImage dataUrl={item.dataUrl} name={item.name} />;
+    case "files":
+      return <GeneratedFiles files={item.files} />;
     case "duration":
       return (
         <div className="msg-duration">
@@ -433,6 +435,63 @@ function GeneratedImage({ dataUrl, name }: { dataUrl: string; name: string }): R
       </div>
     </div>
   );
+}
+
+/**
+ * Files a folder-less chat produced this turn.
+ *
+ * They live in the chat's private scratch workspace, which the user never
+ * browses — these chips are how the files reach them. Save copies the file
+ * where they point it; Open hands it to whatever the system opens it with.
+ */
+function GeneratedFiles({
+  files,
+}: {
+  files: { name: string; path: string; size: number }[];
+}): React.ReactElement {
+  const t = useT();
+  const [saved, setSaved] = useState<Record<string, string>>({});
+  return (
+    <div className="msg-files">
+      <div className="msg-files-note">{t("filesFromChat")}</div>
+      {files.map((f) => (
+        <div key={f.path} className="msg-file">
+          <span className="msg-file-name" title={f.path}>
+            {f.name}
+          </span>
+          <span className="msg-file-size">{formatSize(f.size)}</span>
+          {saved[f.path] ? (
+            <span className="msg-image-saved">{t("imageSaved", { path: saved[f.path] })}</span>
+          ) : (
+            <>
+              <button
+                className="msg-image-save"
+                onClick={() => {
+                  void window.onflip.saveArtifact(f.path, f.name.replace(/[\\/]/g, "-")).then((p) => {
+                    if (p) setSaved((s) => ({ ...s, [f.path]: p }));
+                  });
+                }}
+              >
+                {t("fileSave")}
+              </button>
+              <button
+                className="msg-image-save"
+                onClick={() => void window.onflip.openArtifact(f.path)}
+              >
+                {t("fileOpen")}
+              </button>
+            </>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
 }
 
 /** The clock beside "Working", ticking while the turn runs. */

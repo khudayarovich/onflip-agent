@@ -559,6 +559,17 @@ export function App(): React.ReactElement {
     });
   }, [openProject]);
 
+  // A chat with no folder: the engine gives it a private scratch workspace,
+  // and anything it produces comes back as downloads in the transcript.
+  const startScratchChat = useCallback(() => {
+    if (loading) return;
+    setLoading({ label: translate(loadLang(), "openingProject") });
+    void api
+      .openScratch()
+      .catch((e: Error) => notifyError(e.message))
+      .finally(() => setLoading(null));
+  }, [loading, notifyError]);
+
   const doUndo = useCallback(() => {
     void api.undoPreview().then((preview) => {
       if (!preview) {
@@ -680,8 +691,11 @@ export function App(): React.ReactElement {
 
   const busy = turnActive || Boolean(status?.busy);
   const homePath = status?.home ?? "";
-  const shortCwd =
-    status && homePath && status.cwd.toLowerCase().startsWith(homePath.toLowerCase())
+  const shortCwd = status?.scratch
+    ? // A scratch workspace's real path is an implementation detail; what the
+      // user chose was a chat without a folder, so that is what the strip says.
+      translate(lang, "newScratchChat")
+    : status && homePath && status.cwd.toLowerCase().startsWith(homePath.toLowerCase())
       ? `~${status.cwd.slice(homePath.length)}`
       : (status?.cwd ?? "");
 
@@ -809,6 +823,7 @@ export function App(): React.ReactElement {
         }
         onOpenProject={openProject}
         onPickFolder={pickFolder}
+        onNewScratchChat={startScratchChat}
         onOpenSettings={() => setModal("settings")}
         onOpenAbout={() => setModal("about")}
         onOpenSkills={() => setModal("skills")}

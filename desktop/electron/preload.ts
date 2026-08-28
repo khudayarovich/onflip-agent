@@ -15,6 +15,8 @@ export interface OnFlipBridge {
   pickFiles(): Promise<string[]>;
   saveImage(dataUrl: string, suggestedName: string): Promise<string | null>;
   saveFile(suggestedName: string, content: string): Promise<string | null>;
+  saveArtifact(path: string, suggestedName: string): Promise<string | null>;
+  openArtifact(path: string): Promise<boolean>;
   restartEngine(cwd?: string): Promise<boolean>;
   appInfo(): Promise<{ version: string; platform: string }>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
@@ -61,6 +63,9 @@ const bridge: OnFlipBridge = {
     ipcRenderer.invoke("save-image", { dataUrl, suggestedName }),
   saveFile: (suggestedName, content) =>
     ipcRenderer.invoke("save-file", { suggestedName, content }),
+  saveArtifact: (path, suggestedName) =>
+    ipcRenderer.invoke("save-artifact", { path, suggestedName }),
+  openArtifact: (path) => ipcRenderer.invoke("open-artifact", { path }),
   restartEngine: (cwd) => ipcRenderer.invoke("restart-engine", { cwd }),
   appInfo: () => ipcRenderer.invoke("app-info"),
 

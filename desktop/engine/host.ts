@@ -116,6 +116,8 @@ peer.onRequest = async (method, rawParams) => {
       return engine.recentProjectList();
     case "openProject":
       return engine.openProject(String(params.dir));
+    case "openScratch":
+      return engine.openScratch();
     case "changeCwd":
       return engine.changeCwd(String(params.dir));
 

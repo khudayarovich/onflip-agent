@@ -448,6 +448,33 @@ function registerIpc(): void {
     }
   );
 
+  // A file a folder-less chat produced, copied wherever the user points.
+  // Copy, not move: the scratch workspace stays intact, so the chat can keep
+  // editing the document it just delivered.
+  ipcMain.handle(
+    "save-artifact",
+    async (_e, payload: { path: string; suggestedName: string }) => {
+      if (!win) return null;
+      if (!payload?.path || !fs.existsSync(payload.path)) return null;
+      const result = await dialog.showSaveDialog(win, {
+        title: "Save file",
+        defaultPath: path.join(
+          app.getPath("downloads"),
+          payload.suggestedName || path.basename(payload.path)
+        ),
+      });
+      if (result.canceled || !result.filePath) return null;
+      fs.copyFileSync(payload.path, result.filePath);
+      return result.filePath;
+    }
+  );
+
+  ipcMain.handle("open-artifact", async (_e, payload: { path: string }) => {
+    if (!payload?.path || !fs.existsSync(payload.path)) return false;
+    const error = await shell.openPath(payload.path);
+    return error === "";
+  });
+
   ipcMain.handle("restart-engine", async (_e, payload: { cwd?: string }) => {
     const cwd = payload?.cwd || loadState().lastCwd || os.homedir();
     await stopEngine();

@@ -45,6 +45,7 @@ export const api = {
 
   recentProjects: () => call<RecentProjectDTO[]>("recentProjects"),
   openProject: (dir: string) => call<EngineStatus>("openProject", { dir }),
+  openScratch: () => call<EngineStatus>("openScratch"),
   changeCwd: (dir: string) => call<EngineStatus>("changeCwd", { dir }),
 
   listModels: () => call<ModelDTO[]>("listModels"),

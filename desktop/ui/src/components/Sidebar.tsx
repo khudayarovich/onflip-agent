@@ -23,6 +23,7 @@ export function Sidebar({
   onDeleteSession,
   onOpenProject,
   onPickFolder,
+  onNewScratchChat,
   onOpenSettings,
   onOpenAbout,
   onOpenSkills,
@@ -48,6 +49,7 @@ export function Sidebar({
   onDeleteSession: (id: string) => void;
   onOpenProject: (dir: string) => void;
   onPickFolder: () => void;
+  onNewScratchChat: () => void;
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onOpenSkills: () => void;
@@ -210,6 +212,11 @@ export function Sidebar({
               key: "_open",
               label: t("openFolder"),
               onPick: onPickFolder,
+            },
+            {
+              key: "_scratch",
+              label: t("newScratchChat"),
+              onPick: onNewScratchChat,
             },
             { key: "_d", divider: true, label: "" },
             { key: "_h", heading: t("recentProjects"), label: "" },
