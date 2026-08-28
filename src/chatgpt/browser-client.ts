@@ -418,6 +418,19 @@ export function takeProjectWarning(): string | null {
 }
 
 async function openNewChat(p: Page, model?: string): Promise<void> {
+  // ChatGPT's model-preference cookies outrank the ?model= in the URL. The
+  // injected session already leaves the other browser's copies behind (see
+  // NOT_OURS_TO_REPLAY), but the automation browser earns its own as it
+  // chats — and once those name a different model, every chat opens on it no
+  // matter what the URL asks. Live: a session pinned to Luna answered as
+  // Sol. Cleared here, the URL is the only opinion left.
+  if (model && model !== "auto") {
+    try {
+      await p.context().clearCookies({ name: /^oai-(last|default)-model-config$/ });
+    } catch {
+      /* nothing to clear, or an older runtime — the URL still asks */
+    }
+  }
   await p.goto(newChatUrl(model), {
     waitUntil: "domcontentloaded",
     timeout: 45_000,
@@ -432,6 +445,7 @@ async function openNewChat(p: Page, model?: string): Promise<void> {
     );
   }
   await p.waitForTimeout(600);
+  await verifyPageModel(p, model);
   priorTurnCount = 0;
   filedConversation = null;
   projectWarningShown = false;
@@ -440,6 +454,58 @@ async function openNewChat(p: Page, model?: string): Promise<void> {
   // into.
   conversationsBeforeChat = activeProject ? await snapshotConversations(p) : null;
   logger.info("browser", "opened a new chat", { url: p.url() });
+}
+
+/** Where the page shows which model the chat will use. */
+const MODEL_SWITCHER_SELECTORS = [
+  "[data-testid='model-switcher-dropdown-button']",
+  "button[aria-label*='Model selector']",
+  "button[aria-label*='model picker']",
+];
+
+/** The distinctive word of a slug: "gpt-5.6-luna-wm" → "luna". */
+export function modelToken(slug?: string): string | null {
+  if (!slug || slug === "auto") return null;
+  const words = slug
+    .toLowerCase()
+    .split(/[-.]/)
+    .filter((w) => /^[a-z]{3,}$/.test(w) && w !== "gpt");
+  return words[0] ?? null;
+}
+
+/**
+ * Did the page actually take the model the URL asked for?
+ *
+ * A chat that opened on the wrong model answers every turn as that model,
+ * and the only symptom is the reply's voice — the user learns it when the
+ * model introduces itself as something else. The switcher control is read
+ * once per new chat: a mismatch is logged as evidence and surfaced as a
+ * notice, never a failure — the turn itself is fine, just possibly not from
+ * the model the chip claims.
+ */
+async function verifyPageModel(p: Page, model?: string): Promise<void> {
+  const token = modelToken(model);
+  if (!token) return;
+  let shown = "";
+  for (const sel of MODEL_SWITCHER_SELECTORS) {
+    try {
+      const loc = p.locator(sel).first();
+      if (await loc.isVisible({ timeout: 400 })) {
+        shown = ((await loc.innerText().catch(() => "")) ?? "").trim();
+        if (shown) break;
+      }
+    } catch {
+      /* try the next spelling */
+    }
+  }
+  // A page that shows no switcher is not evidence of anything.
+  if (!shown) return;
+  if (shown.toLowerCase().includes(token)) {
+    logger.debug("browser", "page model verified", { model, shown });
+    return;
+  }
+  logger.warn("browser", "page opened on a different model", { requested: model, shown });
+  lastComposerWarning = `ChatGPT opened this chat on "${shown}" instead of the selected model — the page's own preference overrode the request, so replies may come from a different model. Selecting the model again with /model re-asserts it.`;
 }
 
 /** The conversation id in a `/c/<id>` URL, when the page is on one. */
@@ -1366,7 +1432,11 @@ async function looksAnonymous(p: Page): Promise<boolean> {
  * One attempt only. If it is still anonymous afterwards the session really is
  * gone, and the caller's sign-in message is the honest answer.
  */
-async function recoverAnonymousPage(p: Page, cookies: SessionCookie[]): Promise<void> {
+async function recoverAnonymousPage(
+  p: Page,
+  cookies: SessionCookie[],
+  model?: string
+): Promise<void> {
   if (cookies.length === 0 || !context) return;
   if (!(await looksAnonymous(p).catch(() => false))) return;
 
@@ -1375,8 +1445,11 @@ async function recoverAnonymousPage(p: Page, cookies: SessionCookie[]): Promise<
     cookies: cookies.length,
   });
   await injectCookies(context, cookies);
+  // The recovery reload used to go to the bare chat URL, which silently
+  // dropped the ?model= the chat was opened with — a session pinned to one
+  // model finished its turn on another.
   await p
-    .goto(CHAT_URL, { waitUntil: "domcontentloaded", timeout: 45_000 })
+    .goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 })
     .catch(() => {});
   await p.waitForTimeout(1_200);
   const stillOut = await looksAnonymous(p).catch(() => false);
@@ -1413,7 +1486,7 @@ export async function sendViaBrowser(
   // Checked before typing, not after the send has already disappeared into a
   // logged-out page and cost the turn.
   throwIfAborted(opts?.signal);
-  await recoverAnonymousPage(p, cookies);
+  await recoverAnonymousPage(p, cookies, normalizeModel(opts?.model));
   throwIfAborted(opts?.signal);
 
   return sendOn(p, message, opts);
