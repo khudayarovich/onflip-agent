@@ -13,6 +13,7 @@ import { Peer } from "../shared/wire";
 import { Engine } from "./engine";
 import { ThinkingLevel } from "onflip/dist/models";
 import { ApprovalMode } from "onflip/dist/agent/permissions";
+import { logger } from "onflip/dist/log";
 
 function argValue(flag: string): string | undefined {
   const at = process.argv.indexOf(flag);
@@ -38,7 +39,12 @@ const peer = new Peer((chunk) => process.stdout.write(chunk));
 const engine = new Engine(peer, argValue("--cwd") ?? process.cwd());
 
 process.stdin.on("data", (chunk) => peer.feed(chunk));
-process.stdin.on("end", () => void shutdown());
+process.stdin.on("end", () => {
+  // Recorded because a parent closing the pipe and a crash look identical
+  // from the session log: both just stop. This line is the difference.
+  logger.info("session", "parent closed stdin; shutting down");
+  void shutdown();
+});
 process.stdin.resume();
 
 let shuttingDown = false;
@@ -54,11 +60,17 @@ async function shutdown(): Promise<void> {
 
 process.on("SIGTERM", () => void shutdown());
 process.on("SIGINT", () => void shutdown());
+// Logged to the session file as well as the renderer panel: the panel dies
+// with the window, and a crash investigated the next morning has only the
+// file to go on.
 process.on("uncaughtException", (e) => {
+  logger.error("session", "uncaught exception", { stack: e?.stack ?? String(e) });
   peer.emit("log", { line: `uncaught: ${e?.stack ?? e}` });
 });
 process.on("unhandledRejection", (e) => {
-  peer.emit("log", { line: `unhandled rejection: ${e instanceof Error ? e.stack : String(e)}` });
+  const stack = e instanceof Error ? e.stack : String(e);
+  logger.error("session", "unhandled rejection", { stack });
+  peer.emit("log", { line: `unhandled rejection: ${stack}` });
 });
 
 peer.onRequest = async (method, rawParams) => {

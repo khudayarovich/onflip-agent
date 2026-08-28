@@ -222,6 +222,8 @@ export function App(): React.ReactElement {
   const turnStartedAt = useRef<number | null>(null);
   const sessionIdRef = useRef<string>("");
   const sessionTitleRef = useRef<string>("");
+  /** Last automatic engine revive, so a crash loop cannot churn restarts. */
+  const lastEngineRevive = useRef(0);
 
   const pushLocal = useCallback((item: ChatItem) => {
     setItems((prev) => [...prev, item]);
@@ -451,9 +453,20 @@ export function App(): React.ReactElement {
     const offExit = window.onflip.onEngineExit(() => {
       setEngineDown(true);
       setConnect("error");
-      setConnectDetail("The engine process exited.");
       setTurnActive(false);
       setStreaming(IDLE_STREAM);
+      // An engine that dies unexpectedly is restarted the way the user would
+      // do it — same path as the button below — because "The engine process
+      // exited" over a dead session, with the fix one click away, helps
+      // nobody. Guarded to once a minute: a crash loop must surface as one,
+      // not as a session that silently churns restarts.
+      if (Date.now() - lastEngineRevive.current > 60_000) {
+        lastEngineRevive.current = Date.now();
+        setConnectDetail("The engine stopped — restarting it…");
+        void api.restartEngine().then(() => boot());
+      } else {
+        setConnectDetail("The engine process exited.");
+      }
     });
 
     boot();

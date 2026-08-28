@@ -110,9 +110,37 @@ function sendToRenderer(channel: string, payload: unknown): void {
   if (win && !win.isDestroyed()) win.webContents.send(channel, payload);
 }
 
+/**
+ * Everything the engine prints to stderr, kept on disk.
+ *
+ * It used to go only to the renderer's debug panel, which is how an engine
+ * death took its evidence with it: the process vanished mid-turn with nothing
+ * in any log, because the one channel that carries a native crash or an
+ * out-of-memory abort — stderr — was never persisted. JS-level failures are
+ * caught and survive; the ones that kill a process outright only ever say why
+ * here.
+ */
+function engineStderrLog(): fs.WriteStream | null {
+  try {
+    const file = path.join(app.getPath("userData"), "engine-stderr.log");
+    // Fresh engine, bounded file: keep the previous run's tail, not a year's.
+    try {
+      if (fs.statSync(file).size > 1_000_000) fs.rmSync(file, { force: true });
+    } catch {
+      /* first run */
+    }
+    const stream = fs.createWriteStream(file, { flags: "a" });
+    stream.write(`\n--- engine started ${new Date().toISOString()} ---\n`);
+    return stream;
+  } catch {
+    return null;
+  }
+}
+
 function startEngine(cwd: string): void {
   engineExited = false;
   let child = spawnEngine(cwd);
+  const stderrLog = engineStderrLog();
 
   const wire = new Peer((chunk) => {
     child.stdin?.write(chunk);
@@ -122,6 +150,11 @@ function startEngine(cwd: string): void {
   const attach = (c: ChildProcess) => {
     c.stdout?.on("data", (chunk: Buffer) => wire.feed(chunk));
     c.stderr?.on("data", (chunk: Buffer) => {
+      try {
+        stderrLog?.write(chunk);
+      } catch {
+        /* the copy on disk is best-effort */
+      }
       sendToRenderer("engine-event", { event: "log", data: { line: chunk.toString("utf8") } });
     });
     c.on("error", (e: NodeJS.ErrnoException) => {
@@ -141,6 +174,12 @@ function startEngine(cwd: string): void {
     c.on("exit", (code) => {
       if (c !== child) return;
       engineExited = true;
+      try {
+        stderrLog?.write(`--- engine exited ${new Date().toISOString()} code ${code ?? "unknown"} ---\n`);
+        stderrLog?.end();
+      } catch {
+        /* best-effort */
+      }
       wire.failAll(`The engine exited (code ${code ?? "unknown"}).`);
       sendToRenderer("engine-exit", { code });
     });
