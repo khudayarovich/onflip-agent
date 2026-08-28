@@ -134,7 +134,15 @@ export function defaultModel(): string {
  * plan table decides. Sol: 1,050,000 tokens (announced August 2026).
  */
 export function modelContextTokens(slug: string | undefined): number | null {
-  if (!slug || slug === "auto") return null;
+  if (!slug) return null;
+  if (slug === "auto") {
+    // Regular chat on a paid plan routes every 5.6 request to Sol, and the
+    // account's own model list says whether this is such an account: a free
+    // account's list has no Sol-titled entry. So "auto" inherits Sol's
+    // window exactly when auto would land on Sol.
+    const hasSol = allModels().some((m) => /\bsol\b/i.test(`${m.slug} ${m.label}`));
+    return hasSol ? 1_050_000 : null;
+  }
   const entry = allModels().find((m) => m.slug === slug);
   const name = `${slug} ${entry?.label ?? ""}`.toLowerCase();
   if (/\bsol\b|-sol\b/.test(name)) return 1_050_000;

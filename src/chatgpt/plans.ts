@@ -30,6 +30,9 @@ export interface PlanProfile {
 const PLANS: PlanProfile[] = [
   { id: "free", label: "Free", contextTokens: 8_000 },
   { id: "plus", label: "Plus", contextTokens: 32_000 },
+  // Longer ids sort first in the contained match below, so "prolite" must
+  // be listed explicitly or it lands on "pro".
+  { id: "prolite", label: "Pro Lite", contextTokens: 128_000 },
   { id: "pro", label: "Pro", contextTokens: 128_000 },
   { id: "team", label: "Team", contextTokens: 32_000 },
   { id: "business", label: "Business", contextTokens: 128_000 },

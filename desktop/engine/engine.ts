@@ -1471,7 +1471,10 @@ export class Engine {
       browserHeadless: cfg.browserHeadless ?? true,
       maxIterations: firstPositiveInt([cfg.maxIterations], 40),
       replyTimeout: firstPositiveInt([cfg.replyTimeout], 600),
-      compactAfterChars: firstPositiveInt([cfg.compactAfterChars], 45_000),
+      // The effective value, not a hardcoded default: with nothing set, the
+      // budget is sized from the plan and the model, and showing "45000"
+      // here made auto-sizing look like a stuck setting.
+      compactAfterChars: cfg.compactAfterChars ?? this.contextBudgetChars(),
       rules,
       allowedCommands: cfg.allowedCommands ?? [],
       allowedWriteDirs: cfg.allowedWriteDirs ?? [],

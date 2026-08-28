@@ -2018,11 +2018,19 @@ export async function fetchModelsViaBrowser(cookies: SessionCookie[]): Promise<R
  */
 export async function fetchAccountPlan(cookies: SessionCookie[]): Promise<string | null> {
   const p = await pageOnChatGpt(cookies);
-  // The dated endpoint was retired — every start logged HTTP 500 "Invalid
-  // version: v4-2023-04-08" — and with the plan unreadable the compaction
-  // budget silently sat at the unknown-plan default whatever the account
-  // actually grants. The undated spelling goes first; the dated one stays
-  // as the fallback for backends that still serve it.
+  // The session document is where the web app itself reads the plan from
+  // now — account.planType, measured live ("prolite", 2026-08-29). The
+  // accounts/check endpoints that used to carry it answer 405 and 500
+  // today; they stay below as fallbacks for backends that still serve them.
+  try {
+    const session = (await p.evaluate(
+      `fetch("/api/auth/session", { credentials: "include" }).then((r) => r.json())`
+    )) as { account?: { planType?: string } };
+    const plan = session?.account?.planType;
+    if (typeof plan === "string" && plan.trim()) return plan.trim().toLowerCase();
+  } catch {
+    /* fall through to the older endpoints */
+  }
   for (const endpoint of [
     "/backend-api/accounts/check",
     "/backend-api/accounts/check/v4-2023-04-08",
