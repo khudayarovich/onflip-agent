@@ -601,12 +601,32 @@ function detectServiceMessage(text: string): string | null {
 }
 
 function detectPermissionRequest(raw: string): string | null {
-  const text = straighten(raw);
-  if (!text.trim()) return null;
+  const text = straighten(raw).trim();
+  if (!text) return null;
+  // A permission stall is short — it is a question, not a report. A long
+  // final answer that happens to contain "confirm" near "run" is an answer,
+  // and correcting it costs a full round trip. Live: an audit report saying
+  // "to confirm the fix, run the build" was rejected as a permission slip.
+  if (text.length > 600) return null;
+  // "What would you like me to check?" is a genuine scoping question — one
+  // of the legitimate ways to end a turn — where "Would you like me to check
+  // X?" is a yes/no stall about work the model should simply do. The
+  // question word is the difference; forcing a retry on the former makes the
+  // model guess at scope instead of asking.
+  if (/\b(what|which|where|when|how (much|many))\b[^.?!]{0,30}\bwould you like me to\b/i.test(text)) {
+    return null;
+  }
 
+  // Asking the user to approve: a request aimed at them, not the mere
+  // co-occurrence of "confirm" and "run" somewhere in the reply — which is
+  // what this used to match, and most working replies contain both.
   const asksToRun =
-    /\b(approve|approval|permission|confirm)\b/i.test(text) &&
-    /\b(run|execute|command|powershell|shell|check|inspect)\b/i.test(text);
+    /\b(please|kindly) (approve|confirm|grant)\b/i.test(text) ||
+    /\b(do you|can you|could you|will you) (approve|confirm|grant)\b/i.test(text) ||
+    /\b(approval|permission|confirmation)\b[^.?!]{0,40}\b(before|so|and) i\b/i.test(text) ||
+    /\bwait(ing)? for (your )?(approval|permission|confirmation|go-?ahead)\b/i.test(text) ||
+    /\bneeds? (your )?(approval|permission|confirmation)\b/i.test(text) ||
+    /\bapprove (this|it|that|the (command|call|action))\b/i.test(text);
   const offersToRun =
     /\b(shall|should) i (run|execute|check|inspect)\b/i.test(text) ||
     /\b(let me know if|tell me if) you('d| would) like me to\b/i.test(text) ||
