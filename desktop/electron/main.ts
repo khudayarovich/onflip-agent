@@ -410,7 +410,7 @@ function showWindow(): void {
 
 function createTray(): void {
   tray = new Tray(appIcon());
-  tray.setToolTip("OnFlip — your coding agent is running");
+  tray.setToolTip("OnFlip — your agent for code and daily tasks is running");
   tray.setContextMenu(
     Menu.buildFromTemplate([
       { label: "Open OnFlip", click: showWindow },

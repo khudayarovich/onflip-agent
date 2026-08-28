@@ -2,7 +2,7 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-An autonomous coding agent that runs in your terminal and is driven by your **ChatGPT web session** — no API key, no per-token billing. It reads and writes files, runs shell commands, searches the codebase, and verifies its own work, behind an approval layer you control.
+An autonomous agent for coding and everyday tasks that runs in your terminal and is driven by your **ChatGPT web session** — no API key, no per-token billing. It reads and writes files, runs shell commands, searches codebases, generates documents, browses the web, and verifies its own work, behind an approval layer you control.
 
 ```
 ▄▀▄ █▄ █ █▀ █   █ █▀▄

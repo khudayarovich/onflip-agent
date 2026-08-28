@@ -228,7 +228,7 @@ function printHelp(): void {
   process.stdout.write("\n");
   process.stdout.write(`  ${chalk.hex(t.accent).bold("onflip")} ${chalk.hex(t.muted)(`v${VERSION}`)}\n`);
   process.stdout.write(
-    `  ${chalk.hex(t.muted)("An autonomous coding agent driven by your ChatGPT web session.")}\n`
+    `  ${chalk.hex(t.muted)("An autonomous agent for coding and everyday tasks, driven by your ChatGPT web session.")}\n`
   );
 
   ui.commandHelp("Usage", [

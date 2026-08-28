@@ -200,7 +200,7 @@ const en = {
   setCommands: "Commands",
   setWriteDirs: "Write directories",
   setAbout: "About",
-  aboutTagline: "Your coding agent, powered by the ChatGPT you already have.",
+  aboutTagline: "Your agent for code and everyday tasks, powered by the ChatGPT you already have.",
   aboutIdeaTitle: "How it works",
   aboutIdea:
     "OnFlip drives ChatGPT's ordinary chat through a real browser — the same conversation you could type at chatgpt.com. No API key, no per-token billing: the agent rides on the ChatGPT plan you already have, so it adds no separate API costs or usage limits. The model does the thinking on ChatGPT's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
@@ -419,7 +419,7 @@ const ru: Partial<Record<StringKey, string>> = {
   setCommands: "Команды",
   setWriteDirs: "Папки для записи",
   setAbout: "О программе",
-  aboutTagline: "Ваш кодинг-агент на базе ChatGPT, который у вас уже есть.",
+  aboutTagline: "Ваш агент для кода и повседневных задач — на базе ChatGPT, который у вас уже есть.",
   aboutIdeaTitle: "Как это работает",
   aboutIdea:
     "OnFlip управляет обычным чатом ChatGPT через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com. Без API-ключа и оплаты за токены: агент работает на вашем существующем плане ChatGPT и не добавляет отдельных API-затрат и лимитов. Модель думает на стороне ChatGPT, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
@@ -636,7 +636,7 @@ const uz: Partial<Record<StringKey, string>> = {
   setCommands: "Buyruqlar",
   setWriteDirs: "Yozish papkalari",
   setAbout: "Dastur haqida",
-  aboutTagline: "Sizda allaqachon bor ChatGPT asosidagi koding-agentingiz.",
+  aboutTagline: "Kod va kundalik ishlar uchun agentingiz — sizda allaqachon bor ChatGPT asosida.",
   aboutIdeaTitle: "Qanday ishlaydi",
   aboutIdea:
     "OnFlip haqiqiy brauzer orqali ChatGPT ning oddiy chatini boshqaradi — bu chatgpt.com da yozadigan o'sha suhbatingiz. API kaliti ham, token uchun to'lov ham yo'q: agent sizdagi mavjud ChatGPT tarifida ishlaydi, alohida API xarajatlari va limitlari qo'shilmaydi. Model ChatGPT tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",

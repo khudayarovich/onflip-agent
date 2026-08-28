@@ -1,7 +1,7 @@
 {
   "name": "onflip",
   "version": "0.2.0",
-  "description": "OnFlip — an autonomous coding agent CLI driven by your ChatGPT web session",
+  "description": "OnFlip — an autonomous agent for coding and everyday tasks, driven by your ChatGPT web session",
   "license": "MIT",
   "author": "Farrukh Khudayarovich Yuldashev",
   "homepage": "https://github.com/khudayarovich/onflip-agent#readme",
@@ -18,6 +18,8 @@
     "cli",
     "chatgpt",
     "coding-agent",
+    "assistant",
+    "automation",
     "tui",
     "pair-programming"
   ],
