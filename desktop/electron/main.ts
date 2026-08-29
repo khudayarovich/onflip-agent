@@ -311,9 +311,15 @@ function createWindow(cwd?: string): Workspace {
     show: false,
     icon: path.join(__dirname, "..", "..", "buildResources", "icon.ico"),
     backgroundColor: "#0d0d0d",
-    // Fully frameless: the renderer draws its own minimise/maximise/close so
-    // they match the app instead of the OS defaults.
-    frame: false,
+    // Window controls belong to the platform. On Windows the renderer draws
+    // its own minimise/maximise/close over a frameless window, which is what
+    // that platform's apps look like. macOS has one shape of window button
+    // and every app wears it, so the real traffic lights are kept and only
+    // the title bar is hidden — a Mac app with Windows-style controls in the
+    // corner reads as a port, which is exactly what users said.
+    ...(process.platform === "darwin"
+      ? { titleBarStyle: "hiddenInset" as const, trafficLightPosition: { x: 14, y: 13 } }
+      : { frame: false }),
     webPreferences: {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,

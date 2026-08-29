@@ -91,9 +91,21 @@ export function Titlebar({
   status: EngineStatus | null;
   onToggleSidebar: () => void;
 }): React.ReactElement {
+  // macOS draws its own window buttons — the app keeps them and only hides
+  // the title bar, so the corner looks like every other Mac app rather than
+  // like a Windows app that was carried over. Everywhere else the renderer
+  // draws them, which is what those platforms look like.
+  const [isMac, setIsMac] = useState(false);
+  useEffect(() => {
+    void window.onflip
+      .appInfo()
+      .then((info) => setIsMac(info.platform === "darwin"))
+      .catch(() => {});
+  }, []);
+
   const title = status?.sessionTitle || (status ? "New session" : "");
   return (
-    <div className="titlebar">
+    <div className={`titlebar${isMac ? " mac" : ""}`}>
       <button className="icon-btn" onClick={onToggleSidebar} title="Toggle sidebar">
         <SidebarToggleIcon />
       </button>
@@ -102,7 +114,7 @@ export function Titlebar({
         OnFlip
       </div>
       <div className="session-title">{title}</div>
-      <WindowControls />
+      {!isMac && <WindowControls />}
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { BrowserWindow, session, shell, Session } from "electron";
+import { app, BrowserWindow, session, shell, Session } from "electron";
 
 /**
  * Signing in to ChatGPT, in a browser ChatGPT will actually accept.
@@ -17,6 +17,30 @@ import { BrowserWindow, session, shell, Session } from "electron";
  * restarts, and the resulting cookies are read through Electron's supported
  * `session.cookies` API rather than by decrypting another browser's storage.
  */
+
+/**
+ * What this window tells the world it is.
+ *
+ * Electron names itself in the default user agent — "Electron/33.4.11", and
+ * the app beside it — and Google reads that as an embedded browser: it
+ * either refuses the sign-in outright ("this browser or app may not be
+ * secure") or treats every visit as an unrecognised device and demands
+ * two-step verification. Users signing in with Google felt that as "it will
+ * not let me in". Removing those two tokens leaves the honest Chrome user
+ * agent of the Chromium that is genuinely rendering the page: same engine,
+ * same version, nothing invented.
+ */
+function browserUserAgent(): string {
+  const appToken = `${app.getName().toLowerCase()}/`;
+  return app.userAgentFallback
+    .split(" ")
+    .filter((token) => {
+      const lower = token.toLowerCase();
+      return !lower.startsWith("electron/") && !lower.startsWith(appToken);
+    })
+    .join(" ")
+    .trim();
+}
 
 /** Persisted so a signed-in profile stays signed in between launches. */
 const PARTITION = "persist:chatgpt-auth";
@@ -129,6 +153,9 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
   }
 
   const ses = session.fromPartition(PARTITION);
+  // Set on the session, so the identity providers' own popup windows — which
+  // share this partition — introduce themselves the same way.
+  ses.setUserAgent(browserUserAgent());
 
   const bounds = parent?.getBounds();
   const width = 520;

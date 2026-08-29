@@ -179,6 +179,13 @@ a:hover {
   background: var(--bg);
 }
 
+/* macOS keeps its real traffic lights at the left, so the row starts clear
+   of them and ends with padding where the drawn controls would have been. */
+.titlebar.mac {
+  padding-left: 82px;
+  padding-right: 12px;
+}
+
 .titlebar button,
 .titlebar .no-drag {
   -webkit-app-region: no-drag;

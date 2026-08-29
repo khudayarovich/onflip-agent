@@ -41,6 +41,7 @@ type ModalName =
   | "about"
   | "skills"
   | "cookie"
+  | "signin"
   | null;
 
 interface ConfirmState {
@@ -225,6 +226,8 @@ export function App(): React.ReactElement {
   const turnStartedAt = useRef<number | null>(null);
   const sessionIdRef = useRef<string>("");
   const sessionTitleRef = useRef<string>("");
+  /** The sign-in prompt is offered once a session, not on every reconnect. */
+  const signInPrompted = useRef(false);
   /** Last automatic engine revive, so a crash loop cannot churn restarts. */
   const lastEngineRevive = useRef(0);
 
@@ -297,7 +300,13 @@ export function App(): React.ReactElement {
           const c = data as { state: ConnectState; detail?: string };
           setConnect(c.state);
           setConnectDetail(c.detail);
-          if (c.state === "signed-out" && c.detail) notifyError(c.detail);
+          // A first launch used to look like a working app until the first
+          // message came back red. The engine knows there is no session
+          // before anything is typed, so the offer to sign in is made then.
+          if (c.state === "signed-out" && !signInPrompted.current) {
+            signInPrompted.current = true;
+            setModal("signin");
+          }
           break;
         }
         case "transcript": {
@@ -889,14 +898,13 @@ export function App(): React.ReactElement {
         {connect === "signed-out" && !engineDown && (
           <div className="banner-error">
             <span className="grow">
-              Not signed in to ChatGPT. Sign in at chatgpt.com in Chrome, Edge or Firefox,
-              then run `onflip login` in a terminal and restart the engine.
+              Not signed in to ChatGPT — the agent cannot send anything until you do.
             </span>
             <button
               className="btn"
-              onClick={() => void api.restartEngine(status?.cwd).then(() => boot())}
+              onClick={() => setModal("signin")}
             >
-              Retry
+              Sign in
             </button>
           </div>
         )}
@@ -1084,6 +1092,44 @@ export function App(): React.ReactElement {
         />
       )}
 
+      {modal === "signin" && (
+        <Modal
+          title={t("signInTitle")}
+          onClose={() => setModal(null)}
+          footer={
+            <>
+              <button className="btn" onClick={() => setModal("cookie")}>
+                {t("signInUseBrowser")}
+              </button>
+              <button
+                className="btn primary"
+                onClick={() => {
+                  setModal(null);
+                  void window.onflip
+                    .signIn()
+                    .then((r) => {
+                      if (r.ok) {
+                        refreshStatus();
+                        refreshLists();
+                        void api.init().then(setStatus).catch(() => {});
+                        setConnect("connecting");
+                        boot();
+                      } else if (r.reason && r.reason !== "cancelled") {
+                        notifyError(`Sign-in did not complete: ${r.reason}`);
+                      }
+                    })
+                    .catch((e: Error) => notifyError(e.message));
+                }}
+              >
+                {t("signInAction")}
+              </button>
+            </>
+          }
+        >
+          <p className="modal-note">{t("signInBody")}</p>
+          <p className="modal-note">{t("signInBrowserHint")}</p>
+        </Modal>
+      )}
       {modal === "cookie" && (
         <CookieSignInModal
           onClose={() => setModal(null)}
