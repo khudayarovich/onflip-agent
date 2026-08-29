@@ -362,7 +362,7 @@ export function App(): React.ReactElement {
         }
         case "delta": {
           const d = data as { tail: string };
-          setStreaming((s) => (s.active ? { ...s, tail: d.tail } : s));
+          setStreaming((s) => (s.active ? { ...s, tail: d.tail, lastDeltaAt: Date.now() } : s));
           break;
         }
         case "turn": {

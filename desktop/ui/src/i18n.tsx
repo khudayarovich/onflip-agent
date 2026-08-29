@@ -91,6 +91,7 @@ const en = {
   // transcript
   streamWorking: "Working",
   streamThinking: "Thinking",
+  streamWriting: "Writing reply…",
   streamStep: "Working — step {n}",
   queuedN: "queued #{n}",
   deliverySending: "sending…",
@@ -317,6 +318,7 @@ const ru: Partial<Record<StringKey, string>> = {
   apprYoloHint: "Выполняется всё, включая разрушительные команды",
   streamWorking: "Работаю",
   streamThinking: "Думаю",
+  streamWriting: "Печатает ответ…",
   streamStep: "Работаю — шаг {n}",
   queuedN: "в очереди #{n}",
   deliverySending: "отправка…",
@@ -534,6 +536,7 @@ const uz: Partial<Record<StringKey, string>> = {
   apprYoloHint: "Hammasi ishlaydi, jumladan buzg'unchi buyruqlar ham",
   streamWorking: "Ishlayapman",
   streamThinking: "O'ylayapman",
+  streamWriting: "Javob yozilmoqda…",
   streamStep: "Ishlayapman — {n}-qadam",
   queuedN: "navbatda #{n}",
   deliverySending: "yuborilmoqda…",

@@ -12,6 +12,8 @@ export interface StreamingState {
   tail: string;
   /** When this turn began, for the running timer. */
   startedAt?: number;
+  /** When reply text last arrived — the difference between slow and stuck. */
+  lastDeltaAt?: number;
 }
 
 /**
@@ -238,13 +240,7 @@ export function Transcript({
           <div className="thinking-row">
             <div className="label">
               <span className="spinner" />
-              <span className="shimmer">
-                {streaming.iteration === 0
-                  ? t("streamWorking")
-                  : streaming.iteration === 1
-                    ? t("streamThinking")
-                    : t("streamStep", { n: streaming.iteration })}
-              </span>
+              <WorkingLabel streaming={streaming} />
               <RunningTimer startedAt={streaming.startedAt} active={streaming.active} />
             </div>
             {streaming.tail && <div className="tail">{streaming.tail}</div>}
@@ -492,6 +488,37 @@ function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+/**
+ * The working label, honest about liveness.
+ *
+ * "Thinking 6:13" over a reply that was streaming slowly read as a hang,
+ * and the user asked twice whether it was stuck when tokens were arriving
+ * the whole time. While text has landed in the last ten seconds the label
+ * says the reply is being written; the moment the stream goes quiet it
+ * falls back to the thinking label, so a real stall still looks like one.
+ */
+function WorkingLabel({ streaming }: { streaming: StreamingState }): React.ReactElement {
+  const t = useT();
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = window.setInterval(() => setTick((n) => n + 1), 1_000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const writing =
+    streaming.lastDeltaAt !== undefined && Date.now() - streaming.lastDeltaAt < 10_000;
+  return (
+    <span className="shimmer">
+      {writing
+        ? t("streamWriting")
+        : streaming.iteration === 0
+          ? t("streamWorking")
+          : streaming.iteration === 1
+            ? t("streamThinking")
+            : t("streamStep", { n: streaming.iteration })}
+    </span>
+  );
 }
 
 /** The clock beside "Working", ticking while the turn runs. */
