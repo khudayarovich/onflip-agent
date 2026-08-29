@@ -1742,8 +1742,17 @@ export async function waitForReply(
    */
   const QUIET_MS = 6_000;      // unchanged this long: the reply is done
   const IDLE_QUIET_MS = 1_200; // ...and the composer looks idle: done sooner
-  /** "Working" with nothing on screen and nothing changing: a dead stream. */
-  const STALLED_STREAM_MS = 240_000;
+  /**
+   * "Working" with nothing on screen and nothing changing: a dead stream.
+   *
+   * Longer when files rode along, because a turn handed over as a large
+   * attachment is legitimately silent while ChatGPT ingests it — measured: a
+   * 162k-character replay produced nothing for four minutes and was cut as
+   * stalled, and the retry re-uploaded the same file and paid the same
+   * ingestion again. The window must outlast honest reading time, and only
+   * then call the silence a stall.
+   */
+  const STALLED_STREAM_MS = opts?.attachments?.length ? 400_000 : 240_000;
   /**
    * No text *and* no sign of life for this long: give up.
    *
