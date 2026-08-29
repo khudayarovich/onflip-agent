@@ -1742,6 +1742,8 @@ export async function waitForReply(
    */
   const QUIET_MS = 6_000;      // unchanged this long: the reply is done
   const IDLE_QUIET_MS = 1_200; // ...and the composer looks idle: done sooner
+  /** "Working" with nothing on screen and nothing changing: a dead stream. */
+  const STALLED_STREAM_MS = 240_000;
   /**
    * No text *and* no sign of life for this long: give up.
    *
@@ -1932,6 +1934,26 @@ export async function waitForReply(
         elapsedMs: now - started,
         deadlineMs: timeout,
       });
+    }
+    // A stalled stream, told apart from a deep think. The page said
+    // "working" for a full 600-second budget without producing one
+    // character, the timeout retried into the same conversation, and the
+    // same stall ate the next budget too — twenty-five minutes of
+    // "Thinking" for the user. A genuine reasoning pause keeps its
+    // "Thought for Nm" ticker moving, and any tick resets lastChangeAt; only
+    // a page that is both silent and frozen for this long gets cut. The
+    // conversation is abandoned with it — retrying into the thread that
+    // just stalled is how one stall became three.
+    if (generating && now - lastChangeAt > STALLED_STREAM_MS) {
+      logger.warn("browser", "generation stalled with no output; stopping it", {
+        elapsedMs: now - started,
+        quietMs: now - lastChangeAt,
+      });
+      await stopGeneration(p);
+      inConversation = false;
+      throw new ChatGPTBrowserError(
+        `ChatGPT showed it was working for ${Math.round((now - started) / 1000)}s without producing any output — the generation looks stalled. Stopping it and retrying in a fresh conversation.`
+      );
     }
     // Only give up on silence when there is no evidence anything is under
     // way at all. A landed message is evidence.
