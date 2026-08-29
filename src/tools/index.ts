@@ -152,7 +152,7 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
       };
 
       try {
-        return await tool.run(args ?? {}, ctx);
+        return await tool.run(coerceArgs(tool, args ?? {}), ctx);
       } catch (e) {
         if (signal.aborted) {
           return { output: `${tool.name} was interrupted by the user.`, error: true, denied: true };
@@ -161,4 +161,36 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
       }
     },
   };
+}
+
+/**
+ * Accept a structured argument the model sent as a JSON string.
+ *
+ * Measured: a `todo_write` arrived with `todos` as the *text* of a JSON
+ * array, the tool answered "`todos` must be an array", and the model spent
+ * the rest of the turn trying to re-send it — one of them as bare JSON that
+ * ended the turn with the plan unfinished. The schema already says which
+ * arguments are arrays and objects, so a string where one of those belongs
+ * is unambiguous: parse it, and only accept the result if it matches the
+ * declared shape. Anything else is passed through untouched.
+ */
+function coerceArgs(tool: ToolDefinition, args: Record<string, unknown>): Record<string, unknown> {
+  const props = (tool.parameters?.properties ?? {}) as Record<string, { type?: string }>;
+  let out: Record<string, unknown> | null = null;
+  for (const [key, value] of Object.entries(args)) {
+    const want = props[key]?.type;
+    if ((want !== "array" && want !== "object") || typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (!trimmed.startsWith(want === "array" ? "[" : "{")) continue;
+    try {
+      const parsed = JSON.parse(trimmed) as unknown;
+      const matches = want === "array" ? Array.isArray(parsed) : parsed && typeof parsed === "object";
+      if (!matches) continue;
+      out ??= { ...args };
+      out[key] = parsed;
+    } catch {
+      /* not JSON after all — the tool's own error is the better message */
+    }
+  }
+  return out ?? args;
 }

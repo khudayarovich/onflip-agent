@@ -82,6 +82,22 @@ export function parseTurn(raw: string): ParsedTurn {
     }
   }
 
+  // ---- 3b. a bare JSON call, fence and all ---------------------------------
+  // The JSON form is documented as living inside the fence, and the fence is
+  // exactly what the page's Markdown renderer sometimes eats: a reply
+  // arrived as the word "onflip" on one line and `{"tool":"todo_write",…}`
+  // on the next. Nothing matched it, so 300 characters of JSON went to the
+  // user as the agent's final answer and the turn ended with the plan
+  // unfinished. Same acceptance as inside the fence, only when nothing else
+  // parsed.
+  if (calls.length === 0) {
+    const { calls: bare, prose } = parseBareJsonCalls(text);
+    if (bare.length) {
+      calls.push(...bare);
+      text = prose;
+    }
+  }
+
   // ---- 4. a whole reply that is one flattened block ------------------------
   // Nothing above matched and the reply has no line structure left to match
   // against — recover it as a collapsed block rather than losing the call.
@@ -239,6 +255,77 @@ function parseUnfencedBlocks(text: string): { calls: ToolCall[]; prose: string }
 }
 
 /** Lines inside any Markdown fence are prose unless the fence was OnFlip's. */
+/**
+ * JSON tool calls sitting in the reply with no fence around them.
+ *
+ * Only objects that start a line are considered, and only those that name a
+ * tool — the same test `parseCallBody` applies inside a fence. Lines inside
+ * some *other* fence are left alone: a model quoting the protocol in a
+ * ```json block is explaining it, not calling it.
+ */
+function parseBareJsonCalls(text: string): { calls: ToolCall[]; prose: string } {
+  const calls: ToolCall[] = [];
+  const lines = text.split("\n");
+  const fenced = fencedLineMask(lines);
+  const kept: string[] = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    if (fenced[i] || !lines[i].trimStart().startsWith("{")) {
+      kept.push(lines[i]);
+      continue;
+    }
+    // The object may span lines; take everything up to its balanced close.
+    const start = i;
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    let end = -1;
+    outer: for (let j = i; j < lines.length && j < i + 200; j++) {
+      for (const ch of lines[j]) {
+        if (escaped) { escaped = false; continue; }
+        if (inString) {
+          if (ch === "\\") escaped = true;
+          else if (ch === '"') inString = false;
+          continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === "{") depth++;
+        else if (ch === "}" && --depth === 0) { end = j; break outer; }
+      }
+    }
+    if (end < 0) {
+      kept.push(lines[i]);
+      continue;
+    }
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(lines.slice(start, end + 1).join("\n"));
+    } catch {
+      kept.push(lines[i]);
+      continue;
+    }
+    // Stricter than inside a fence: `tool:` must be spelled out. The looser
+    // aliases `toToolCall` accepts are fine when the model has already said
+    // "this is a call" by fencing it, but out here `{"name":"app",…}` is a
+    // package.json someone is talking about, not a call to a tool named app.
+    const named =
+      parsed &&
+      typeof parsed === "object" &&
+      ["tool", "tool_name"].some(
+        (k) => typeof (parsed as Record<string, unknown>)[k] === "string"
+      );
+    const call = named ? toToolCall(parsed) : null;
+    if (!call) {
+      kept.push(lines[i]);
+      continue;
+    }
+    calls.push(call);
+    i = end;
+  }
+
+  return { calls, prose: calls.length ? kept.join("\n") : text };
+}
+
 function fencedLineMask(lines: string[]): boolean[] {
   const mask = lines.map(() => false);
   let marker: "`" | "~" | null = null;
@@ -514,7 +601,7 @@ function toToolCall(value: unknown): ToolCall | null {
     pickString(obj, "action");
   if (!name) return null;
 
-  const rawArgs = obj.arguments ?? obj.args ?? obj.parameters ?? obj.input ?? obj.params ?? {};
+  const rawArgs = obj.arguments ?? obj.args ?? obj.parameters ?? obj.input ?? obj.params;
   let args: Record<string, unknown> = {};
   if (typeof rawArgs === "string") {
     try {
@@ -525,6 +612,16 @@ function toToolCall(value: unknown): ToolCall | null {
     }
   } else if (rawArgs && typeof rawArgs === "object") {
     args = rawArgs as Record<string, unknown>;
+  } else {
+    // No arguments container at all: the model wrote the arguments beside the
+    // tool name, `{"tool": "todo_write", "todos": [...]}`. Live, and it used
+    // to yield a call with empty arguments — which is a tool run with the
+    // user's work silently missing. Everything that is not a name key is an
+    // argument.
+    const NAME_KEYS = new Set(["tool", "tool_name", "name", "function", "action", "type"]);
+    for (const [key, value] of Object.entries(obj)) {
+      if (!NAME_KEYS.has(key)) args[key] = value;
+    }
   }
 
   return { tool: name, arguments: args, id: randomUUID() };
