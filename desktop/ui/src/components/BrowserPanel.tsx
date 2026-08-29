@@ -92,7 +92,16 @@ export function BrowserPanel({
       timer = window.setTimeout(() => {
         const rect = el.getBoundingClientRect();
         if (rect.width > 40 && rect.height > 40) {
-          void api.setBrowserViewport(Math.round(rect.width), Math.round(rect.height)).catch(() => {});
+          // The pixel ratio rides along so frames carry the panel's real
+          // pixels — without it a HiDPI panel gets CSS-pixel frames
+          // stretched to fit, which looks like a low-quality stream.
+          void api
+            .setBrowserViewport(
+              Math.round(rect.width),
+              Math.round(rect.height),
+              window.devicePixelRatio || 1
+            )
+            .catch(() => {});
         }
       }, 350);
     };

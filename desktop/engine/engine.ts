@@ -539,8 +539,8 @@ export class Engine {
   }
 
   /** The panel telling the browser what shape to render at. */
-  async setBrowserViewport(width: number, height: number): Promise<{ ok: boolean }> {
-    await setBrowserViewport(width, height);
+  async setBrowserViewport(width: number, height: number, scale?: number): Promise<{ ok: boolean }> {
+    await setBrowserViewport(width, height, scale);
     return { ok: true };
   }
 

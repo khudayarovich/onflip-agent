@@ -52,7 +52,16 @@ const MOBILE_UA =
  * also changes the user agent and touch support, which only a relaunch can
  * pick up, so that is deferred to the next launch rather than forced.
  */
-export async function setBrowserViewport(width: number, height: number): Promise<void> {
+/** The panel's devicePixelRatio, so frames carry real pixels, not CSS ones. */
+let panelScale = 1;
+/** The deviceScaleFactor the running browser was actually launched with. */
+let launchedScale = 1;
+
+export async function setBrowserViewport(width: number, height: number, scale?: number): Promise<void> {
+  if (typeof scale === "number" && Number.isFinite(scale)) {
+    // Capped at 2: past that the frames cost more than the eye gets back.
+    panelScale = Math.max(1, Math.min(2, Math.round(scale * 100) / 100));
+  }
   const next = {
     width: Math.max(320, Math.min(2000, Math.round(width))),
     height: Math.max(480, Math.min(2000, Math.round(height))),
@@ -63,6 +72,14 @@ export async function setBrowserViewport(width: number, height: number): Promise
     await page.setViewportSize(next).catch(() => {
       /* the page is busy; the next launch picks it up */
     });
+    // The screencast's frame size was fixed when it started; a resized
+    // panel otherwise keeps receiving frames sized for the old one, scaled
+    // up in the renderer — which reads as a blurry stream.
+    if (cast?.page === page) {
+      const p = page;
+      await stopScreencast();
+      void startScreencast(p);
+    }
   }
 }
 
@@ -97,14 +114,19 @@ function shotsDir(): string {
 async function launch(headless: boolean): Promise<BrowserContext> {
   const preferred = process.env.ONFLIP_BROWSER_CHANNEL ?? "chromium";
   const mobile = isMobileShape(viewport.width);
+  // Phone shapes always render at 2× like a real phone; desktop shapes
+  // render at the panel's own pixel density. The old default was 1× for
+  // desktop — every frame was captured in CSS pixels and stretched across a
+  // HiDPI panel, which is most of why the stream looked like low-quality
+  // video the moment the panel was wide.
+  launchedScale = mobile ? 2 : panelScale;
   const options = {
     headless,
     viewport: { ...viewport },
+    deviceScaleFactor: launchedScale,
     // A phone-shaped viewport that still claims to be a desktop gets desktop
     // HTML reflowed into a column, which is the worst of both.
-    ...(mobile
-      ? { userAgent: MOBILE_UA, isMobile: true, hasTouch: true, deviceScaleFactor: 2 }
-      : {}),
+    ...(mobile ? { userAgent: MOBILE_UA, isMobile: true, hasTouch: true } : {}),
     args: ["--disable-blink-features=AutomationControlled", "--no-first-run"],
   };
   if (preferred !== "chromium") {
@@ -217,9 +239,14 @@ async function startScreencast(p: Page): Promise<void> {
     });
     await session.send("Page.startScreencast", {
       format: "jpeg",
-      quality: 55,
-      maxWidth: viewport.width,
-      maxHeight: viewport.height,
+      // 55 smeared text into the "low-quality video" look; 82 is visually
+      // clean on text and still a fraction of PNG weight.
+      quality: 82,
+      // Real pixels: the page renders at launchedScale, and capping the
+      // capture at CSS size threw those pixels away before they reached
+      // the panel.
+      maxWidth: Math.round(viewport.width * launchedScale),
+      maxHeight: Math.round(viewport.height * launchedScale),
       everyNthFrame: 1,
     });
     cast = { session, page: p };

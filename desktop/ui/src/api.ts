@@ -32,8 +32,8 @@ export const api = {
   deleteSession: (id: string) => call<{ ok: boolean }>("deleteSession", { id }),
   rollback: (messageId: string) => call<{ text: string }>("rollback", { messageId }),
   /** Tell the agent's browser what shape the panel is, so pages fill it. */
-  setBrowserViewport: (width: number, height: number) =>
-    call<{ ok: boolean }>("setBrowserViewport", { width, height }),
+  setBrowserViewport: (width: number, height: number, scale?: number) =>
+    call<{ ok: boolean }>("setBrowserViewport", { width, height, scale }),
   /** A click, key or scroll from the panel, replayed on the agent's page. */
   browserInput: (input: Record<string, unknown>) => call<boolean>("browserInput", input),
   /** Try Chrome, Edge and Firefox for a session already signed in. */

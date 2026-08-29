@@ -105,7 +105,11 @@ peer.onRequest = async (method, rawParams) => {
     case "importBrowserSession":
       return engine.importBrowserSession();
     case "setBrowserViewport":
-      return engine.setBrowserViewport(Number(params.width), Number(params.height));
+      return engine.setBrowserViewport(
+        Number(params.width),
+        Number(params.height),
+        params.scale === undefined ? undefined : Number(params.scale)
+      );
     case "browserInput":
       return engine.browserInput(params as unknown as Parameters<typeof engine.browserInput>[0]);
     case "applySignOut":
