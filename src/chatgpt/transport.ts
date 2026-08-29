@@ -261,7 +261,7 @@ export class BrowserTransport implements Transport {
         onDelta: opts.onDelta,
         signal: opts.signal,
         timeoutMs: replyTimeoutMs(),
-        ...(attachment ? { attachments: [attachment] } : {}),
+        ...(attachment ? { attachments: [attachment], attachmentChars: body.length } : {}),
       });
     } catch (e) {
       // A composer that refused the whole payload is unlikely to accept it

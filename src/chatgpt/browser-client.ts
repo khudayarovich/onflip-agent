@@ -1262,6 +1262,8 @@ export interface BrowserSendOptions {
    * into the composer costs tens of seconds and sometimes fails outright.
    */
   attachments?: string[];
+  /** How much text the attachment carries, so patience can scale with it. */
+  attachmentChars?: number;
   /**
    * User-turn count taken *before* the message was typed. Measured after,
    * the just-sent message is already in the count, "did our turn land?"
@@ -1745,14 +1747,17 @@ export async function waitForReply(
   /**
    * "Working" with nothing on screen and nothing changing: a dead stream.
    *
-   * Longer when files rode along, because a turn handed over as a large
-   * attachment is legitimately silent while ChatGPT ingests it — measured: a
+   * Scaled to what was attached, because a turn handed over as a large file
+   * is legitimately silent while ChatGPT ingests it — measured: a
    * 162k-character replay produced nothing for four minutes and was cut as
    * stalled, and the retry re-uploaded the same file and paid the same
-   * ingestion again. The window must outlast honest reading time, and only
-   * then call the silence a stall.
+   * ingestion again. A small attachment earns no such patience: a 23k
+   * turn inherited the big-file window and a dead thread got nearly seven
+   * minutes it did not deserve. The window must outlast honest reading
+   * time for the file actually sent, and only then call it a stall.
    */
-  const STALLED_STREAM_MS = opts?.attachments?.length ? 400_000 : 240_000;
+  const bigAttachment = (opts?.attachmentChars ?? 0) > 60_000;
+  const STALLED_STREAM_MS = opts?.attachments?.length && bigAttachment ? 400_000 : 240_000;
   /**
    * No text *and* no sign of life for this long: give up.
    *
