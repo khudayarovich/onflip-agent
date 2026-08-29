@@ -156,7 +156,7 @@ function turnPointer(fileName: string, reminder: string | undefined): string {
   const lines = [
     `The full instructions and conversation for this turn are in the attached file **${fileName}**.`,
     "",
-    "Read the whole file before answering. It contains, in order: the system instructions that define how you must behave, the conversation so far, and the request to act on at the end. Treat it exactly as if it had been typed here in full — follow it to the letter, including its response format. Do not summarise it back to me; act on it.",
+    "Read the whole file before answering. It contains, in order: the system instructions that define how you must behave, the conversation so far, and the request to act on at the end. Treat it exactly as if it had been typed here in full — follow it to the letter, including its response format. Do not summarise it back to me; act on it. Never mention the attachment or its file name in your reply — answer as if its content had been typed in the chat.",
     "",
     // A fixed marker, so a missing upload is machine-readable rather than a
     // paragraph of apology that has to be pattern-matched.

@@ -167,39 +167,44 @@ export const webSearchTool: ToolDefinition = {
     ctx.signal.addEventListener("abort", onAbort, { once: true });
 
     try {
-      const res = await fetch(
-        `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+      const headers = {
+        // The HTML endpoints answer browsers; a bot-shaped UA gets blocked.
+        "user-agent":
+          "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        accept: "text/html",
+      };
+      // Two engines, tried in order. DuckDuckGo rate-limits a burst of
+      // searches with an empty page — measured: six queries in one turn,
+      // every one "No results parsed", while the same request from a quiet
+      // process parsed ten results. One engine's throttle must not read as
+      // "the web is down", so Bing catches what DuckDuckGo drops.
+      let results: { title: string; url: string; snippet: string }[] = [];
+      const engines: { url: string; parse: (html: string) => typeof results }[] = [
         {
-          headers: {
-            // The HTML endpoint answers browsers; a bot-shaped UA gets blocked.
-            "user-agent":
-              "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
-            accept: "text/html",
-          },
-          signal: controller.signal,
+          url: `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`,
+          parse: parseDuckDuckGo,
+        },
+        {
+          url: `https://www.bing.com/search?q=${encodeURIComponent(query)}`,
+          parse: parseBing,
+        },
+      ];
+      for (const engine of engines) {
+        let res: Response;
+        try {
+          res = await fetch(engine.url, { headers, signal: controller.signal });
+        } catch {
+          if (controller.signal.aborted) throw new Error("aborted");
+          continue;
         }
-      );
-      if (!res.ok) return err(`Search failed: HTTP ${res.status}`);
-      const html = await res.text();
-
-      const results: { title: string; url: string; snippet: string }[] = [];
-      const linkRe = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-      const snippetRe = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
-      const snippets: string[] = [];
-      for (const m of html.matchAll(snippetRe)) snippets.push(stripTags(m[1]));
-      let index = 0;
-      for (const m of html.matchAll(linkRe)) {
-        if (results.length >= limit) break;
-        results.push({
-          title: stripTags(m[2]),
-          url: resolveDuckLink(m[1]),
-          snippet: snippets[index++] ?? "",
-        });
+        if (!res.ok) continue;
+        results = engine.parse(await res.text()).slice(0, limit);
+        if (results.length > 0) break;
       }
 
       if (results.length === 0) {
         return err(
-          "No results parsed. The search page may have changed or the query returned nothing — try different terms, or web_fetch a site you already know."
+          "No results from either search engine. A burst of searches gets rate-limited — wait a moment before searching again, combine questions into one query, or web_fetch a site you already know."
         );
       }
       const lines = results.map(
@@ -235,6 +240,57 @@ function stripTags(html: string): string {
 }
 
 /** DuckDuckGo wraps result URLs in a redirect; the real one rides in `uddg`. */
+function parseDuckDuckGo(html: string): { title: string; url: string; snippet: string }[] {
+  const results: { title: string; url: string; snippet: string }[] = [];
+  const linkRe = /<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
+  const snippetRe = /<a[^>]+class="result__snippet"[^>]*>([\s\S]*?)<\/a>/g;
+  const snippets: string[] = [];
+  for (const m of html.matchAll(snippetRe)) snippets.push(stripTags(m[1]));
+  let index = 0;
+  for (const m of html.matchAll(linkRe)) {
+    results.push({
+      title: stripTags(m[2]),
+      url: resolveDuckLink(m[1]),
+      snippet: snippets[index++] ?? "",
+    });
+  }
+  return results;
+}
+
+function parseBing(html: string): { title: string; url: string; snippet: string }[] {
+  const results: { title: string; url: string; snippet: string }[] = [];
+  for (const block of html.match(/<li class="b_algo"[\s\S]*?<\/li>/g) ?? []) {
+    const link = /<h2[^>]*><a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/.exec(block);
+    if (!link) continue;
+    const para = /<p[^>]*>([\s\S]*?)<\/p>/.exec(block);
+    results.push({
+      title: stripTags(link[2]),
+      url: resolveBingLink(link[1]),
+      snippet: para ? stripTags(para[1]) : "",
+    });
+  }
+  return results;
+}
+
+/**
+ * Bing wraps every result in a /ck/a redirect carrying the real URL as
+ * `u=a1<base64url>`. Returned decoded, because a redirect link tells the
+ * model nothing about where it goes.
+ */
+function resolveBingLink(href: string): string {
+  const clean = href.replace(/&amp;/gi, "&");
+  const m = /[?&]u=a1([A-Za-z0-9_-]+)/.exec(clean);
+  if (!m) return clean;
+  try {
+    const b64 = m[1].replace(/-/g, "+").replace(/_/g, "/");
+    const decoded = Buffer.from(b64 + "=".repeat((4 - (b64.length % 4)) % 4), "base64").toString("utf8");
+    if (/^https?:\/\//i.test(decoded)) return decoded;
+  } catch {
+    /* keep the wrapper if the encoding ever changes */
+  }
+  return clean;
+}
+
 function resolveDuckLink(href: string): string {
   try {
     const url = new URL(href.startsWith("//") ? `https:${href}` : href);
