@@ -29,6 +29,7 @@ import { BrowserPanel, BrowserFrameDTO } from "./components/BrowserPanel";
 import { AboutModal } from "./components/AboutModal";
 import { SkillsModal } from "./components/SkillsModal";
 import { SessionPeekModal } from "./components/SessionPeekModal";
+import { SignInModal } from "./components/SignInModal";
 import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
 
@@ -1101,42 +1102,32 @@ export function App(): React.ReactElement {
       )}
 
       {modal === "signin" && (
-        <Modal
-          title={t("signInTitle")}
+        <SignInModal
           onClose={() => setModal(null)}
-          footer={
-            <>
-              <button className="btn" onClick={() => setModal("cookie")}>
-                {t("signInUseBrowser")}
-              </button>
-              <button
-                className="btn primary"
-                onClick={() => {
-                  setModal(null);
-                  void window.onflip
-                    .signIn()
-                    .then((r) => {
-                      if (r.ok) {
-                        refreshStatus();
-                        refreshLists();
-                        void api.init().then(setStatus).catch(() => {});
-                        setConnect("connecting");
-                        boot();
-                      } else if (r.reason && r.reason !== "cancelled") {
-                        notifyError(`Sign-in did not complete: ${r.reason}`);
-                      }
-                    })
-                    .catch((e: Error) => notifyError(e.message));
-                }}
-              >
-                {t("signInAction")}
-              </button>
-            </>
-          }
-        >
-          <p className="modal-note">{t("signInBody")}</p>
-          <p className="modal-note">{t("signInBrowserHint")}</p>
-        </Modal>
+          onSignedIn={(source) => {
+            setModal(null);
+            notify(source ? `Signed in using your ${source} session.` : "Signed in.");
+            refreshStatus();
+            refreshLists();
+            boot();
+          }}
+          onPasteToken={() => setModal("cookie")}
+          onSignInWindow={() => {
+            setModal(null);
+            void window.onflip
+              .signIn()
+              .then((r) => {
+                if (r.ok) {
+                  refreshStatus();
+                  refreshLists();
+                  boot();
+                } else if (r.reason && r.reason !== "cancelled") {
+                  notifyError(`Sign-in did not complete: ${r.reason}`);
+                }
+              })
+              .catch((err: Error) => notifyError(err.message));
+          }}
+        />
       )}
       {modal === "cookie" && (
         <CookieSignInModal

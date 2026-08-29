@@ -181,6 +181,11 @@ a:hover {
 
 /* macOS keeps its real traffic lights at the left, so the row starts clear
    of them and ends with padding where the drawn controls would have been. */
+.modal-note.dim {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
 .titlebar.mac {
   padding-left: 82px;
   padding-right: 12px;
