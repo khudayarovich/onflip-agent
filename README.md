@@ -111,6 +111,38 @@ To produce installers, see [RELEASING.md](RELEASING.md).
 
 Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Security issues have [their own process](SECURITY.md).
 
+## Support the project
+
+OnFlip is free, MIT-licensed, and built in the open by one person. It has no
+paid tier and collects nothing from you — if it saves you time, a contribution
+keeps it maintained.
+
+<table>
+<tr>
+<td width="60%" valign="top">
+
+**Ways to help**
+
+- ⭐ **Star the repository** — free, and the single biggest help
+- 🐛 **Report bugs** with a log excerpt, or suggest a feature
+- 💛 **Sponsor** if OnFlip earns a place in your workflow
+
+</td>
+<td width="40%" valign="top">
+
+**Donate**
+
+[![Sponsor](https://img.shields.io/badge/GitHub-Sponsor-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/khudayarovich)
+
+<!-- Add your own links here once you have them:
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/USERNAME)
+[![Ko-fi](https://img.shields.io/badge/Ko--fi-ff5e5b?logo=kofi&logoColor=white)](https://ko-fi.com/USERNAME)
+-->
+
+</td>
+</tr>
+</table>
+
 ## License
 
 [MIT](LICENSE) © Farrukh Khudayarovich Yuldashev
