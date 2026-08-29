@@ -4,9 +4,9 @@
 
 # OnFlip
 
-**An agent for coding and everyday tasks, powered by the ChatGPT account you already pay for.**
+**An agent for coding and everyday tasks, powered by your own ChatGPT account.**
 
-No API key. No per-token billing. Your subscription, your machine, your files.
+No API key. No per-token billing. On ChatGPT's free plan, no bill at all.
 
 [![Download](https://img.shields.io/github/v/release/khudayarovich/onflip-agent?label=download&sort=semver)](https://github.com/khudayarovich/onflip-agent/releases/latest)
 [![CI](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml)
@@ -18,11 +18,41 @@ No API key. No per-token billing. Your subscription, your machine, your files.
 
 </div>
 
+## Why an agent on a chat subscription
+
+One task is never one message. "Fix this failing test" is a dozen or more: read
+the file, run the build, read the error, edit, run it again. That multiplication
+is what makes API-priced agents expensive — every step is billed.
+
+OnFlip is not priced per step, because it does not use the API. It drives the
+ChatGPT session you are already signed in to, so an agent that works all
+afternoon costs exactly what your account already costs:
+
+> **On the Free and Go plans, that is nothing.** In August 2026 OpenAI made
+> **GPT-5.6 Luna** the default for Free and Go users and
+> [removed the daily cap on text chats entirely](https://techcrunch.com/2026/08/06/openai-brings-unlimited-chatgpt-text-chats-to-free-users/) —
+> unlimited messages, on a model that makes
+> [62% fewer factual errors than Instant](https://openai.com/index/improving-gpt-5-6-sol-in-chatgpt/).
+> An agent's dozens-of-messages-per-task appetite stops being a cost at all.
+>
+> **On Plus and Pro**, the same app runs on **GPT-5.6 Sol** and its far larger
+> context window — OnFlip reads your plan and the model's window and sizes its
+> own context budget to match, so long sessions summarise themselves far less
+> often.
+
+The honest caveat: unlimited covers *text*. Free accounts still have limits on
+file uploads, which OnFlip uses to hand over unusually large turns, so very
+long sessions go further on a paid plan.
+
 ## What it is
 
-OnFlip is a desktop app that turns your ordinary ChatGPT subscription into a working agent. It reads and edits files on your computer, runs commands, browses the web, and produces documents — asking your approval before anything risky.
+OnFlip is a desktop app that turns a ChatGPT account into a working agent. It
+reads and edits files on your computer, runs commands, browses the web, and
+produces documents — asking your approval before anything risky.
 
-Every other agent of this kind bills you per token through an API. OnFlip drives the ChatGPT web session you are already signed in to, so the work costs what your subscription already costs.
+Everything happens on your machine. There is no OnFlip server, no telemetry, and
+no account to create: the app talks to ChatGPT through your own browser session
+and to nothing else.
 
 ## Install
 
@@ -119,9 +149,11 @@ There is no OnFlip server. Nothing is sent anywhere except to ChatGPT, by your o
 
 **Why can't it use my Chrome session?** Chrome and Edge on Windows encrypt their cookies so that no other program can read them, and recent Chrome refuses to be driven with its own profile. Both are deliberate anti-theft protections and OnFlip does not work around them. Sign in through the app's window once — it remembers — or sign in to ChatGPT in Firefox, whose session OnFlip can read directly.
 
-**Which model does it use?** Whatever your account offers; pick it from the model chip. Reasoning effort is a separate control.
+**Which model does it use?** Whatever your account offers, chosen from the model chip. Free and Go accounts default to GPT-5.6 Luna, the plan with unlimited text chats; Plus and Pro run GPT-5.6 Sol in regular chat. Reasoning effort is a separate control, and OnFlip sizes its context budget from whichever model you are on.
 
-**Does it cost anything per message?** No. It uses your existing subscription. Heavy use is still subject to whatever rate limits your plan has, and OnFlip backs off rather than hammering them.
+**Does it cost anything per message?** No. There is no API key and nothing metered — the work costs whatever your ChatGPT account costs, which on the Free and Go plans is nothing. Limits still apply to things that are not plain text (image generation, file uploads), and when ChatGPT throttles an account OnFlip waits it out rather than hammering it.
+
+**Do I need a paid plan?** No. A free account runs the agent, and unlimited text chats suit an agent workload of many small messages. A paid plan buys a much larger context window, so long sessions compact themselves less often.
 
 ## Building from source
 
