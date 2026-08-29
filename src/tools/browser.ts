@@ -142,7 +142,38 @@ async function launch(headless: boolean): Promise<BrowserContext> {
   return chromium.launchPersistentContext(profileDir(), options);
 }
 
+/**
+ * Close the browser on its own once nothing has used it for a while.
+ *
+ * The system prompt asks the model to call browser_close when the browsing
+ * part of a task ends, and models forget — which left a headless Chromium
+ * and its screencast running for hours after a two-minute lookup. Every use
+ * re-arms this timer (the user clicking in the panel included), so a flow
+ * that spans turns keeps its page, and a forgotten browser reaps itself.
+ * The persistent profile keeps logins either way; only the open page is
+ * lost, and a fresh one is a launch away.
+ */
+const BROWSER_IDLE_MS = Math.max(
+  60_000,
+  (Number(process.env.ONFLIP_BROWSER_IDLE_SECONDS) || 180) * 1_000
+);
+let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+function armIdleClose(): void {
+  if (idleTimer) clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => {
+    idleTimer = null;
+    logger.info("browser-tool", "closing the automation browser after idle", {
+      idleMs: BROWSER_IDLE_MS,
+    });
+    void closeAutomationBrowser();
+  }, BROWSER_IDLE_MS);
+  // A pending close must never be what keeps the process alive.
+  idleTimer.unref?.();
+}
+
 async function ensurePage(): Promise<Page> {
+  armIdleClose();
   if (page && !page.isClosed()) return page;
   // The env var wins so a script can drive this without touching config;
   // a window that steals focus is fine for a person and not for a test.
@@ -165,6 +196,10 @@ async function ensurePage(): Promise<Page> {
 
 /** Shut the automation browser down. Safe to call when it never started. */
 export async function closeAutomationBrowser(): Promise<void> {
+  if (idleTimer) {
+    clearTimeout(idleTimer);
+    idleTimer = null;
+  }
   try {
     if (context) await context.close();
   } catch {
@@ -287,6 +322,8 @@ export interface BrowserUserInput {
 export async function dispatchBrowserInput(input: BrowserUserInput): Promise<boolean> {
   const p = page;
   if (!p || p.isClosed()) return false;
+  // A person interacting with the page is the page being used.
+  armIdleClose();
   const size = p.viewportSize() ?? viewport;
   const px = Math.round(Math.max(0, Math.min(1, input.x ?? 0)) * size.width);
   const py = Math.round(Math.max(0, Math.min(1, input.y ?? 0)) * size.height);
