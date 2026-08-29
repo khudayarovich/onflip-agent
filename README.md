@@ -12,6 +12,7 @@ No API key. No per-token billing. Your subscription, your machine, your files.
 [![CI](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS-lightgrey)](https://github.com/khudayarovich/onflip-agent/releases/latest)
+[![Sponsor](https://img.shields.io/badge/sponsor-%E2%9D%A4-ea4aaa)](#support-the-project)
 
 <img src=".github/assets/screenshot.png" alt="The OnFlip desktop app" width="900">
 
@@ -43,6 +44,35 @@ On first launch OnFlip asks you to sign in to ChatGPT. If you are already signed
 - **Browse.** A real browser you can watch *and touch*: click, scroll and type into the page the agent is driving, then hand it back.
 - **Two sessions at once.** Each window runs its own agent with its own browser, the way two ChatGPT tabs are two conversations.
 - **Undo and inspect.** Every file change is snapshotted: see the diff for the session, revert the last change, export the transcript.
+
+## Support the project
+
+OnFlip is free, MIT-licensed, and built in the open by one person. It has no
+paid tier and collects nothing from you — if it saves you time, a contribution
+keeps it maintained.
+
+<table>
+<tr>
+<td width="60%" valign="top">
+
+**Ways to help**
+
+- ⭐ **Star the repository** — free, and the single biggest help
+- 🐛 **Report bugs** with a log excerpt, or suggest a feature
+- 💛 **Sponsor** if OnFlip earns a place in your workflow
+
+</td>
+<td width="40%" valign="top">
+
+**Donate**
+
+[![Sponsor on GitHub](https://img.shields.io/badge/Sponsor-ea4aaa?style=for-the-badge&logo=githubsponsors&logoColor=white)](https://github.com/sponsors/khudayarovich)
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20me%20a%20coffee-ffdd00?style=for-the-badge&logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/khudayarovich)
+
+</td>
+</tr>
+</table>
 
 ## Approval modes
 
@@ -110,35 +140,6 @@ To produce installers, see [RELEASING.md](RELEASING.md).
 ## Contributing
 
 Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). Security issues have [their own process](SECURITY.md).
-
-## Support the project
-
-OnFlip is free, MIT-licensed, and built in the open by one person. It has no
-paid tier and collects nothing from you — if it saves you time, a contribution
-keeps it maintained.
-
-<table>
-<tr>
-<td width="60%" valign="top">
-
-**Ways to help**
-
-- ⭐ **Star the repository** — free, and the single biggest help
-- 🐛 **Report bugs** with a log excerpt, or suggest a feature
-- 💛 **Sponsor** if OnFlip earns a place in your workflow
-
-</td>
-<td width="40%" valign="top">
-
-**Donate**
-
-[![Sponsor](https://img.shields.io/badge/GitHub-Sponsor-ea4aaa?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/khudayarovich)
-
-[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?logo=buymeacoffee&logoColor=black)](https://buymeacoffee.com/khudayarovich)
-
-</td>
-</tr>
-</table>
 
 ## License
 
