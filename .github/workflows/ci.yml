@@ -31,7 +31,11 @@ jobs:
           node-version: ${{ matrix.node }}
           cache: npm
 
-      - run: npm ci
+      # Install scripts are skipped deliberately: this job typechecks and
+      # compiles TypeScript, and never loads the native sqlite binding. Node
+      # 20 on Windows has no prebuilt better-sqlite3 binary, so installing it
+      # for real means compiling from source for a job that would not use it.
+      - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm run build
 
@@ -48,12 +52,12 @@ jobs:
 
       # The desktop package depends on the engine through `file:..`, so the
       # engine has to be installed and built before it can be typechecked.
-      - run: npm ci
+      - run: npm ci --ignore-scripts
       - run: npm run build
 
       - name: install desktop dependencies
         working-directory: desktop
-        run: npm ci
+        run: npm ci --ignore-scripts
 
       - name: typecheck main, engine and renderer
         working-directory: desktop
