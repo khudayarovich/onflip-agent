@@ -1,0 +1,49 @@
+name: Bug report
+description: Something in the app behaves wrongly
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. The session log in `~/.onflip/logs/` usually
+        explains the failure — please read it before attaching, since it
+        contains your prompts and paths from your machine.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: What you did, what the app did, and what you expected instead.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OnFlip version
+      description: Shown in the account menu → About.
+      placeholder: "0.7.5"
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Log excerpt
+      description: The relevant lines from `~/.onflip/logs/<session>.jsonl`, redacted as needed.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked that this is not a security issue (those go through SECURITY.md)
+          required: true

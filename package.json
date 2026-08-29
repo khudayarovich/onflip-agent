@@ -1,7 +1,7 @@
 {
   "name": "onflip",
   "version": "0.2.0",
-  "description": "OnFlip — an autonomous agent for coding and everyday tasks, driven by your ChatGPT web session",
+  "description": "The engine behind OnFlip Desktop — an agent for coding and everyday tasks, driven by your own ChatGPT session",
   "license": "MIT",
   "author": "Farrukh Khudayarovich Yuldashev",
   "homepage": "https://github.com/khudayarovich/onflip-agent#readme",
@@ -15,33 +15,16 @@
   "keywords": [
     "ai",
     "agent",
-    "cli",
     "chatgpt",
-    "coding-agent",
-    "assistant",
+    "desktop",
+    "electron",
     "automation",
-    "tui",
-    "pair-programming"
-  ],
-  "bin": {
-    "onflip": "dist/index.js"
-  },
-  "main": "dist/index.js",
-  "files": [
-    "dist",
-    "prebuilds",
-    "scripts/postinstall.js",
-    "README.md",
-    "LICENSE"
+    "assistant"
   ],
   "scripts": {
     "build": "tsc",
-    "dev": "tsx src/index.ts",
-    "start": "node dist/index.js",
     "typecheck": "tsc --noEmit",
     "browser": "playwright install chromium",
-    "check-version": "node scripts/sync-version.js --check",
-    "version": "node scripts/sync-version.js && git add src/repl.ts",
     "prepare": "npm run build",
     "postinstall": "node scripts/postinstall.js"
   },
@@ -58,5 +41,6 @@
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
-  }
+  },
+  "private": true
 }

@@ -399,7 +399,7 @@ export class ApiTransport implements Transport {
 
 export interface TransportChoice {
   transport: Transport;
-  /** Why this transport was picked, surfaced by `onflip status`. */
+  /** Why this transport was picked, shown in the app's status line. */
   reason: string;
 }
 

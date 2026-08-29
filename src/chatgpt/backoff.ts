@@ -60,7 +60,7 @@ export function classifyFailure(message: string): Classification {
   // HTTP 429 in an error, or a "you've reached your limit" reply.
   // "anonymous mode … could not be restored" is in this list for the fatal
   // patterns' sake rather than the throttle's: its advice ends "refresh the
-  // session with `onflip login`", and the word "login" is what the fatal
+  // session with the CLI, and the word "login" is what the fatal
   // test matches on. The failure itself healed on retry both times it was
   // seen — the recovery reload runs again on each attempt.
   if (
@@ -93,7 +93,7 @@ export function classifyFailure(message: string): Classification {
   // The composer refusing the message is the page not being ready yet — the
   // exact failure a short retry fixes, measured on every cold start of this
   // machine. It must be tested before the fatal patterns below: its advice
-  // text ends "run `onflip login --headed`", and that word "login" made the
+  // text once ended "run `onflip login --headed`", and that word "login" made the
   // fatal test swallow it, so the one error that most wants a retry was the
   // one error that never got it. The user's manual resend always worked,
   // which is precisely what the retry should have been.
@@ -204,6 +204,6 @@ export function assertNotCoolingDown(): void {
   const remaining = cooldownRemainingMs();
   if (remaining <= 0) return;
   throw new Error(
-    `Waiting out a ChatGPT cooldown — ${describeWait(remaining)} left. Sending now would extend it. Run \`onflip status\` to see when it lifts.`
+    `Waiting out a ChatGPT cooldown — ${describeWait(remaining)} left. Sending now would extend it.`
   );
 }

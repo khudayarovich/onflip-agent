@@ -1139,7 +1139,7 @@ export class Engine {
    * Adopt a session the user just signed into, in the desktop's own sign-in
    * window (see electron/signin.ts).
    *
-   * The cookies are written to config the same way `onflip login` writes
+   * The cookies are written to config the same way the browser import writes
    * them, so the CLI and a later restart both pick the session up, and the
    * live transport is pointed at them immediately: the cookie array the
    * transport was constructed with is refilled in place, then the automation
@@ -1213,7 +1213,7 @@ export class Engine {
   /**
    * Sign in by importing a session already open in Chrome, Edge or Firefox.
    *
-   * The same reader `onflip login` uses, run on demand rather than at
+   * The same reader the sign-in prompt uses, run on demand rather than at
    * startup — so it works even while the app is signed out, which is
    * exactly when someone reaches for it. What it cannot do is decrypt
    * Chrome-family cookies on current Windows: those use app-bound

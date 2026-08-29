@@ -24,7 +24,7 @@ export async function fetchAccessToken(cookies: SessionCookie[]): Promise<Sessio
   const data = (await res.json()) as SessionInfo;
   if (!data?.accessToken) {
     throw new Error(
-      "No access token returned. Your ChatGPT session may be expired. Re-login in your browser or run `onflip login`."
+      "No access token returned. Your ChatGPT session may be expired. Sign in again from the account menu in OnFlip."
     );
   }
   return data;

@@ -362,19 +362,19 @@ export class ChatGPTBrowserError extends Error {}
  * verbatim tells the user nothing they can act on.
  */
 const SIGNED_OUT_MESSAGE =
-  "No ChatGPT session. Sign in to ChatGPT in your normal browser (Chrome, Edge or Firefox), then run `onflip login` to pick the session up.";
+  "No ChatGPT session. Sign in from the account menu in OnFlip, or sign in to ChatGPT in Firefox and OnFlip will pick that session up.";
 
 async function assertLoggedIn(p: Page): Promise<void> {
   const url = p.url();
   if (/\/auth\/login|\/auth\/signin|openai\.com\/auth/.test(url)) {
     throw new ChatGPTBrowserError(
-      "ChatGPT is asking you to log in — the stored session has expired. Sign in to ChatGPT in your normal browser (Chrome, Edge or Firefox), then run `onflip login` to pick the session up."
+      "ChatGPT is asking you to log in — the stored session has expired. Sign in from the account menu in OnFlip, or sign in to ChatGPT in Firefox and OnFlip will pick that session up."
     );
   }
   const body = await p.locator("body").innerText().catch(() => "");
   if (/just a moment|checking your browser|verify you are human/i.test(body.slice(0, 400))) {
     throw new ChatGPTBrowserError(
-      "Cloudflare is challenging the browser OnFlip drives. It usually clears on its own within a few minutes; if it does not, `onflip logout` then `onflip login` picks up a fresh session from your browser."
+      "Cloudflare is challenging the browser OnFlip drives. It usually clears on its own within a few minutes; if it does not, sign out and back in from the account menu."
     );
   }
 }
@@ -441,7 +441,7 @@ async function openNewChat(p: Page, model?: string): Promise<void> {
   if (!composer) {
     await assertLoggedIn(p);
     throw new ChatGPTBrowserError(
-      "Could not find the ChatGPT message box. The page layout may have changed, or the session may be signed out. Try `onflip login --headed`."
+      "Could not find the ChatGPT message box. The page layout may have changed, or the session may be signed out. Sign in again from the account menu."
     );
   }
   await p.waitForTimeout(600);
@@ -1143,7 +1143,7 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
   logger.warn("browser", "composer refused the message — page state", pageState ?? { unreadable: true });
 
   throw new ChatGPTBrowserError(
-    `The message could not be entered into the ChatGPT composer (${best?.check.gotLines ?? 0} of ${best?.check.wantLines ?? 0} lines arrived). The page layout may have changed — run \`onflip login --headed\` to watch what happens.`
+    `The message could not be entered into the ChatGPT composer (${best?.check.gotLines ?? 0} of ${best?.check.wantLines ?? 0} lines arrived). The page layout may have changed — turn on "Show the ChatGPT browser window" in Settings to watch what happens.`
   );
 }
 
@@ -1377,7 +1377,7 @@ async function submitMessage(
   // text, and that phrase in this message once turned every composer stumble
   // into a persisted cooldown.
   throw new ChatGPTBrowserError(
-    "The message was typed but ChatGPT would not accept it — neither the send button nor Enter cleared the composer. ChatGPT may be throttling this account, or the send control has moved. Run `onflip login --headed` to watch."
+    "The message was typed but ChatGPT would not accept it — neither the send button nor Enter cleared the composer. ChatGPT may be throttling this account, or the send control has moved. Turn on \"Show the ChatGPT browser window\" in Settings to watch."
   );
 }
 
@@ -1569,7 +1569,7 @@ async function recoverAnonymousPage(
   // retry, which re-runs this recovery and regularly succeeds.
   if (stillOut) {
     throw new ChatGPTBrowserError(
-      "ChatGPT opened in anonymous mode and the session could not be restored to the page, so nothing was sent. This often heals on a retry; if it keeps happening, refresh the session with `onflip login`."
+      "ChatGPT opened in anonymous mode and the session could not be restored to the page, so nothing was sent. This often heals on a retry; if it keeps happening, sign out and back in from the account menu."
     );
   }
 }
@@ -1969,7 +1969,7 @@ export async function waitForReply(
       if (!sendLanded && (await looksAnonymous(p).catch(() => false))) {
         throw new ChatGPTBrowserError(
           "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. " +
-            "Sign in from the account menu (or run `onflip login`), then send again."
+            "Sign in from the account menu (or sign in again from the account menu), then send again."
         );
       }
     }
@@ -2053,7 +2053,7 @@ export async function waitForReply(
       (/\/uc\//.test(pageState.url) || /\bLog in\b[\s\S]{0,80}\bSign up\b/i.test(pageState.text))
     ) {
       throw new ChatGPTBrowserError(
-        "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. Sign in from the account menu (or run `onflip login`), then send again."
+        "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. Sign in from the account menu (or sign in again from the account menu), then send again."
       );
     }
     throw new ChatGPTBrowserError(
@@ -2062,11 +2062,11 @@ export async function waitForReply(
   }
   if (sawGeneration) {
     throw new ChatGPTBrowserError(
-      `ChatGPT was still working after ${secs}s and the reply budget ran out. Give it longer with \`onflip config replyTimeout ${Math.max(600, secs * 2)}\` (seconds), or lower the reasoning effort with /thinking.`
+      `ChatGPT was still working after ${secs}s and the reply budget ran out. Give it longer in Settings → Reply timeout (try ${Math.max(600, secs * 2)} seconds), or lower the reasoning effort.`
     );
   }
   throw new ChatGPTBrowserError(
-    `No reply from ChatGPT after ${secs}s, and the page never showed it working. ChatGPT may be throttling this account, the model may be unavailable, or the reply selectors may no longer match — try \`onflip login --headed\` to watch.`
+    `No reply from ChatGPT after ${secs}s, and the page never showed it working. ChatGPT may be throttling this account, the model may be unavailable, or the reply selectors may no longer match — turn on "Show the ChatGPT browser window" in Settings to watch.`
   );
 }
 
@@ -2397,7 +2397,7 @@ export async function openConversation(
     throw new ChatGPTBrowserError(
       signedIn
         ? "ChatGPT would not open that conversation — the page kept returning to a new chat. It may have been deleted, or it may belong to another account."
-        : "ChatGPT would not open that conversation: the browser session was not ready. Try again — if it keeps happening, `onflip login` picks up a fresh session."
+        : "ChatGPT would not open that conversation: the browser session was not ready. Try again — if it keeps happening, signing out and back in from the account menu picks up a fresh session."
     );
   }
   // The role is read off each node directly. An earlier version collected them

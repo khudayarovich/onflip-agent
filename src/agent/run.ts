@@ -103,7 +103,7 @@ export async function runTurn(
   const budget = Number(opts.maxIterations);
   if (!Number.isFinite(budget) || budget < 1) {
     throw new Error(
-      `Invalid step budget (${String(opts.maxIterations)}). Set a positive number with: onflip config maxIterations 40`
+      `Invalid step budget (${String(opts.maxIterations)}). Set a positive number in Settings → Step budget.`
     );
   }
 

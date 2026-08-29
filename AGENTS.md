@@ -1,27 +1,37 @@
 # onflip-agent
 
-OnFlip is a CLI coding agent whose model backend is a **ChatGPT web session** driven through Playwright, rather than an API. Written in TypeScript, compiled to CommonJS, run as `node dist/index.js`.
+OnFlip is a desktop agent whose model backend is a **ChatGPT web session**
+driven through Playwright, rather than an API. TypeScript throughout: an engine
+compiled to CommonJS, and an Electron app that runs it as a child process.
+
+This file is written for whoever works on the code next — human or agent. It is
+the *why*: the decisions that look arbitrary until you know what went wrong
+without them. Start with [docs/architecture.md](docs/architecture.md) for the
+shape, then read this before changing anything load-bearing.
 
 ## Commands
 
 ```bash
+npm install         # installs and builds the engine
 npm run build       # tsc -> dist/
 npm run typecheck   # tsc --noEmit
-npm run dev -- "…"  # tsx src/index.ts, no build step
-node dist/index.js  # run the built CLI
+
+cd desktop
+npm install
+npm start           # build main + engine + renderer, then launch
+npm run typecheck   # main, engine host and renderer
+npm run installer   # Windows installer into desktop/release/
 ```
 
-There is no test runner wired up. Behaviour is verified by driving the built modules directly — see "Testing" below.
+There is no test runner wired up. Behaviour is verified by driving the built
+modules directly — see "Testing" below.
 
 ## Architecture
 
 ```
-src/
-  index.ts          entry point; signal handling and terminal restoration
-  cli.ts            argument parsing, subcommands (login/status/sessions/config)
-  repl.ts           the interactive session: state, slash commands, editor handoff
+src/                the engine: everything the agent is, minus the window
   config.ts         ~/.onflip/config.json
-  models.ts         model slugs and the reasoning-effort directive
+  models.ts         model slugs, context windows, reasoning-effort directive
   types.ts          shared tool/message types
 
   agent/
@@ -35,19 +45,26 @@ src/
   chatgpt/
     transport.ts    Transport interface; browser vs api selection
     browser-client.ts  Playwright automation of chatgpt.com
+    backoff.ts      failure classification, cooldowns, pacing
+    plans.ts        plan/model context budgets
     client.ts       backend-api fallback
 
-  tools/            read/write/edit/list/glob/grep, bash, todo, web_fetch
-  ui/               theme, ansi, markdown, diff, render, editor, prompt, keys
+  tools/            read/write/edit/list/glob/grep, bash, todo, web, browser
   auth/             browser cookie extraction (Chromium DPAPI + Firefox)
 
-desktop/            the Windows desktop app (Electron + React), a separate
-                    npm package that imports this package's dist/ as a library
-                    — see desktop/README.md. tsconfig.json has `declaration`
-                    on so dist/ carries the .d.ts files it consumes. Its
-                    engine child runs under plain Node, NOT Electron: the
-                    better-sqlite3 prebuilt binding matches the Node ABI, and
-                    Playwright behaves exactly as it does under the CLI.
+desktop/            the Electron app, a separate npm package that imports this
+                    package's dist/ as a library. tsconfig.json has
+                    `declaration` on so dist/ carries the .d.ts files it
+                    consumes.
+  electron/         main process: windows, IPC, sign-in window, terminal
+  engine/           the agent process, one per window, ndjson RPC over stdio
+  ui/               React renderer
+
+                    The engine child runs under plain Node, NOT Electron: the
+                    better-sqlite3 prebuilt binding matches the Node ABI.
+                    Where no system Node exists it falls back to
+                    ELECTRON_RUN_AS_NODE, and prebuilds/ carries a second
+                    sqlite binding for that ABI.
 ```
 
 ### Things that are not obvious
@@ -103,13 +120,13 @@ This split matters. An earlier version reference-counted raw mode alongside hand
 
 **The model JSON-encodes a value when the value contains quotes.** Live: in one turn, every `edit` whose `old_string` held a double quote arrived as `"ctx.fillStyle = \\"#080b18\\";"` — quotes and backslashes and all — and every one that did not arrived raw. Nine of twenty-four edits failed to match the file. `coerce` now decodes a value that is a complete JSON string literal *containing backslash escapes*; the escapes are the signal. A value merely wrapped in quotes has none and keeps them, and a raw Windows path fails to parse and falls through untouched.
 
-**Never send twice into a throttle.** ChatGPT answers overload and abuse checks with an HTTP error, and the worst possible response is another request. A live 403 — `{"detail":"Unusual activity has been detected from your device"}` — got retried twice, two and four seconds apart, because the no-retry guard matched on wording ("log in", "rate limit") that the real message does not use. `classifyFailure` in `chatgpt/backoff.ts` now sorts failures into retry / fatal / cooldown by status code as well as text, and a cooldown is persisted to config so restarting the CLI — the most natural reaction to a block — cannot walk straight back into it.
+**Never send twice into a throttle.** ChatGPT answers overload and abuse checks with an HTTP error, and the worst possible response is another request. A live 403 — `{"detail":"Unusual activity has been detected from your device"}` — got retried twice, two and four seconds apart, because the no-retry guard matched on wording ("log in", "rate limit") that the real message does not use. `classifyFailure` in `chatgpt/backoff.ts` now sorts failures into retry / fatal / cooldown by status code as well as text, and a cooldown is persisted to config so restarting the app — the most natural reaction to a block — cannot walk straight back into it.
 
 **The direct API path is the one that draws the flag.** Those requests go from Node with a bearer token and none of a browser's fingerprint or Cloudflare clearance. `chooseTransport` therefore never selects it on its own, only when `ONFLIP_TRANSPORT=api` asks for it: with no cookies the persistent browser profile is used instead, since it may well still be signed in and its failure mode is a fixable login rather than an account-level flag. The measured volume when the flag fired was 78 messages over 101 minutes — well inside any plan's limits — so it was the *shape* of the requests, not the rate.
 
 **One unreadable browser is not a reason to stop looking.** `extractSessionTokenFromBrowser` walks every Chromium profile it can find and then Firefox. Chrome's app-bound encryption (v20) used to `throw` straight out of that loop, so Edge and Firefox were never reached — while the error it threw said "Try Firefox". A machine with a signed-in Firefox was indistinguishable from a machine with no session at all. Failures are now collected and the search continues; the v20 message is only raised if *nothing* worked, and it names the browsers that were tried rather than suggesting one of them. The readers are injectable so the search itself is testable without a filesystem full of browser profiles.
 
-**The bundled Chromium is what Cloudflare challenges.** It is recognisably not a consumer browser, and the challenge it draws cannot be completed by the person sitting in front of it — so `onflip login --headed` was useless exactly when it was needed. `launchWithFallback` asks for the `chrome` channel first and falls back to the bundled build, which keeps machines without Chrome working for everything except the challenge.
+**The bundled Chromium is what Cloudflare challenges.** It is recognisably not a consumer browser, and the challenge it draws cannot be completed by the person sitting in front of it — so the headed sign-in was useless exactly when it was needed. `launchWithFallback` asks for the `chrome` channel first and falls back to the bundled build, which keeps machines without Chrome working for everything except the challenge.
 
 **A message in the thread is a sign of life.** `waitForReply` gave up after 90 seconds of "no text and no stop button" — but the stop button is absent in the gap between submitting and generating, and with a reasoning model that gap runs long. A turn that was about to answer got abandoned and retried twice more, three failures over four and a half minutes on a conversation that was working. Once the user's own turn appears on the page, the send has landed and only the overall budget should end the wait. **And the landing has to be measured against a count taken before typing**: sampled inside `waitForReply`, the just-sent message was already in the count, "did our turn land?" could never come true, and the silence guard fired at 90 seconds on sends that had landed fine — reported, wrongly, as the 600-second reply budget running out, which sent the user chasing a timeout that was never the problem. `sendOn` passes `userTurnsBefore` now, and a genuine silence break carries its own message ("the sent message never appeared") and classifies as a retry, because a failed send is what a resend fixes.
 
@@ -117,7 +134,7 @@ This split matters. An earlier version reference-counted raw mode alongside hand
 
 **Carry the session cookies, not the browser's.** `cf_clearance` and `__cf_bm` are issued against one browser and address; `GCLB`, `__cflb` and `__oailb` pin a backend. Replaying another browser's is useless at best and is the exact mismatch an anti-bot system exists to notice — measured, the page authenticated with them but never produced a composer, and did without. `NOT_OURS_TO_REPLAY` filters them at injection.
 
-**Signing in through the automation browser is not a path.** Google's OAuth refuses automated browsers, and most accounts here are Google-linked, so `login --headed` cannot complete however friendly the browser looks. Every message that used to lead with it now leads with the cookie path: sign in normally, then `onflip login`.
+**Signing in through the automation browser is not a path.** Google's OAuth refuses automated browsers, and most accounts here are Google-linked, so an automated sign-in cannot complete however friendly the browser looks. The sign-in window is an ordinary Electron window with no automation flags and an honest Chrome user agent, and the prompt tries the cookie path first: a session already in a readable browser is imported without a login at all.
 
 **A chat is filed into a project after the fact, never started inside one.** `chatgpt.com/g/<project>/project` redirects to `/auth/login` with cookies that work perfectly on the ordinary chat page — project routes want a full sign-in, and that sign-in cannot be completed in an automated browser either, so the route is closed at both ends. `PATCH /backend-api/conversation/<id>` with **`gizmo_id`** moves a finished conversation using the same session that already lists projects — `conversation_template_id` is accepted with a 200 and silently ignored, which is how an earlier version reported success for every chat while leaving all of them outside. `fileIntoProject` re-reads the conversation afterwards and believes the read, not the status code. So `newChatUrl` knows nothing about projects, and `sendOn` files the conversation once it knows which one it is in.
 
@@ -159,7 +176,7 @@ This split matters. An earlier version reference-counted raw mode alongside hand
 
 **A `page.evaluate` callback cannot see this module.** It is serialised and run in the browser, so a free variable from Node scope is a ReferenceError there — and one that only fires down the branch that mentions it. `backendApi` returned `{ __error: SIGNED_OUT_MESSAGE }` when the page had no token, so every signed-out-looking moment surfaced as `ReferenceError: SIGNED_OUT_MESSAGE is not defined` with a page stack, hiding the real diagnosis completely. Anything the page needs goes in through the argument object; anything the page reports comes back as data and is turned into a message on this side.
 
-**An empty `/api/auth/session` is not a signed-out account.** It answers 200 with no `accessToken` while the app is still settling: measured on a working account, the first call or two after a browser launch come back empty and the next carries a token. Reading it once, from inside the page, made every cold start a coin flip — `/chats` needed two or three CLI restarts before it worked, which reads as a broken session rather than a race. `pageAccessToken` runs from Node so it can wait, backs off between tries, and reloads once on the third, because the two causes (a slow start, and a page that loaded before its cookies were in place) need different remedies. Everything that talks to `/backend-api` goes through it.
+**An empty `/api/auth/session` is not a signed-out account.** It answers 200 with no `accessToken` while the app is still settling: measured on a working account, the first call or two after a browser launch come back empty and the next carries a token. Reading it once, from inside the page, made every cold start a coin flip — the chat list needed two or three restarts before it worked, which reads as a broken session rather than a race. `pageAccessToken` runs from Node so it can wait, backs off between tries, and reloads once on the third, because the two causes (a slow start, and a page that loaded before its cookies were in place) need different remedies. Everything that talks to `/backend-api` goes through it.
 
 **Warming the session costs a page, not the good navigation.** `openConversation` depends on `/c/<id>` being a page's *first* navigation, so the session cannot be checked on that page beforehand — checking it means navigating. `warmSession` opens a throwaway page in the same context, which shares the cookies and establishes the same session, and closes it again. The failure message then distinguishes the two things a bounce can mean: without that, a session that was not ready yet was reported as a conversation that may have been deleted.
 

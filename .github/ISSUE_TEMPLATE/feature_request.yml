@@ -1,0 +1,20 @@
+name: Feature request
+description: Suggest something OnFlip should do
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do
+      description: The situation you are in, rather than the solution you have in mind.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What would help
+      description: How you imagine it working, if you have a view.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you do today instead
