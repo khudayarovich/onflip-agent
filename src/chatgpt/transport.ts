@@ -303,6 +303,16 @@ export class BrowserTransport implements Transport {
       throw new ChatGPTBrowserError(service);
     }
 
+    // The model keeps signing replies with the attached turn file's name,
+    // pointer instruction notwithstanding, and the raw name then renders in
+    // the chat as if it were part of the answer. A bare filename line is
+    // protocol residue, never content — stripped mechanically, because the
+    // polite request demonstrably was not enough.
+    content = content
+      .replace(/^[ \t]*\**onflip-turn-\d{10,}-[a-z0-9]{4,}(?:\.md)?\**[ \t]*$/gim, "")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim();
+
     // The model saying it cannot read the attachment means it never received
     // this turn — that is a failed delivery, not an answer, and marking it
     // delivered is how a session loses its system prompt. The retry types

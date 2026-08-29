@@ -1944,15 +1944,23 @@ export async function waitForReply(
     // a page that is both silent and frozen for this long gets cut. The
     // conversation is abandoned with it — retrying into the thread that
     // just stalled is how one stall became three.
-    if (generating && now - lastChangeAt > STALLED_STREAM_MS) {
+    // `sendLanded` is in the condition alongside `generating` because the
+    // stall wears more than one face: a page that says "working" forever, a
+    // message that lands and never starts generating at all, and a
+    // generation that starts and dies. All three used to wait the full
+    // budget, and the second one did exactly that ten minutes after the
+    // first shape was fixed.
+    if ((generating || sendLanded) && now - lastChangeAt > STALLED_STREAM_MS) {
       logger.warn("browser", "generation stalled with no output; stopping it", {
         elapsedMs: now - started,
         quietMs: now - lastChangeAt,
+        generating,
+        sendLanded,
       });
       await stopGeneration(p);
       inConversation = false;
       throw new ChatGPTBrowserError(
-        `ChatGPT showed it was working for ${Math.round((now - started) / 1000)}s without producing any output — the generation looks stalled. Stopping it and retrying in a fresh conversation.`
+        `ChatGPT sat for ${Math.round((now - started) / 1000)}s without producing any output — the generation looks stalled. Stopping it and retrying in a fresh conversation.`
       );
     }
     // Only give up on silence when there is no evidence anything is under
