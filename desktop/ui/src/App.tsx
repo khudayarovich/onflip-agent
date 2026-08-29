@@ -226,8 +226,6 @@ export function App(): React.ReactElement {
   const turnStartedAt = useRef<number | null>(null);
   const sessionIdRef = useRef<string>("");
   const sessionTitleRef = useRef<string>("");
-  /** The sign-in prompt is offered once a session, not on every reconnect. */
-  const signInPrompted = useRef(false);
   /** Last automatic engine revive, so a crash loop cannot churn restarts. */
   const lastEngineRevive = useRef(0);
 
@@ -303,9 +301,13 @@ export function App(): React.ReactElement {
           // A first launch used to look like a working app until the first
           // message came back red. The engine knows there is no session
           // before anything is typed, so the offer to sign in is made then.
-          if (c.state === "signed-out" && !signInPrompted.current) {
-            signInPrompted.current = true;
-            setModal("signin");
+          // Offered every time the engine reports no session, not once a
+          // session: the prompt was shown, dismissed, and then a sign-out
+          // left the app with no way in but a red error. The engine says
+          // this only at startup and on an explicit sign-out, so this
+          // cannot nag — and it never steals a dialog already open.
+          if (c.state === "signed-out") {
+            setModal((current) => (current === null ? "signin" : current));
           }
           break;
         }
@@ -505,9 +507,15 @@ export function App(): React.ReactElement {
 
   const sendPrompt = useCallback(
     (text: string, attachments?: string[]) => {
+      // Nothing can be sent without a session, and the failure it produces
+      // explains itself badly. Ask for the sign-in that would fix it.
+      if (connect === "signed-out") {
+        setModal("signin");
+        return;
+      }
       guard(api.send(text, attachments?.length ? attachments : undefined));
     },
-    [guard]
+    [guard, connect]
   );
 
   const loadModels = useCallback(() => {
