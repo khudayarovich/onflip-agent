@@ -44,6 +44,7 @@ import {
   takeReplyImages,
   takeProjectWarning,
   currentConversationId,
+  openedConversationIds,
   sweepConversationsIntoProject,
   pageSessionUser,
   deleteConversations,
@@ -832,10 +833,14 @@ export class Engine {
 
       // Remember which ChatGPT conversation this session is writing into, so
       // deleting the session can delete its conversations too.
-      const conversationId = currentConversationId();
-      if (conversationId && this.session) {
+      // Every conversation the transport identified this turn, not only the
+      // one a successful reply ended in: a turn that failed still created
+      // chats, and an unrecorded chat is one the sweep below cannot rescue.
+      if (this.session) {
         const ids = (this.session.chatIds ??= []);
-        if (!ids.includes(conversationId)) ids.push(conversationId);
+        for (const id of [currentConversationId(), ...openedConversationIds()]) {
+          if (id && !ids.includes(id)) ids.push(id);
+        }
       }
       // Every chat this session ever opened belongs in the project, not just
       // the one still on screen — a filing that failed under a throttle used

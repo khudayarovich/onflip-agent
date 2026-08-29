@@ -552,6 +552,22 @@ let conversationsBeforeChat: Set<string> | null = null;
 let lastConversationId: string | null = null;
 
 /**
+ * Every conversation this process has identified, filed or not.
+ *
+ * The session only ever recorded the chat a *successful* turn ended in, so a
+ * chat whose filing failed — a throttled PATCH, a page without a token — was
+ * both outside the project and unknown to the sweep that exists to bring it
+ * back. Recorded here the moment an id is known, so the retry has something
+ * to retry.
+ */
+const openedConversations = new Set<string>();
+
+/** Conversation ids seen this process, for the session to remember. */
+export function openedConversationIds(): string[] {
+  return [...openedConversations];
+}
+
+/**
  * Which ChatGPT conversation the transport is in right now, or null when it
  * has not been identified. Identification reuses `resolveConversationId`'s
  * outcome rather than re-deriving it — the URL alone is not dependable, and
@@ -754,11 +770,18 @@ export async function sweepConversationsIntoProject(ids: string[]): Promise<void
  * list is the entire complaint the project setting exists to answer.
  */
 async function groupInProject(p: Page): Promise<string | null> {
-  if (!activeProject) return conversationIdFromUrl(p.url());
+  if (!activeProject) {
+    const fromUrl = conversationIdFromUrl(p.url());
+    if (fromUrl) openedConversations.add(fromUrl);
+    return fromUrl;
+  }
   if (filedConversation) return filedConversation;
 
   try {
     const conversationId = await resolveConversationId(p);
+    // Known before it is filed: an id that is only remembered on success is
+    // no use to the pass whose whole job is retrying the failures.
+    if (conversationId) openedConversations.add(conversationId);
     if (!conversationId) {
       logger.warn("browser", "could not tell which conversation this is", {
         url: p.url(),
@@ -1653,6 +1676,17 @@ async function sendOn(
     // vanished, while a freshly opened chat accepted the same payload.
     if (e instanceof ChatGPTBrowserError && /never appeared/.test(e.message)) {
       inConversation = false;
+    }
+    // A send that failed still left a conversation behind, holding the
+    // message that was accepted before the reply died. Filing only ran after
+    // a *successful* reply, so every stalled or abandoned send orphaned a
+    // chat in the user's main list — the exact chats they kept finding
+    // outside the project. The reply is lost either way; where the chat
+    // lives is still worth getting right.
+    const orphan = await groupInProject(p).catch(() => null);
+    if (orphan) {
+      lastConversationId = orphan;
+      logger.info("browser", "filed the chat a failed send left behind", { conversation: orphan });
     }
     throw e;
   }
