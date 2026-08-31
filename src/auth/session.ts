@@ -6,7 +6,7 @@ import {
   allCookieLocations,
   BrowserCookieLocation,
 } from "./browser";
-import { decryptChromiumCookieValue, getAesKeyFromLocalState, CryptoError } from "./crypto";
+import { decryptChromiumCookieValue, getCookieKey, CryptoError } from "./crypto";
 import { SessionCookie } from "./access";
 
 const SESSION_COOKIE = "__Secure-next-auth.session-token";
@@ -91,7 +91,9 @@ function pickPrimary(cookies: SessionCookie[]): SessionCookie {
 }
 
 function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
-  const aesKey = getAesKeyFromLocalState(loc.localStatePath);
+  // The key and its cipher differ per platform; they are fetched together so
+  // a Windows key can never be handed to the macOS cipher.
+  const cookieKey = getCookieKey(loc.localStatePath, loc.browser);
   const { file, cleanup } = readWithCopy(loc.cookieDbPath);
   try {
     const db = openCookieDb(file);
@@ -111,7 +113,7 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
 
     for (const row of allRows) {
       try {
-        const value = decryptChromiumCookieValue(row.encrypted_value, aesKey);
+        const value = decryptChromiumCookieValue(row.encrypted_value, cookieKey);
         cookies.push({ name: row.name, value });
         if (row.name === "oai-did") deviceId = value;
       } catch (e) {
@@ -169,34 +171,64 @@ export type CookieReader = (loc: BrowserCookieLocation) => ExtractedToken | null
 const defaultReader: CookieReader = (loc) =>
   loc.browser === "Firefox" ? extractFirefox(loc) : extractChromium(loc);
 
+/** What each installed browser had to say, for the message and the log. */
+export interface BrowserReport {
+  browser: string;
+  outcome: "session" | "no-session" | "app-bound" | "locked" | "error";
+  detail?: string;
+}
+
+let lastReport: BrowserReport[] = [];
+
+/** Per-browser findings from the last search. */
+export function lastBrowserReport(): BrowserReport[] {
+  return lastReport;
+}
+
 export function extractSessionTokenFromBrowser(
   locations: BrowserCookieLocation[] = allCookieLocations(),
   read: CookieReader = defaultReader
 ): ExtractedToken | null {
   const tried: string[] = [];
   let appBound: CryptoError | null = null;
+  const report: BrowserReport[] = [];
+  const note = (browser: string, outcome: BrowserReport["outcome"], detail?: string) => {
+    if (!report.some((r) => r.browser === browser && r.outcome === outcome)) {
+      report.push({ browser, outcome, detail });
+    }
+  };
 
   for (const loc of locations) {
     if (!tried.includes(loc.browser)) tried.push(loc.browser);
     try {
       const result = read(loc);
-      if (result) return result;
+      if (result) {
+        note(loc.browser, "session");
+        lastReport = report;
+        return result;
+      }
+      note(loc.browser, "no-session");
     } catch (e) {
-      if (e instanceof CryptoError && e.message.includes("v20")) {
-        // Worth reporting only if nothing else pans out.
+      const message = e instanceof Error ? e.message : String(e);
+      if (e instanceof CryptoError && message.includes("v20")) {
         appBound = appBound ?? e;
+        note(loc.browser, "app-bound");
+      } else if (/EBUSY|EPERM|locked/i.test(message)) {
+        note(loc.browser, "locked", "close the browser and try again");
+      } else {
+        note(loc.browser, "error", message.slice(0, 120));
       }
       // Any other failure is this browser's problem, not the search's.
     }
   }
+  lastReport = report;
 
   if (appBound) {
     throw new CryptoError(
       `No ChatGPT session could be read from any browser (tried ${tried.join(
 )}). ` +
         `Chrome-family cookies use app-bound encryption, which cannot be decrypted. ` +
-        `Sign in to ChatGPT in Firefox, which OnFlip can read, ` +
-        `or pass a token with --token.`
+        `Sign in to ChatGPT in Firefox, which OnFlip can read, or use the app's own sign-in window.`
     );
   }
   return null;

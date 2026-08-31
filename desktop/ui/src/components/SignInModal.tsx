@@ -28,6 +28,7 @@ export function SignInModal({
   const t = useT();
   const [checking, setChecking] = useState(true);
   const [reason, setReason] = useState<string | null>(null);
+  const [report, setReport] = useState<{ browser: string; outcome: string; detail?: string }[]>([]);
 
   const tryBrowsers = () => {
     setChecking(true);
@@ -35,6 +36,7 @@ export function SignInModal({
     void api
       .importBrowserSession()
       .then((r) => {
+        setReport(r.report ?? []);
         if (r.ok) onSignedIn(r.source);
         else setReason(r.reason ?? null);
       })
@@ -70,7 +72,29 @@ export function SignInModal({
       ) : (
         <>
           <p className="modal-note">{t("signInBrowserHint")}</p>
-          {reason && <p className="modal-note dim">{reason}</p>}
+          {report.length > 0 && (
+            <table className="signin-report">
+              <tbody>
+                {report.map((r) => (
+                  <tr key={r.browser}>
+                    <td>{r.browser}</td>
+                    <td>
+                      {r.outcome === "session"
+                        ? t("reportSession")
+                        : r.outcome === "app-bound"
+                          ? t("reportAppBound")
+                          : r.outcome === "locked"
+                            ? t("reportLocked")
+                            : r.outcome === "error"
+                              ? r.detail || t("reportError")
+                              : t("reportNoSession")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          {reason && report.length === 0 && <p className="modal-note dim">{reason}</p>}
         </>
       )}
     </Modal>

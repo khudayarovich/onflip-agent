@@ -21,7 +21,7 @@ import {
   ThinkingLevel,
 } from "onflip/dist/models";
 import { resolveAuth, ResolvedAuth } from "onflip/dist/auth/resolve";
-import { spawnExtractToken, takeExtractError } from "onflip/dist/auth/extract";
+import { spawnExtractToken, takeExtractError, lastBrowserFindings } from "onflip/dist/auth/extract";
 import { fetchAccessToken } from "onflip/dist/auth/access";
 import { chooseTransport, Transport } from "onflip/dist/chatgpt/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
@@ -1220,17 +1220,31 @@ export class Engine {
    * encryption, and the reader says so rather than pretending the account
    * was not found.
    */
-  async importBrowserSession(): Promise<{ ok: boolean; source?: string; reason?: string }> {
+  async importBrowserSession(): Promise<{
+    ok: boolean;
+    source?: string;
+    reason?: string;
+    report?: { browser: string; outcome: string; detail?: string }[];
+  }> {
     const extracted = spawnExtractToken();
+    const report = lastBrowserFindings();
+    // Logged either way. This ran silently before, so an import that failed
+    // on someone else's machine left nothing behind to diagnose it with.
+    logger.info("engine", "browser session import", {
+      found: Boolean(extracted?.cookies.length),
+      source: extracted?.source,
+      report,
+    });
     if (extracted?.cookies.length) {
       await this.applySignIn(extracted.cookies);
-      return { ok: true, source: extracted.source };
+      return { ok: true, source: extracted.source, report };
     }
     return {
       ok: false,
       reason:
         takeExtractError() ??
-        "No signed-in ChatGPT session was found in Chrome, Edge or Firefox.",
+        "No signed-in ChatGPT session was found in any browser on this machine.",
+      report,
     };
   }
 

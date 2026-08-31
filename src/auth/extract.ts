@@ -1,7 +1,25 @@
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
-import type { ExtractedToken } from "./session";
+import type { ExtractedToken, BrowserReport } from "./session";
 import { logger } from "../log";
+
+/** Per-browser findings from the last search, for the message and the log. */
+let lastReport: BrowserReport[] = [];
+
+export function lastBrowserFindings(): BrowserReport[] {
+  return lastReport;
+}
+
+/** Turn the report into one sentence a user can act on. */
+function describeReport(report: BrowserReport[]): string {
+  const parts = report.map((r) => {
+    if (r.outcome === "app-bound") return `${r.browser} encrypts its cookies so no other program can read them`;
+    if (r.outcome === "locked") return `${r.browser} is open — close it and try again`;
+    if (r.outcome === "error") return `${r.browser} could not be read (${r.detail ?? "unknown"})`;
+    return `${r.browser} has no ChatGPT session`;
+  });
+  return parts.length ? `${parts.join("; ")}.` : "No supported browser was found on this machine.";
+}
 
 function workerPath(): string {
   return path.join(__dirname, "extract-worker.js");
@@ -68,14 +86,25 @@ export function spawnExtractToken(): ExtractedToken | null {
         env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
       });
       const line = out.trim().split(/\r?\n/).pop() ?? "null";
-      const parsed = JSON.parse(line) as ExtractedToken | null;
-      if (parsed) {
-        logger.info("auth", "read browser cookies", { runtime, source: parsed.source });
+      const parsed = JSON.parse(line) as
+        | (ExtractedToken & { report?: BrowserReport[] })
+        | { report?: BrowserReport[]; error?: string }
+        | null;
+      lastReport = (parsed as { report?: BrowserReport[] })?.report ?? [];
+      if (parsed && "cookies" in parsed && parsed.cookies.length) {
+        logger.info("auth", "read browser cookies", {
+          runtime,
+          source: parsed.source,
+          cookies: parsed.cookies.length,
+          report: lastReport,
+        });
         return parsed;
       }
       // The worker ran and found nothing: a real answer, not a failure of
       // this runtime. Trying another Node would find the same nothing.
-      logger.info("auth", "no browser session found", { runtime });
+      logger.info("auth", "no browser session found", { runtime, report: lastReport });
+      const workerError = (parsed as { error?: string })?.error;
+      lastExtractError = workerError || describeReport(lastReport);
       return null;
     } catch (e) {
       const stderr =

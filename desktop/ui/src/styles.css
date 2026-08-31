@@ -181,6 +181,22 @@ a:hover {
 
 /* macOS keeps its real traffic lights at the left, so the row starts clear
    of them and ends with padding where the drawn controls would have been. */
+.signin-report {
+  width: 100%;
+  margin: 10px 0 2px;
+  font-size: 12.5px;
+  border-collapse: collapse;
+}
+.signin-report td {
+  padding: 4px 0;
+  color: var(--text-muted);
+  border-top: 1px solid var(--border);
+}
+.signin-report td:first-child {
+  width: 92px;
+  color: var(--text);
+}
+
 .modal-note.dim {
   color: var(--text-muted);
   font-size: 12px;

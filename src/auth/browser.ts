@@ -18,15 +18,39 @@ function env(key: string): string | undefined {
 }
 
 export function chromiumBrowsers(): ChromiumBrowser[] {
-  const local = env("LOCALAPPDATA") || path.join(os.homedir(), "AppData", "Local");
-  const candidates: ChromiumBrowser[] = [
-    { name: "Chrome", userDataDir: path.join(local, "Google", "Chrome", "User Data") },
-    { name: "Edge", userDataDir: path.join(local, "Microsoft", "Edge", "User Data") },
-    { name: "Brave", userDataDir: path.join(local, "BraveSoftware", "Brave-Browser", "User Data") },
-    { name: "Chromium", userDataDir: path.join(local, "Chromium", "User Data") },
-    { name: "Vivaldi", userDataDir: path.join(local, "Vivaldi", "User Data") },
-    { name: "Arc", userDataDir: path.join(local, "Arc", "User Data") },
-  ];
+  const home = os.homedir();
+  let candidates: ChromiumBrowser[];
+
+  if (process.platform === "darwin") {
+    const support = path.join(home, "Library", "Application Support");
+    candidates = [
+      { name: "Chrome", userDataDir: path.join(support, "Google", "Chrome") },
+      { name: "Edge", userDataDir: path.join(support, "Microsoft Edge") },
+      { name: "Brave", userDataDir: path.join(support, "BraveSoftware", "Brave-Browser") },
+      { name: "Chromium", userDataDir: path.join(support, "Chromium") },
+      { name: "Vivaldi", userDataDir: path.join(support, "Vivaldi") },
+      { name: "Arc", userDataDir: path.join(support, "Arc", "User Data") },
+    ];
+  } else if (process.platform === "linux") {
+    const config = env("XDG_CONFIG_HOME") || path.join(home, ".config");
+    candidates = [
+      { name: "Chrome", userDataDir: path.join(config, "google-chrome") },
+      { name: "Edge", userDataDir: path.join(config, "microsoft-edge") },
+      { name: "Brave", userDataDir: path.join(config, "BraveSoftware", "Brave-Browser") },
+      { name: "Chromium", userDataDir: path.join(config, "chromium") },
+      { name: "Vivaldi", userDataDir: path.join(config, "vivaldi") },
+    ];
+  } else {
+    const local = env("LOCALAPPDATA") || path.join(home, "AppData", "Local");
+    candidates = [
+      { name: "Chrome", userDataDir: path.join(local, "Google", "Chrome", "User Data") },
+      { name: "Edge", userDataDir: path.join(local, "Microsoft", "Edge", "User Data") },
+      { name: "Brave", userDataDir: path.join(local, "BraveSoftware", "Brave-Browser", "User Data") },
+      { name: "Chromium", userDataDir: path.join(local, "Chromium", "User Data") },
+      { name: "Vivaldi", userDataDir: path.join(local, "Vivaldi", "User Data") },
+      { name: "Arc", userDataDir: path.join(local, "Arc", "User Data") },
+    ];
+  }
   return candidates.filter((c) => fs.existsSync(path.join(c.userDataDir, "Local State")));
 }
 
@@ -69,8 +93,13 @@ export function findChromiumCookieLocations(): BrowserCookieLocation[] {
 
 export function findFirefoxCookieLocations(): BrowserCookieLocation[] {
   const results: BrowserCookieLocation[] = [];
-  const appData = env("APPDATA") || path.join(os.homedir(), "AppData", "Roaming");
-  const firefoxRoot = path.join(appData, "Mozilla", "Firefox");
+  const home = os.homedir();
+  const firefoxRoot =
+    process.platform === "darwin"
+      ? path.join(home, "Library", "Application Support", "Firefox")
+      : process.platform === "linux"
+        ? path.join(home, ".mozilla", "firefox")
+        : path.join(env("APPDATA") || path.join(home, "AppData", "Roaming"), "Mozilla", "Firefox");
   if (!fs.existsSync(firefoxRoot)) return results;
 
   const profilesIni = path.join(firefoxRoot, "profiles.ini");

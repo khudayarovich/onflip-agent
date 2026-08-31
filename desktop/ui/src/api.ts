@@ -38,7 +38,7 @@ export const api = {
   browserInput: (input: Record<string, unknown>) => call<boolean>("browserInput", input),
   /** Try Chrome, Edge and Firefox for a session already signed in. */
   importBrowserSession: () =>
-    call<{ ok: boolean; source?: string; reason?: string }>("importBrowserSession"),
+    call<{ ok: boolean; source?: string; reason?: string; report?: { browser: string; outcome: string; detail?: string }[] }>("importBrowserSession"),
   /** Sign in with a session cookie the user pasted; same path as the window. */
   signInWithToken: (token: string) =>
     call<{ ok: boolean }>("applySignIn", {
