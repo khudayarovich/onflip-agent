@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as http from "node:http";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
-import { shell } from "electron";
+import { app, shell } from "electron";
 
 /**
  * Signing in through the browser the user already uses.
@@ -78,7 +78,7 @@ export function extensionDir(): string {
   return path.resolve(path.join(__dirname, "..", "..", "..", "extension"));
 }
 
-function page(token: string, dir: string): string {
+function page(token: string, dir: string, version: string): string {
   return [
     "<!doctype html>",
     '<html lang="en">',
@@ -110,6 +110,7 @@ function page(token: string, dir: string): string {
     "    padding:.45rem 1rem; border-radius:8px; border:1px solid rgba(128,128,128,.4);",
     "    background:transparent; color:inherit; }",
     "  .after { font-size:.85rem; margin-top:1rem; }",
+    "  .build { margin-top:1.5rem; font-size:.75rem; opacity:.45; }",
     "</style>",
     "</head>",
     "<body>",
@@ -134,6 +135,12 @@ function page(token: string, dir: string): string {
     '<div class="path" id="path">' + escapeHtml(dir) + "</div>",
     '<button id="copy">Copy the folder path</button>',
     "<p class=\"after\">Then come back to this tab — it finishes on its own.</p>",
+
+    // Two things that decide the answer when this does not work, and that
+    // a screenshot of the page would otherwise leave out.
+    '<p class="after">If Chrome shows an error beside <b>OnFlip Connector</b> after Load unpacked, that error is the whole answer — send it on. A managed computer can also forbid unpacked extensions outright, which Chrome says in the same place.</p>',
+    '<p class="after">Firefox does not need this and cannot use it: OnFlip reads a Firefox session directly.</p>',
+    '<p class="build">OnFlip ' + escapeHtml(version) + ' · connector must be loaded from the folder above</p>',
     "</div>",
     "</main>",
     "<script>",
@@ -203,7 +210,7 @@ export function pairWithBrowser(): Promise<PairResult> {
 
       if (req.method === "GET" && (url === "/pair" || url === "/")) {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(page(token, extensionDir()));
+        res.end(page(token, extensionDir(), app.getVersion()));
         return;
       }
 
