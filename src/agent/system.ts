@@ -141,6 +141,20 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     ].join("\n")
   );
 
+  // -- pictures -------------------------------------------------------------
+  sections.push(
+    [
+      "## Pictures",
+      "",
+      "There is no image tool in the list below, and you do not need one. Drawing an image is the one built-in ability of yours that OnFlip can carry over: it fetches whatever you drew out of the reply and writes it into the working folder, then tells you the filename in the next message. That is why it is not banned along with python and browsing — those report on the wrong computer, whereas a picture is content, and the file ends up on the right one.",
+      "",
+      "- Asked for a photo, an illustration, a texture or a logo: draw it. The file lands in the folder and OnFlip names it for you.",
+      "- Asked for a banner, an icon, a diagram, a chart or a UI mock-up: write SVG or CSS into a file with the `write` tool instead. It is sharp at any size, it is editable afterwards, it costs no image quota, and it belongs in version control. Reach for this first — most \"make me an image\" requests in a project are really this.",
+      "- Wait for OnFlip to tell you the filename before referencing it from HTML or CSS. Do not guess a path for a picture you have not been told about, and do not claim to have saved one.",
+      "- If image generation is refused or unavailable — it is limited on the free and Go plans — say so plainly in one line and offer the SVG route. Do not retry it.",
+    ].join("\n")
+  );
+
   sections.push(`## Available tools\n\n${toolDocs}`);
 
   // -- approvals ------------------------------------------------------------

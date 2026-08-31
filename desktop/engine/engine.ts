@@ -814,6 +814,37 @@ export class Engine {
     return [...ids];
   }
 
+  /**
+   * Write an image ChatGPT drew into the working folder.
+   *
+   * OnFlip has no image tool and is not going to grow one: the model
+   * already draws, and what was missing was the last three inches — the
+   * picture arrived in the chat and stayed there, so a request for a banner
+   * produced something the user could look at and nothing they could use.
+   *
+   * Read-only sessions are left alone. Everywhere else this is the point of
+   * having asked, so it does not go through the approval prompt: the file
+   * is the answer to the request, not a side effect of one.
+   */
+  private saveReplyImage(image: { dataUrl: string; name: string }): string | null {
+    if (this.approvalMode === "read-only") return null;
+    const target = imageTarget(this.cwd, image.dataUrl, image.name);
+    if (!target) return null;
+    try {
+      fs.writeFileSync(target.file, target.bytes);
+      logger.info("session", "saved a generated image", {
+        file: target.file,
+        bytes: target.bytes.length,
+      });
+      return path.basename(target.file);
+    } catch (e) {
+      logger.warn("session", "could not save a generated image", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+      return null;
+    }
+  }
+
   private async runOneTurn(text: string, attachments?: string[]): Promise<void> {
     this.busy = true;
     this.abort = new AbortController();
@@ -893,15 +924,39 @@ export class Engine {
       if (composerWarning) this.notice(composerWarning);
 
       // Images ChatGPT drew this turn. They live on the page, not on disk,
-      // so they are carried into the transcript as data URLs and saved only
-      // if the user asks for them.
+      // so they are fetched as data URLs and written into the working
+      // folder here — the whole point of asking for one is to end up with
+      // the file. The transcript still shows it; the folder now has it.
+      const savedImages: string[] = [];
       for (const image of takeReplyImages()) {
+        const saved = this.saveReplyImage(image);
+        if (saved) savedImages.push(saved);
         this.peer.emit("item", {
           type: "image",
           id: randomUUID(),
           dataUrl: image.dataUrl,
-          name: image.name,
+          name: saved ?? image.name,
         } satisfies ChatItem);
+      }
+      if (savedImages.length > 0) {
+        // Into the conversation, not just the screen. Without the filename
+        // the model cannot reference what it just drew — the banner it was
+        // asked for exists on disk and the page it writes next cannot
+        // point at it.
+        this.history.push(
+          newMessage(
+            "user",
+            `[OnFlip] The image${savedImages.length > 1 ? "s" : ""} you generated ${
+              savedImages.length > 1 ? "were" : "was"
+            } saved into the working folder as ${savedImages.join(", ")}. ` +
+              "Reference that filename if you use it from code, and do not generate it again."
+          )
+        );
+        this.notice(
+          savedImages.length > 1
+            ? `Saved ${savedImages.length} generated images into the folder: ${savedImages.join(", ")}.`
+            : `Saved ${savedImages[0]} into the folder.`
+        );
       }
 
       // Folder-less chats: whatever the turn wrote into the scratch
@@ -2110,6 +2165,43 @@ export class Engine {
  */
 export function scratchRoot(): string {
   return path.join(configDir(), "scratch");
+}
+
+/**
+ * Where an image ChatGPT drew should land, and the bytes to put there.
+ *
+ * Separated from the writing so the decisions can be checked without an
+ * engine: which extension the data URL implies, what a safe file name is,
+ * and — the one that matters — that an existing file is never replaced. A
+ * second banner in a folder is a second file; the first one may already be
+ * referenced by a page the agent wrote an hour ago.
+ */
+export function imageTarget(
+  dir: string,
+  dataUrl: string,
+  suggestedName: string,
+  exists: (file: string) => boolean = fs.existsSync
+): { file: string; bytes: Buffer } | null {
+  const match = /^data:image\/([a-z0-9+.-]+);base64,([A-Za-z0-9+/=\s]+)$/i.exec(
+    dataUrl.trim()
+  );
+  if (!match) return null;
+  const type = match[1].toLowerCase();
+  const ext = type === "jpeg" ? "jpg" : type === "svg+xml" ? "svg" : type;
+  const base =
+    suggestedName
+      .replace(/\.[^.]*$/, "")
+      .replace(/[^\w.-]+/g, "-")
+      .replace(/^[-.]+/, "") || "chatgpt-image";
+  let file = path.join(dir, `${base}.${ext}`);
+  for (let n = 2; exists(file); n++) file = path.join(dir, `${base}-${n}.${ext}`);
+  let bytes: Buffer;
+  try {
+    bytes = Buffer.from(match[2].replace(/\s+/g, ""), "base64");
+  } catch {
+    return null;
+  }
+  return bytes.length > 0 ? { file, bytes } : null;
 }
 
 export function inScratch(dir: string): boolean {
