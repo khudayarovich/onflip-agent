@@ -274,7 +274,7 @@ const en = {
   autoResumeNotice: "OnFlip carried on by itself.",
   setAutoResume: "Carry on after a failed turn",
   setAutoResumeHelp:
-    "When a ChatGPT conversation stops answering mid-run, send \"continue\" and pick the work up in a new one. Three attempts, then it stops and says why.",
+    "When a ChatGPT conversation fails or goes silent mid-run, pick the work up in a new one. A stuck turn is named after two and a half minutes and restarted after seven. Three attempts, then it stops and says why.",
   updateTitle: "Update",
   updateAvailable: "OnFlip {version} is out — you have {current}.",
   updateGet: "Download",
@@ -538,7 +538,7 @@ const ru: Partial<Record<StringKey, string>> = {
   autoResumeNotice: "OnFlip продолжил сам.",
   setAutoResume: "Продолжать после сбоя хода",
   setAutoResumeHelp:
-    "Если диалог ChatGPT перестал отвечать посреди работы — отправить «continue» и продолжить в новом. Три попытки, затем остановка с объяснением.",
+    "Если диалог ChatGPT сломался или замолчал посреди работы — продолжить в новом. О зависшем ходе сообщается через две с половиной минуты, перезапуск — через семь. Три попытки, затем остановка с объяснением.",
   updateTitle: "Обновление",
   updateAvailable: "Вышла версия OnFlip {version} — у вас {current}.",
   updateGet: "Скачать",
@@ -800,7 +800,7 @@ const uz: Partial<Record<StringKey, string>> = {
   autoResumeNotice: "OnFlip o'zi davom ettirdi.",
   setAutoResume: "Muvaffaqiyatsiz qadamdan keyin davom etish",
   setAutoResumeHelp:
-    "ChatGPT suhbati ish o'rtasida javob bermay qolsa — «continue» yuborib, ishni yangisida davom ettiradi. Uch marta urinadi, keyin sababini aytib to'xtaydi.",
+    "ChatGPT suhbati ish o'rtasida buzilsa yoki jimib qolsa — ishni yangisida davom ettiradi. Qotib qolgan qadam ikki yarim daqiqadan keyin aytiladi, yetti daqiqadan keyin qayta ishga tushiriladi. Uch marta urinadi, keyin sababini aytib to'xtaydi.",
   updateTitle: "Yangilanish",
   updateAvailable: "OnFlip {version} chiqdi — sizda {current}.",
   updateGet: "Yuklab olish",

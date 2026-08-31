@@ -125,6 +125,29 @@ import { subjectFor } from "./subjects";
 /** What a turn is resumed with, and what a person types by hand today. */
 const RESUME_PROMPT = "continue";
 
+/**
+ * How long a turn may go completely silent before OnFlip says so.
+ *
+ * Silent means nothing at all: no reply text, no tool starting or
+ * finishing, no output from one that is running. A long build is not
+ * silent — it streams — and a model thinking hard still ends up saying
+ * something. Two and a half minutes of nothing is not slow, it is stuck.
+ */
+const SILENCE_WARN_MS = 150_000;
+
+/**
+ * And how long before OnFlip stops waiting and starts the work again.
+ *
+ * Deliberately later than the transport's own stalled-stream check, which
+ * fires at 240s and handles the shapes it can recognise. This is the
+ * backstop for the shapes it cannot: a turn that hangs with the page
+ * looking idle, where nothing throws, nothing times out, and the session
+ * sits on "Working" until somebody comes back to the desk. Restarting is
+ * the same move the user makes by hand — abandon the wedged conversation,
+ * carry the transcript into a fresh one.
+ */
+const SILENCE_RESUME_MS = 420_000;
+
 /** Consecutive unattended resumes before OnFlip stops and says so. */
 const MAX_AUTO_RESUMES = 3;
 
@@ -192,12 +215,20 @@ export class Engine {
 
   private abort = new AbortController();
   private busy = false;
-  private queue: { text: string; attachments?: string[] }[] = [];
+  /** `auto` marks a turn OnFlip queued for itself, which stop may cancel. */
+  private queue: { text: string; attachments?: string[]; auto?: boolean }[] = [];
   private connected = false;
 
   /** Arguments of the call currently awaiting approval, for diff previews. */
   private pendingArgs: Record<string, unknown> | null = null;
   private lastDeltaAt = 0;
+
+  /** When the running turn last did anything observable. */
+  private lastActivityAt = 0;
+  private silenceTimer: NodeJS.Timeout | null = null;
+  private silenceWarned = false;
+  /** Approvals are the one silence that is the user's, not the model's. */
+  private awaitingApproval = 0;
 
   constructor(
     private peer: Peer,
@@ -485,6 +516,7 @@ export class Engine {
       disableShell: !this.shellEnabled,
       disableNetwork: !this.networkEnabled,
       onProgress: (tool, chunk) => {
+        this.markActivity();
         if (this.runningToolId) {
           this.peer.emit("tool-progress", { id: this.runningToolId, chunk });
         }
@@ -637,10 +669,16 @@ export class Engine {
     };
 
     let decision: ApprovalDecisionDTO;
+    // A turn waiting on this prompt is waiting on a person, and however long
+    // that takes it is not stuck. The watchdog holds off while it is up.
+    this.awaitingApproval++;
     try {
       decision = await this.peer.request<ApprovalDecisionDTO>("approval", dto);
     } catch {
       return { allow: false, reason: "the approval prompt was dismissed" };
+    } finally {
+      this.awaitingApproval--;
+      this.markActivity();
     }
 
     if (decision.allow) {
@@ -730,6 +768,9 @@ export class Engine {
    */
   private autoResumes = 0;
 
+  /** This turn was aborted by the watchdog, not by the user pressing stop. */
+  private stallRestart = false;
+
   send(text: string, attachments?: string[]): { queued: boolean } {
     if (!this.connected) throw new Error("The engine is still connecting — try again in a moment.");
     this.autoResumes = 0;
@@ -742,6 +783,94 @@ export class Engine {
     }
     void this.runOneTurn(text, attachments);
     return { queued: false };
+  }
+
+  /** Something happened. Whatever it was, the turn is not wedged. */
+  private markActivity(): void {
+    this.lastActivityAt = Date.now();
+    this.silenceWarned = false;
+  }
+
+  /**
+   * Watch a running turn for the silence that means it has stopped.
+   *
+   * Every layer below this one has a timeout, and they cover the failures
+   * they can see: a send that is refused, a stream that stops mid-answer, a
+   * command that never exits. What none of them catches is the turn that
+   * simply stops — tool finished, result delivered, and then nothing, with
+   * the page looking perfectly idle and no error to raise. Reported from a
+   * real session sitting on "Working — step 7" with the tool output already
+   * on screen.
+   *
+   * So this watches the one thing that is true of every healthy turn and
+   * false of every wedged one: something happens. It says so first, and
+   * restarts the work only when the silence has gone on long enough that
+   * waiting is plainly not going to end it.
+   */
+  private startSilenceWatch(): void {
+    this.stopSilenceWatch();
+    this.markActivity();
+    this.silenceTimer = setInterval(() => this.checkSilence(), 20_000);
+    // Nothing here should hold the process open on its own.
+    this.silenceTimer.unref?.();
+  }
+
+  private stopSilenceWatch(): void {
+    if (this.silenceTimer) clearInterval(this.silenceTimer);
+    this.silenceTimer = null;
+    this.silenceWarned = false;
+  }
+
+  private checkSilence(): void {
+    if (!this.busy || this.abort.signal.aborted) return;
+    // Waiting on a person is not being stuck, however long it takes them.
+    if (this.awaitingApproval > 0) {
+      this.markActivity();
+      return;
+    }
+    const idle = Date.now() - this.lastActivityAt;
+    const verdict = silenceVerdict(idle, {
+      autoResume: loadConfig().autoResume !== false,
+      restartsUsed: this.autoResumes,
+      warned: this.silenceWarned,
+    });
+    const minutes = Math.round(idle / 60_000);
+
+    if (verdict === "restart") {
+      this.autoResumes += 1;
+      this.stallRestart = true;
+      logger.warn("session", "turn went silent; restarting it", {
+        idleMs: idle,
+        attempt: this.autoResumes,
+      });
+      this.notice(
+        `Nothing has come back for ${minutes} minutes, so the turn is stuck. Starting it again in a fresh conversation (attempt ${this.autoResumes} of ${MAX_AUTO_RESUMES}).`
+      );
+      this.stopSilenceWatch();
+      // The work done so far is already in the transcript, and the queued
+      // word carries it into a conversation that answers.
+      this.queue.push({ text: RESUME_PROMPT, auto: true });
+      this.abort.abort();
+      return;
+    }
+
+    if (verdict === "exhausted") {
+      // Said once, then the watch goes quiet rather than repeating it every
+      // twenty seconds at somebody who is not at the desk.
+      this.stopSilenceWatch();
+      this.notice(
+        `Still nothing after ${minutes} minutes, and ${MAX_AUTO_RESUMES} restarts have already been used. Press stop and send again when you are ready.`
+      );
+      return;
+    }
+
+    if (verdict === "warn") {
+      this.silenceWarned = true;
+      const waitMore = Math.max(1, Math.round((SILENCE_RESUME_MS - idle) / 60_000));
+      this.notice(
+        `Nothing has come back from ChatGPT for ${minutes} minutes. Still waiting — OnFlip restarts the turn by itself in about ${waitMore} more.`
+      );
+    }
   }
 
   /**
@@ -780,14 +909,23 @@ export class Engine {
     // Into the queue rather than straight into a turn: the turn that just
     // failed is still in its own finally block, and that block is what
     // hands the next one over.
-    this.queue.push({ text: RESUME_PROMPT });
+    this.queue.push({ text: RESUME_PROMPT, auto: true });
   }
 
   interrupt(): void {
+    // A resume OnFlip queued for itself is not something the user asked for.
+    // Stop means stop: it goes, along with the turn it was going to follow.
+    const auto = this.queue.filter((q) => q.auto).length;
+    if (auto > 0) this.queue = this.queue.filter((q) => !q.auto);
+    this.stallRestart = false;
     if (this.busy && !this.abort.signal.aborted) {
       this.abort.abort();
-      logger.info("session", "interrupted by user", { queued: this.queue.length });
+      logger.info("session", "interrupted by user", {
+        queued: this.queue.length,
+        cancelledResumes: auto,
+      });
     }
+    if (auto > 0) this.pushStatus();
   }
 
   clearQueue(): void {
@@ -848,6 +986,7 @@ export class Engine {
   private async runOneTurn(text: string, attachments?: string[]): Promise<void> {
     this.busy = true;
     this.abort = new AbortController();
+    this.startSilenceWatch();
     this.toolIds.clear();
     this.pushStatus();
     // What the workspace held before the turn, so its deliverables can be
@@ -891,7 +1030,13 @@ export class Engine {
       const result = await runTurn(this.history, this.agentOptions());
       finalAnswer = result.finalAnswer;
       if (result.interrupted) {
-        this.notice("Interrupted. The work done so far is kept — say what to do next.");
+        // The watchdog has already said what it is doing and queued the
+        // word that continues the work; saying "interrupted" over the top
+        // of that would read as the user having stopped it.
+        if (!this.stallRestart) {
+          this.notice("Interrupted. The work done so far is kept — say what to do next.");
+        }
+        this.stallRestart = false;
         this.peer.emit("turn", { state: "end", interrupted: true, iterations: result.iterations });
       } else if (result.exhausted) {
         this.peer.emit("turn", {
@@ -920,6 +1065,7 @@ export class Engine {
       this.peer.emit("turn", { state: "end", error: message });
       if (resumable) this.queueAutoResume(message);
     } finally {
+      this.stopSilenceWatch();
       const composerWarning = takeComposerWarning();
       if (composerWarning) this.notice(composerWarning);
 
@@ -1143,8 +1289,12 @@ export class Engine {
       // Uploads lift the typing ceiling, so the plan gets to be the limit.
       compactAfterChars: this.contextBudgetChars(),
       events: {
-        onThinking: (iteration) => this.peer.emit("thinking", { iteration }),
+        onThinking: (iteration) => {
+          this.markActivity();
+          this.peer.emit("thinking", { iteration });
+        },
         onDelta: (full) => {
+          this.markActivity();
           // The first streamed characters prove ChatGPT received the message
           // and is answering — the "read" stage of the delivery badge.
           if (this.pendingRead) {
@@ -1157,6 +1307,7 @@ export class Engine {
           this.peer.emit("delta", { tail: full.slice(-240) });
         },
         onNarration: (narration) => {
+          this.markActivity();
           this.peer.emit("item", {
             type: "narration",
             id: randomUUID(),
@@ -1164,6 +1315,7 @@ export class Engine {
           } satisfies ChatItem);
         },
         onToolStart: (call) => {
+          this.markActivity();
           const id = randomUUID();
           this.toolIds.set(call, id);
           this.runningToolId = id;
@@ -1177,6 +1329,7 @@ export class Engine {
           this.peer.emit("item", { type: "tool", id, call: dto } satisfies ChatItem);
         },
         onToolEnd: (call, result) => {
+          this.markActivity();
           const id = this.toolIds.get(call) ?? randomUUID();
           this.runningToolId = null;
           this.pendingArgs = null;
@@ -1189,7 +1342,11 @@ export class Engine {
           // exactly the turns that were filling it.
           this.pushStatus();
         },
-        onNotice: (noticeText) => this.notice(noticeText),
+        onNotice: (noticeText) => {
+          // A retry or a compaction is the transport working, not silence.
+          this.markActivity();
+          this.notice(noticeText);
+        },
         // Compaction empties the context, not the conversation: keep what it
         // dropped so the transcript still reads as one.
         onCompacted: (dropped) => {
@@ -2176,6 +2333,29 @@ export function scratchRoot(): string {
  * second banner in a folder is a second file; the first one may already be
  * referenced by a page the agent wrote an hour ago.
  */
+/**
+ * What to do about a turn that has been quiet for `idleMs`.
+ *
+ * Split out from the watch so the thresholds and their order can be checked
+ * without a running engine. The order is the part worth pinning down: the
+ * restart has to be considered before the warning, or a turn that crosses
+ * both lines between two ticks would only ever be warned about.
+ */
+export type SilenceVerdict = "quiet" | "warn" | "restart" | "exhausted";
+
+export function silenceVerdict(
+  idleMs: number,
+  opts: { autoResume: boolean; restartsUsed: number; warned: boolean }
+): SilenceVerdict {
+  if (idleMs >= SILENCE_RESUME_MS && opts.autoResume) {
+    return opts.restartsUsed >= MAX_AUTO_RESUMES ? "exhausted" : "restart";
+  }
+  // With automatic resume switched off the warning is the whole service, so
+  // it still fires — and goes on being the only thing that will.
+  if (idleMs >= SILENCE_WARN_MS && !opts.warned) return "warn";
+  return "quiet";
+}
+
 export function imageTarget(
   dir: string,
   dataUrl: string,
