@@ -28,25 +28,28 @@ function workerPath(): string {
 /**
  * Which runtimes could run the cookie worker, best first.
  *
- * A real Node is preferred: better-sqlite3's default binding is compiled
- * against Node's ABI, and under Electron — `ELECTRON_RUN_AS_NODE`, which the
- * desktop app falls back to when the machine has no Node installed — that
- * binding refuses to load (NODE_MODULE_VERSION 137 vs 130). But Electron is
- * no longer useless here: the package ships a second binding for the
- * Electron ABI (see prebuilds/ and openCookieDb), so the app's own binary
- * goes last as the runtime of last resort. Before that, a machine with no
- * Node at all showed "install Node.js" to a user who had clicked a button
- * promising to read their browser — on the one kind of machine the desktop
- * app most needs to work on.
+ * Electron first, deliberately. better-sqlite3's binding is compiled per ABI,
+ * and the machine's own Node is a lottery: a build made on Node 24 (ABI 137)
+ * fails on Node 22 (127) and Node 20 (115), which is exactly what happened —
+ * every browser on one machine reported the same "compiled against a
+ * different Node.js version" and the user was told no session existed. The
+ * app ships a binding for Electron's ABI, so running the worker under
+ * Electron is the one choice whose ABI is known in advance.
+ *
+ * The engine itself runs under plain Node, where `process.versions.electron`
+ * is undefined, so the shell passes Electron's path in ONFLIP_ELECTRON_PATH.
+ * A real Node stays in the list behind it, for the case where the bundled
+ * binding is missing but the machine's own happens to match.
  */
 function runtimeCandidates(): string[] {
   const candidates: string[] = [];
   if (process.env.ONFLIP_NODE) candidates.push(process.env.ONFLIP_NODE);
-  // Only trust our own runtime outright when it is genuinely Node.
+  // Electron, whose ABI matches the binding this package ships.
+  if (process.versions.electron) candidates.push(process.execPath);
+  if (process.env.ONFLIP_ELECTRON_PATH) candidates.push(process.env.ONFLIP_ELECTRON_PATH);
+  // Then whatever Node is around, which may or may not match.
   if (!process.versions.electron) candidates.push(process.execPath);
   candidates.push(process.platform === "win32" ? "node.exe" : "node");
-  // Electron-as-Node, carried by the bundled Electron-ABI binding.
-  if (process.versions.electron) candidates.push(process.execPath);
   return [...new Set(candidates)];
 }
 

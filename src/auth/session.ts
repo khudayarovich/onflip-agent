@@ -35,7 +35,12 @@ function openCookieDb(file: string): Database.Database {
     );
     if (!wrongAbi) throw e;
     const bundled = bundledBinding();
-    if (!bundled) throw e;
+    if (!bundled) {
+      throw new Error(
+        `the sqlite binding does not match this runtime (needs ABI ${process.versions.modules}), ` +
+          "and no bundled binding for it shipped with the app"
+      );
+    }
     return new Database(file, { readonly: true, fileMustExist: true, nativeBinding: bundled });
   }
 }

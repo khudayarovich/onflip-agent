@@ -117,11 +117,17 @@ function spawnEngine(cwd: string): ChildProcess {
   const entry = engineEntry();
   const args = [entry, "--cwd", cwd];
   const nodeBin = process.env.ONFLIP_NODE || "node";
+  // The engine runs under plain Node, so it cannot find Electron by itself —
+  // and the cookie worker needs Electron, whose ABI matches the sqlite
+  // binding this app ships. Handing the path down is what makes the reader
+  // work on a machine whose own Node was built against a different ABI.
+  const env = { ...process.env, ONFLIP_ELECTRON_PATH: process.execPath };
   try {
     const child = spawn(nodeBin, args, {
       cwd,
       stdio: ["pipe", "pipe", "pipe"],
       windowsHide: true,
+      env,
     });
     // ENOENT arrives as an async error; handled by the caller's error hook.
     return child;
