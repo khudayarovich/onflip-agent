@@ -135,3 +135,40 @@ export function describePlan(planId: string | undefined): string | null {
   if (!profile) return null;
   return `${profile.label} · ~${Math.round(profile.contextTokens / 1000)}k token context`;
 }
+
+/**
+ * The plan id with ChatGPT's wrapping stripped off.
+ *
+ * One plan arrives spelled several ways — "plus", "chatgpt_pro",
+ * "chatgptplusplan" — and every spelling is the same short name wrapped in
+ * the same two words. Removing them leaves the name, which is what the
+ * tables here are keyed by. Worth doing for the short ids especially: "go"
+ * is two letters, and looking for it inside "chatgptgoplan" by substring
+ * would find it inside plenty of things that are not the Go plan.
+ */
+export function normalizePlanId(planId: string | undefined): string {
+  return (planId ?? "")
+    .toLowerCase()
+    .replace(/[^a-z]/g, "")
+    .replace(/^chatgpt/, "")
+    .replace(/plan$/, "");
+}
+
+/** Plans whose message allowance runs out inside a single agent session. */
+const LUNA_DEFAULT_PLANS = new Set(["free", "go"]);
+
+/**
+ * Whether this plan should start on Luna rather than letting ChatGPT choose.
+ *
+ * Free and Go get a handful of messages on the stronger models and unlimited
+ * text chat on Luna. An agent run is not one message — it is dozens of turns,
+ * each a full round trip — so a session left on `auto` spends the whole
+ * allowance in its first minute and finishes the task downgraded anyway,
+ * having lost the thread of the conversation at the point it switched.
+ * Starting on the model that can actually see the task through is the more
+ * useful default for those two plans, and only for those two: every plan
+ * above them has room for whatever ChatGPT would pick itself.
+ */
+export function prefersLunaByDefault(planId: string | undefined): boolean {
+  return LUNA_DEFAULT_PLANS.has(normalizePlanId(planId));
+}

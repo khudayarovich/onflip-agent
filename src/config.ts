@@ -33,6 +33,15 @@ export interface OnFlipConfig {
 
   // -- model --------------------------------------------------------------
   model?: string;
+  /**
+   * The model above is the user's own pick, not a default that was adopted.
+   *
+   * Both look identical once written, and they need opposite treatment: a
+   * pick is honoured forever, an adopted default is re-decided when the
+   * plan changes or a build changes what the default is. Absent on configs
+   * written before this existed, which start reads once and backfills.
+   */
+  modelPinned?: boolean;
   thinking?: string;
   /**
    * Model list read from the user's own account by `onflip models --refresh`.

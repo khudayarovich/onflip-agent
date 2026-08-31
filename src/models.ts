@@ -1,4 +1,5 @@
 import { loadConfig, saveConfig } from "./config";
+import { prefersLunaByDefault } from "./chatgpt/plans";
 
 /**
  * Model slugs.
@@ -105,20 +106,25 @@ export function clearModelCache(): void {
 export const DEFAULT_MODEL = "auto";
 
 /**
- * What a session runs on when nothing was chosen.
+ * What a session runs on when the user has not chosen for themselves.
  *
- * Luna when the account reports a slug regular chat can actually serve —
- * it is the tier with unlimited text chat, and the agent's many tool
- * round-trips burn through capped models' windows fast. An earlier version
- * preferred any slug containing "luna" and landed on `gpt-5.6-luna-wm`,
- * which is a ChatGPT Work variant: regular chat ignored it and ran every
- * turn on Sol, wearing Luna's name in the chip the whole time. Work-only
- * slugs are excluded now, and with no usable Luna the default is `auto` —
- * honest about letting ChatGPT choose, which for regular chat on a paid
- * plan means Sol either way.
+ * `auto` almost everywhere. ChatGPT routes each request to the best model
+ * the account is entitled to at that moment, and it knows what is left of
+ * the allowance in a way a pinned slug never can.
+ *
+ * Free and Go are the exception, for the reason in `prefersLunaByDefault`:
+ * on those two plans `auto` spends the allowance in the first minute of a
+ * run. They start on Luna instead, and only on a slug regular chat can
+ * actually serve. An earlier version preferred any slug containing "luna"
+ * and landed on `gpt-5.6-luna-wm`, a ChatGPT Work variant: regular chat
+ * ignored it and ran every turn on Sol, wearing the Luna name in the chip
+ * the whole time. With no usable Luna the answer is `auto` again — honest
+ * about letting ChatGPT choose.
  */
-export function defaultModel(): string {
-  const luna = loadConfig().discoveredModels?.find(
+export function defaultModel(planId?: string): string {
+  const cfg = loadConfig();
+  if (!prefersLunaByDefault(planId ?? cfg.planType)) return DEFAULT_MODEL;
+  const luna = cfg.discoveredModels?.find(
     (m) => !isWorkOnlySlug(m.slug) && (/luna/i.test(m.slug) || /luna/i.test(m.title ?? ""))
   );
   return luna?.slug ?? DEFAULT_MODEL;

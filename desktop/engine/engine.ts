@@ -347,24 +347,63 @@ export class Engine {
       }
     }
 
-    if (cfg.discoveredModels?.length) return;
-    try {
-      await this.refreshModels();
-      const wanted = defaultModel();
-      // Only adopt it when the user has not chosen for themselves.
-      const chosen = process.env.ONFLIP_MODEL ?? loadConfig().model;
-      if (!chosen && wanted !== this.model) {
-        this.model = wanted;
-        saveConfig({ model: wanted });
-        if (this.session) this.session.model = wanted;
-        this.notice(`Using ${wanted}, the model this account reports.`);
+    // Refreshing is the once-per-machine half. Deciding the default is not:
+    // it depends on the plan, and the plan can change under an account that
+    // has known its models for months.
+    if (!cfg.discoveredModels?.length) {
+      try {
+        await this.refreshModels();
+      } catch (e) {
+        logger.warn("engine", "could not read the account's model list", {
+          error: e instanceof Error ? e.message : String(e),
+        });
       }
-      this.pushStatus();
-    } catch (e) {
-      logger.warn("engine", "could not read the account's model list", {
-        error: e instanceof Error ? e.message : String(e),
-      });
     }
+    this.adoptDefaultModel();
+    this.pushStatus();
+  }
+
+  /**
+   * Decide, once, whether the stored model was chosen or merely adopted.
+   *
+   * Configs written before `modelPinned` existed do not say, and the two
+   * cases need opposite treatment. What they do say is the slug, and the
+   * only slug the old code ever wrote by itself was Luna — so anything
+   * else in there was typed by a person and is theirs to keep. A Luna is
+   * ambiguous, and is read as adopted: on Free and Go that decision
+   * changes nothing, and above them Luna was rarely what anyone wanted
+   * for themselves. Anyone it moves can move it back in one click, and
+   * that click pins it for good.
+   */
+  private migrateModelPin(): void {
+    const cfg = loadConfig();
+    if (cfg.modelPinned !== undefined) return;
+    saveConfig({ modelPinned: !!cfg.model && !/luna/i.test(cfg.model) });
+  }
+
+  /**
+   * Move a session that was never pinned onto whatever the default now is.
+   *
+   * Runs every start rather than only the first, because both halves of the
+   * default can move: the plan is read after the first run on most
+   * machines, and an update can change what a plan defaults to.
+   */
+  private adoptDefaultModel(): void {
+    this.migrateModelPin();
+    const cfg = loadConfig();
+    if (process.env.ONFLIP_MODEL || cfg.modelPinned) return;
+    const wanted = defaultModel(cfg.planType);
+    if (wanted === this.model) return;
+    const from = this.model;
+    this.model = wanted;
+    saveConfig({ model: wanted });
+    if (this.session) this.session.model = wanted;
+    logger.info("engine", "adopted the default model", { from, to: wanted, plan: cfg.planType });
+    this.notice(
+      wanted === "auto"
+        ? "Letting ChatGPT pick the model. Choose one in the picker to pin it."
+        : `Using ${wanted}, which this plan can run without a message limit.`
+    );
   }
 
   /** Only the configuration that can be silently signed out needs probing. */
@@ -1439,7 +1478,7 @@ export class Engine {
   setModel(slug: string): EngineStatus {
     const normalized = normalizeModel(slug) ?? "auto";
     this.model = normalized;
-    saveConfig({ model: normalized });
+    saveConfig({ model: normalized, modelPinned: true });
     this.session.model = normalized;
     this.pushStatus();
     return this.statusPayload();
