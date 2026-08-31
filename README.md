@@ -64,7 +64,11 @@ Download the latest build from the [releases page](https://github.com/khudayarov
 | macOS (Apple Silicon) | `OnFlip-<version>-mac-arm64.dmg` | Drag to Applications. First launch needs **right-click → Open → Open**. |
 | macOS (Intel) | `OnFlip-<version>-mac-x64.dmg` | Same as above. |
 
-On first launch OnFlip asks you to sign in to ChatGPT. If you are already signed in to ChatGPT in a browser whose cookies it can read, it picks that session up and you never see a login form.
+On first launch OnFlip asks you to sign in to ChatGPT. If you are already signed in in a browser whose cookies it can read — Firefox, and Chromium browsers that have not moved to app-bound encryption — it picks that session up and you never see a login form.
+
+For Chrome and Edge, which encrypt their cookies so no other program can read them, **Use my browser** opens your real browser and asks it for the session instead. That needs the small connector extension in [`extension/`](extension/) — load it once via *Developer mode → Load unpacked*, and every sign-in after that is one click. It reads `chatgpt.com` cookies and posts them to OnFlip on `127.0.0.1`; there is no remote endpoint in it.
+
+Failing both, the app has its own sign-in window, which is an ordinary browser window and remembers the session afterwards.
 
 ## What it can do
 
@@ -147,7 +151,7 @@ There is no OnFlip server. Nothing is sent anywhere except to ChatGPT, by your o
 
 **Does this break ChatGPT's terms?** OnFlip drives a real browser session as a logged-in user, with no automation flags and no bypassing of any check — Cloudflare challenges are completed by you, in a real window. You are responsible for using your account within OpenAI's terms.
 
-**Why can't it use my Chrome session?** Chrome and Edge on Windows encrypt their cookies so that no other program can read them, and recent Chrome refuses to be driven with its own profile. Both are deliberate anti-theft protections and OnFlip does not work around them. Sign in through the app's window once — it remembers — or sign in to ChatGPT in Firefox, whose session OnFlip can read directly.
+**Why can't it just read my Chrome session?** Chrome and Edge encrypt their cookies with a key bound to the browser itself, and recent Chrome refuses to be driven with its own profile. Both are deliberate anti-theft protections, and the ways around them are the ways malware gets in — so OnFlip does not go around them. It asks the browser instead: **Use my browser** opens your real Chrome and the connector extension in [`extension/`](extension/) hands the session over on loopback. Firefox needs none of this, and the app's own sign-in window works everywhere.
 
 **Which model does it use?** Whatever your account offers, chosen from the model chip. Free and Go accounts default to GPT-5.6 Luna, the plan with unlimited text chats; Plus and Pro run GPT-5.6 Sol in regular chat. Reasoning effort is a separate control, and OnFlip sizes its context budget from whichever model you are on.
 

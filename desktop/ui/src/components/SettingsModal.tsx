@@ -143,6 +143,20 @@ export function SettingsModal({
       </div>
 
       <div className="settings-section">
+        <h3>{t("setAutoResume")}</h3>
+        <div className="setting-row">
+          <div className="info">
+            <div className="name">{t("setAutoResume")}</div>
+            <div className="desc">{t("setAutoResumeHelp")}</div>
+          </div>
+          <Toggle
+            on={config?.autoResume ?? true}
+            onChange={(on) => setValue("autoResume", on)}
+          />
+        </div>
+      </div>
+
+      <div className="settings-section">
         <h3>{t("setBrowser")}</h3>
         <div className="setting-row">
           <div className="info">

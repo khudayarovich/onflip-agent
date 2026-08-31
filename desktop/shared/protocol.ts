@@ -80,7 +80,11 @@ export type ChatItem =
   /** How long a finished turn took, rendered as a quiet line under it. */
   | { type: "duration"; id: string; ms: number; interrupted?: boolean }
   | { type: "notice"; id: string; text: string }
-  | { type: "error"; id: string; text: string };
+  /**
+   * `resumable` marks a failure that one more turn would clear, which the
+   * chat renders as a Continue button beside the message.
+   */
+  | { type: "error"; id: string; text: string; resumable?: boolean };
 
 // ---------------------------------------------------------------------------
 // status
@@ -237,6 +241,7 @@ export interface ConfigView {
   maxIterations: number;
   replyTimeout: number;
   compactAfterChars: number;
+  autoResume: boolean;
   rules: { pattern: string; action: RuleAction }[];
   allowedCommands: string[];
   allowedWriteDirs: string[];
@@ -293,6 +298,9 @@ export interface EngineMethods {
   listChatProjects: { params: Record<string, never>; result: ChatProjectDTO[] };
   setChatProject: { params: { id: string | null; name?: string }; result: EngineStatus };
   createChatProject: { params: { name: string }; result: EngineStatus };
+
+  /** One paste-ready block describing this install, for bug reports. */
+  diagnostics: { params: Record<string, never>; result: { text: string } };
 
   status: { params: Record<string, never>; result: EngineStatus };
 }

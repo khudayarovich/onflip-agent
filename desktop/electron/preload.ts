@@ -20,8 +20,17 @@ export interface OnFlipBridge {
   newWindow(): Promise<boolean>;
   restartEngine(cwd?: string): Promise<boolean>;
   appInfo(): Promise<{ version: string; platform: string }>;
+  checkUpdate(): Promise<{
+    current: string;
+    latest?: string;
+    url: string;
+    available: boolean;
+    error?: string;
+  }>;
+  openRelease(url: string): Promise<boolean>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
+  pairBrowser(): Promise<{ ok: boolean; reason?: string }>;
   signOut(): Promise<{ ok: boolean; reason?: string }>;
   winControl(action: "minimize" | "maximize" | "close" | "query"): Promise<{ maximized: boolean }>;
   onWinState(listener: (state: { maximized: boolean }) => void): () => void;
@@ -70,9 +79,12 @@ const bridge: OnFlipBridge = {
   newWindow: () => ipcRenderer.invoke("new-window"),
   restartEngine: (cwd) => ipcRenderer.invoke("restart-engine", { cwd }),
   appInfo: () => ipcRenderer.invoke("app-info"),
+  checkUpdate: () => ipcRenderer.invoke("check-update"),
+  openRelease: (url) => ipcRenderer.invoke("open-release", { url }),
 
   setTheme: (theme) => ipcRenderer.invoke("set-theme", { theme }),
   signIn: () => ipcRenderer.invoke("sign-in"),
+  pairBrowser: () => ipcRenderer.invoke("pair-browser"),
   signOut: () => ipcRenderer.invoke("sign-out"),
   winControl: (action) => ipcRenderer.invoke("win-control", { action }),
   onWinState: (listener) => {

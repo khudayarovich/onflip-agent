@@ -2752,3 +2752,101 @@ a:hover {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.35; }
 }
+
+/* ---------------------------------------------------------------------------
+   A newer release, and carrying on after a failed turn
+   --------------------------------------------------------------------------- */
+
+/* Above the transcript rather than over it: an update is worth noticing and
+   never worth interrupting, so it takes a strip of layout and waits. */
+.update-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  border-bottom: 1px solid var(--border);
+  background: var(--panel);
+  font-size: 12.5px;
+}
+
+.update-text {
+  flex: 1;
+  color: var(--text);
+}
+
+.update-bar button {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: 7px;
+  padding: 4px 11px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.update-bar button:hover {
+  color: var(--text);
+  border-color: var(--text-dim);
+}
+
+.update-bar .update-get {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+
+.update-bar .update-get:hover {
+  filter: brightness(1.08);
+  color: #fff;
+}
+
+/* The button sits under the message it belongs to, so the reason for pressing
+   it is the line directly above. */
+.msg-error-resume {
+  margin-top: 9px;
+  border: 1px solid currentColor;
+  background: transparent;
+  color: inherit;
+  border-radius: 7px;
+  padding: 4px 13px;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  opacity: 0.85;
+}
+
+.msg-error-resume:hover {
+  opacity: 1;
+}
+
+.about-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.about-btn {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 14px;
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+}
+
+.about-btn:hover:not(:disabled) {
+  border-color: var(--text-dim);
+}
+
+.about-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.about-btn.primary {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}

@@ -16,6 +16,8 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Peer } from "../shared/wire";
 import { runSignIn, clearSignIn } from "./signin";
+import { checkForUpdate } from "./updates";
+import { pairWithBrowser } from "./pairing";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
@@ -579,6 +581,24 @@ function registerIpc(): void {
     platform: process.platform,
   }));
 
+  ipcMain.handle("check-update", () => checkForUpdate());
+
+  // The renderer decides when to offer an update; opening the page is the
+  // one thing it cannot do for itself.
+  ipcMain.handle("open-release", (_e, payload: { url: string }) => {
+    const url = String(payload?.url ?? "");
+    // Only ever our own releases. This url arrives from the renderer and
+    // openExternal will launch anything at all, including a file:// path.
+    const allowed = [
+      "https://github.com/khudayarovich/onflip-agent/",
+      "https://objects.githubusercontent.com/",
+      "https://release-assets.githubusercontent.com/",
+    ];
+    if (!allowed.some((prefix) => url.startsWith(prefix))) return false;
+    void shell.openExternal(url);
+    return true;
+  });
+
   // Keep native menus and dialogs in step with the renderer's theme.
   ipcMain.handle("set-theme", (_e, payload: { theme: "dark" | "light" }) => {
     nativeTheme.themeSource = payload.theme;
@@ -611,6 +631,22 @@ function registerIpc(): void {
   // straight to the engine, so they never pass through the renderer. The
   // session lands in ~/.onflip, so other windows' engines pick it up when
   // they next need it.
+  // The browser the user actually uses, asked rather than read. Runs the
+  // loopback handshake in `pairing.ts` and applies whatever comes back
+  // through the same path as every other sign-in.
+  ipcMain.handle("pair-browser", async (e) => {
+    const ws = wsOf(e);
+    const result = await pairWithBrowser();
+    if (result.ok && result.cookies?.length && ws?.peer) {
+      try {
+        await ws.peer.request("applySignIn", { cookies: result.cookies });
+      } catch (err) {
+        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
+      }
+    }
+    return { ok: result.ok, reason: result.reason };
+  });
+
   ipcMain.handle("sign-in", async (e) => {
     const ws = wsOf(e);
     const result = await runSignIn(ws?.win ?? null);

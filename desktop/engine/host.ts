@@ -178,6 +178,9 @@ peer.onRequest = async (method, rawParams) => {
     case "createChatProject":
       return engine.createChatProject(String(params.name));
 
+    case "diagnostics":
+      return engine.diagnostics();
+
     case "status":
       return engine.statusPayload();
 

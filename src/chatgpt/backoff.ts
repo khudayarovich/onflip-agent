@@ -109,6 +109,27 @@ export function classifyFailure(message: string): Classification {
 }
 
 /**
+ * Would one more turn get this session moving again?
+ *
+ * A long run ends in a red error often enough to be worth a button: the
+ * conversation the turn was using stops answering — signed out, not found,
+ * a composer that will not take another message — and the turn dies with
+ * the transcript perfectly intact. Typing "continue" fixes it, every time,
+ * because the next turn opens a fresh conversation and re-sends the
+ * transcript into it. The chat was lost; the work never was.
+ *
+ * So the question is not which failures look recoverable but which ones
+ * are made worse by trying. Two: a cooldown, where another request is the
+ * one thing that deepens the block, and a stop the user asked for, where
+ * resuming would undo their decision. Everything else is worth the turn.
+ */
+export function isResumableFailure(message: string): boolean {
+  const m = message || "";
+  if (/\bInterrupted\b|\baborted\b/i.test(m)) return false;
+  if (/Waiting out a ChatGPT cooldown/i.test(m)) return false;
+  return classifyFailure(m).kind !== "cooldown";
+}
+/**
  * Is this ChatGPT talking, rather than the model answering?
  *
  * Image moderation, rate limits and error pages all come back through the same

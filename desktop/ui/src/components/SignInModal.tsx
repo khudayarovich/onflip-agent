@@ -29,6 +29,22 @@ export function SignInModal({
   const [checking, setChecking] = useState(true);
   const [reason, setReason] = useState<string | null>(null);
   const [report, setReport] = useState<{ browser: string; outcome: string; detail?: string }[]>([]);
+  // The handshake with the user's own browser, which takes as long as it
+  // takes them to look at the tab that just opened.
+  const [pairing, setPairing] = useState(false);
+
+  const useMyBrowser = () => {
+    setPairing(true);
+    setReason(null);
+    void window.onflip
+      .pairBrowser()
+      .then((r) => {
+        if (r.ok) onSignedIn("browser");
+        else setReason(r.reason ?? null);
+      })
+      .catch((e: Error) => setReason(e.message))
+      .finally(() => setPairing(false));
+  };
 
   const tryBrowsers = () => {
     setChecking(true);
@@ -54,8 +70,11 @@ export function SignInModal({
       onClose={onClose}
       footer={
         <>
-          <button className="btn" disabled={checking} onClick={tryBrowsers}>
+          <button className="btn" disabled={checking || pairing} onClick={tryBrowsers}>
             {t("signInRecheck")}
+          </button>
+          <button className="btn" disabled={pairing} onClick={useMyBrowser}>
+            {pairing ? t("signInPairingWait") : t("signInUseMyBrowser")}
           </button>
           <button className="btn" onClick={onPasteToken}>
             {t("signInPasteToken")}
@@ -72,6 +91,7 @@ export function SignInModal({
       ) : (
         <>
           <p className="modal-note">{t("signInBrowserHint")}</p>
+          <p className="modal-note dim">{t("signInExtensionHint")}</p>
           {report.length > 0 && (
             <table className="signin-report">
               <tbody>

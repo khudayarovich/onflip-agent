@@ -65,6 +65,15 @@ export interface OnFlipConfig {
    * and a browser that works invisibly is hard to trust or debug.
    */
   browserHeadless?: boolean;
+  /**
+   * Send "continue" by itself when a turn dies on a transport failure.
+   *
+   * The failure this exists for arrives after an hour of unattended work:
+   * the conversation stops answering and the run stops with it, needing
+   * one word from someone who is not at the desk. Bounded, because a
+   * failure that is really fatal would otherwise be retried forever.
+   */
+  autoResume?: boolean;
   maxIterations?: number;
   /** Compact the transcript once it exceeds this many messages. */
   compactAfter?: number;

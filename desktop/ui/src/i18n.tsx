@@ -256,6 +256,27 @@ const en = {
   skillsHint:
     "Pick a skill — it lands in the input as an @skill tag; add details and send. In chat the tag shows as a link revealing the full skill. Typing @ in the input opens this list too.",
   skillsUse: "Use",
+  resumeTurn: "Continue",
+  signInUseMyBrowser: "Use my browser",
+  signInPairingWait: "Waiting for your browser…",
+  signInExtensionHint:
+    "\"Use my browser\" opens your normal browser and asks it for the ChatGPT session you are already signed in to. It needs the small OnFlip Connector extension, which ships in the extension folder of the OnFlip repository — Chrome and Edge encrypt their cookies so that no other program can read them, and asking the browser is the way in that does not work around that.",
+  autoResumeNotice: "OnFlip carried on by itself.",
+  setAutoResume: "Carry on after a failed turn",
+  setAutoResumeHelp:
+    "When a ChatGPT conversation stops answering mid-run, send \"continue\" and pick the work up in a new one. Three attempts, then it stops and says why.",
+  updateTitle: "Update",
+  updateAvailable: "OnFlip {version} is out — you have {current}.",
+  updateGet: "Download",
+  updateDismiss: "Not now",
+  updateCheck: "Check for updates",
+  updateChecking: "Checking…",
+  updateCurrent: "You are on the latest version.",
+  updateFailed: "Could not reach GitHub to check.",
+  copyDiagnostics: "Copy diagnostics",
+  copyDiagnosticsDone: "Copied",
+  copyDiagnosticsHelp:
+    "Version, plan, model and what each browser reported — no cookies or account details. Paste it into a bug report.",
 };
 
 type StringKey = keyof typeof en;
@@ -489,6 +510,27 @@ const ru: Partial<Record<StringKey, string>> = {
   skillsHint:
     "Выберите навык — он вставится в поле ввода как @skill-тег: добавьте детали и отправьте. В чате тег отображается ссылкой с полным текстом навыка. Символ @ в поле ввода тоже открывает этот список.",
   skillsUse: "Применить",
+  resumeTurn: "Продолжить",
+  signInUseMyBrowser: "Через мой браузер",
+  signInPairingWait: "Ждём браузер…",
+  signInExtensionHint:
+    "«Через мой браузер» открывает ваш обычный браузер и запрашивает у него сессию ChatGPT, в которую вы уже вошли. Нужно небольшое расширение OnFlip Connector — оно лежит в папке extension репозитория OnFlip. Chrome и Edge шифруют свои cookie так, что другие программы их не прочитают, и запрос к браузеру — это путь, который ничего не обходит.",
+  autoResumeNotice: "OnFlip продолжил сам.",
+  setAutoResume: "Продолжать после сбоя хода",
+  setAutoResumeHelp:
+    "Если диалог ChatGPT перестал отвечать посреди работы — отправить «continue» и продолжить в новом. Три попытки, затем остановка с объяснением.",
+  updateTitle: "Обновление",
+  updateAvailable: "Вышла версия OnFlip {version} — у вас {current}.",
+  updateGet: "Скачать",
+  updateDismiss: "Не сейчас",
+  updateCheck: "Проверить обновления",
+  updateChecking: "Проверяем…",
+  updateCurrent: "У вас последняя версия.",
+  updateFailed: "Не удалось связаться с GitHub.",
+  copyDiagnostics: "Скопировать диагностику",
+  copyDiagnosticsDone: "Скопировано",
+  copyDiagnosticsHelp:
+    "Версия, тариф, модель и что ответил каждый браузер — без cookie и данных аккаунта. Вставьте в сообщение об ошибке.",
 };
 
 const uz: Partial<Record<StringKey, string>> = {
@@ -720,6 +762,27 @@ const uz: Partial<Record<StringKey, string>> = {
   skillsHint:
     "Ko'nikmani tanlang — u kiritish maydoniga @skill teg sifatida tushadi: tafsilot qo'shib yuboring. Chatda teg havola bo'lib, ko'nikmaning to'liq matnini ochadi. Maydonda @ yozish ham shu ro'yxatni ochadi.",
   skillsUse: "Ishlatish",
+  resumeTurn: "Davom etish",
+  signInUseMyBrowser: "Brauzerim orqali",
+  signInPairingWait: "Brauzer kutilmoqda…",
+  signInExtensionHint:
+    "«Brauzerim orqali» oddiy brauzeringizni ochib, unda allaqachon kirgan ChatGPT sessiyasini so'raydi. Buning uchun kichik OnFlip Connector kengaytmasi kerak — u OnFlip omborining extension papkasida. Chrome va Edge cookie fayllarini boshqa dasturlar o'qiy olmaydigan qilib shifrlaydi, brauzerdan so'rash esa buni aylanib o'tmaydigan yo'l.",
+  autoResumeNotice: "OnFlip o'zi davom ettirdi.",
+  setAutoResume: "Muvaffaqiyatsiz qadamdan keyin davom etish",
+  setAutoResumeHelp:
+    "ChatGPT suhbati ish o'rtasida javob bermay qolsa — «continue» yuborib, ishni yangisida davom ettiradi. Uch marta urinadi, keyin sababini aytib to'xtaydi.",
+  updateTitle: "Yangilanish",
+  updateAvailable: "OnFlip {version} chiqdi — sizda {current}.",
+  updateGet: "Yuklab olish",
+  updateDismiss: "Hozir emas",
+  updateCheck: "Yangilanishni tekshirish",
+  updateChecking: "Tekshirilmoqda…",
+  updateCurrent: "Sizda eng so'nggi versiya.",
+  updateFailed: "GitHub bilan bog'lanib bo'lmadi.",
+  copyDiagnostics: "Diagnostikani nusxalash",
+  copyDiagnosticsDone: "Nusxalandi",
+  copyDiagnosticsHelp:
+    "Versiya, tarif, model va har bir brauzer nima deganini — cookie va hisob ma'lumotlarisiz. Xato haqidagi xabarga joylang.",
 };
 
 const STRINGS: Record<Lang, Partial<Record<StringKey, string>>> = { en, ru, uz };

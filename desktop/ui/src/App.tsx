@@ -176,6 +176,31 @@ export function App(): React.ReactElement {
   });
   const [resizingTerm, setResizingTerm] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
+
+  /**
+   * A release newer than this build, once GitHub has been asked.
+   *
+   * Asked once per launch and never again: an update is not urgent enough
+   * to poll for, and a banner that reappears after being dismissed is the
+   * fastest way to teach someone to ignore banners. Dismissing is
+   * remembered per version, so the next release gets to speak up again.
+   */
+  const [update, setUpdate] = useState<{ latest: string; current: string; url: string } | null>(
+    null
+  );
+  useEffect(() => {
+    // Guarded because this runs unattended on every launch: a renderer
+    // newer than its preload would throw here before anything is on screen.
+    if (typeof window.onflip.checkUpdate !== "function") return;
+    void window.onflip
+      .checkUpdate()
+      .then((info) => {
+        if (!info.available || !info.latest) return;
+        if (localStorage.getItem("onflip.update.dismissed") === info.latest) return;
+        setUpdate({ latest: info.latest, current: info.current, url: info.url });
+      })
+      .catch(() => {});
+  }, []);
   /** Live view of the agent's browser: the last frame it sent, if any. */
   const [browserOpen, setBrowserOpen] = useState(false);
   const [browserFrame, setBrowserFrame] = useState<BrowserFrameDTO | null>(null);
@@ -965,6 +990,29 @@ export function App(): React.ReactElement {
           </button>
         </div>
 
+        {update && (
+          <div className="update-bar">
+            <span className="update-text">
+              {t("updateAvailable", { version: update.latest, current: update.current })}
+            </span>
+            <button
+              className="update-get"
+              onClick={() => void window.onflip.openRelease(update.url)}
+            >
+              {t("updateGet")}
+            </button>
+            <button
+              className="update-dismiss"
+              onClick={() => {
+                localStorage.setItem("onflip.update.dismissed", update.latest);
+                setUpdate(null);
+              }}
+            >
+              {t("updateDismiss")}
+            </button>
+          </div>
+        )}
+
         {loading ? (
           <div className="transcript">
             <div className="content-loading">
@@ -982,6 +1030,7 @@ export function App(): React.ReactElement {
             emptyProject={status ? baseName(status.cwd) : null}
             deliveries={deliveries}
             onRevise={busy || engineDown ? undefined : reviseMessage}
+            onResume={busy || engineDown ? undefined : () => sendPrompt("continue")}
             searchOpen={searchOpen}
             onCloseSearch={() => setSearchOpen(false)}
           />

@@ -68,6 +68,9 @@ export const api = {
     call<ConfigView>("setRule", { pattern, action }),
   deleteRule: (pattern: string) => call<ConfigView>("deleteRule", { pattern }),
 
+  /** One paste-ready block about this install, for bug reports. */
+  diagnostics: () => call<{ text: string }>("diagnostics"),
+
   compact: () => call<{ ok: boolean }>("compact"),
   sessionDiff: () => call<FileDiff[]>("sessionDiff"),
   undoPreview: () =>

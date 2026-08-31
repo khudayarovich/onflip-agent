@@ -14,8 +14,17 @@ interface OnFlipBridge {
   newWindow(): Promise<boolean>;
   restartEngine(cwd?: string): Promise<boolean>;
   appInfo(): Promise<{ version: string; platform: string }>;
+  checkUpdate(): Promise<{
+    current: string;
+    latest?: string;
+    url: string;
+    available: boolean;
+    error?: string;
+  }>;
+  openRelease(url: string): Promise<boolean>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
+  pairBrowser(): Promise<{ ok: boolean; reason?: string }>;
   signOut(): Promise<{ ok: boolean; reason?: string }>;
   winControl(action: "minimize" | "maximize" | "close" | "query"): Promise<{ maximized: boolean }>;
   onWinState(listener: (state: { maximized: boolean }) => void): () => void;

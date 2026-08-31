@@ -94,7 +94,9 @@ import {
   deriveTitle,
   snapshotContentsAvailable,
 } from "onflip/dist/agent/store";
-import { openLog, closeLog, logger } from "onflip/dist/log";
+import { openLog, closeLog, logger, logFile } from "onflip/dist/log";
+import { isResumableFailure, cooldownRemainingMs } from "onflip/dist/chatgpt/backoff";
+import { lastBrowserReport } from "onflip/dist/auth/session";
 import type { ChatMessage, SessionState, ToolCall, ToolResult, ToolDisplay } from "onflip/dist/types";
 
 import { Peer } from "../shared/wire";
@@ -119,6 +121,12 @@ import { buildFileDiff } from "./diffs";
 import { replayItems, stripMentionNote } from "./replay";
 import { expandSkillToken } from "../shared/skills";
 import { subjectFor } from "./subjects";
+
+/** What a turn is resumed with, and what a person types by hand today. */
+const RESUME_PROMPT = "continue";
+
+/** Consecutive unattended resumes before OnFlip stops and says so. */
+const MAX_AUTO_RESUMES = 3;
 
 /**
  * The app's version, read from the package it ships in.
@@ -714,8 +722,17 @@ export class Engine {
   // running turns
   // =========================================================================
 
+  /**
+   * Consecutive turns that were resumed without anyone asking.
+   *
+   * Reset by a person typing anything, and by a turn that finishes, so the
+   * cap only ever counts one unbroken run of failures.
+   */
+  private autoResumes = 0;
+
   send(text: string, attachments?: string[]): { queued: boolean } {
     if (!this.connected) throw new Error("The engine is still connecting — try again in a moment.");
+    this.autoResumes = 0;
     if (this.busy) {
       // A queued message keeps its own attachments: they belong to that
       // message, not to whichever turn happens to run next.
@@ -725,6 +742,45 @@ export class Engine {
     }
     void this.runOneTurn(text, attachments);
     return { queued: false };
+  }
+
+  /**
+   * Carry on by ourselves after a turn died on the transport.
+   *
+   * The word is the whole mechanism: "continue" is what a person types when
+   * a long run stops with a red error, and it works because the next turn
+   * opens a fresh conversation and re-sends the transcript. Nothing is
+   * being retried — the failed request is gone, and the transcript that
+   * outlived it is the thing that matters.
+   *
+   * Three, and then it stops. A cap is what separates recovering from a
+   * conversation that broke from hammering at something genuinely wrong,
+   * and stopping with the reason on screen is more useful than a loop.
+   * Every attempt says so in the transcript, so a run that healed itself
+   * overnight can still be read back afterwards.
+   */
+  private queueAutoResume(reason: string): void {
+    if (loadConfig().autoResume === false) return;
+    if (cooldownRemainingMs() > 0) return;
+    if (this.queue.length > 0) return;
+    if (this.autoResumes >= MAX_AUTO_RESUMES) {
+      this.notice(
+        `Stopped after ${MAX_AUTO_RESUMES} attempts to carry on. Say "continue" to try again, or turn off automatic resume in Settings.`
+      );
+      return;
+    }
+    this.autoResumes += 1;
+    logger.info("session", "resuming after a failed turn", {
+      attempt: this.autoResumes,
+      reason,
+    });
+    this.notice(
+      `That chat stopped answering. Carrying on in a new one (attempt ${this.autoResumes} of ${MAX_AUTO_RESUMES}).`
+    );
+    // Into the queue rather than straight into a turn: the turn that just
+    // failed is still in its own finally block, and that block is what
+    // hands the next one over.
+    this.queue.push({ text: RESUME_PROMPT });
   }
 
   interrupt(): void {
@@ -814,6 +870,7 @@ export class Engine {
           error: `Stopped after ${result.iterations} of ${this.maxIterations} steps without finishing. Say "continue" to keep going, or raise the step budget in Settings.`,
         });
       } else {
+        this.autoResumes = 0;
         this.peer.emit("turn", { state: "end", iterations: result.iterations });
       }
     } catch (e) {
@@ -822,8 +879,15 @@ export class Engine {
         error: message,
         stack: e instanceof Error ? e.stack : undefined,
       });
-      this.peer.emit("item", { type: "error", id: randomUUID(), text: message } satisfies ChatItem);
+      const resumable = isResumableFailure(message) && !this.abort.signal.aborted;
+      this.peer.emit("item", {
+        type: "error",
+        id: randomUUID(),
+        text: message,
+        resumable,
+      } satisfies ChatItem);
       this.peer.emit("turn", { state: "end", error: message });
+      if (resumable) this.queueAutoResume(message);
     } finally {
       const composerWarning = takeComposerWarning();
       if (composerWarning) this.notice(composerWarning);
@@ -1533,16 +1597,72 @@ export class Engine {
       // budget is sized from the plan and the model, and showing "45000"
       // here made auto-sizing look like a stuck setting.
       compactAfterChars: cfg.compactAfterChars ?? this.contextBudgetChars(),
+      autoResume: cfg.autoResume !== false,
       rules,
       allowedCommands: cfg.allowedCommands ?? [],
       allowedWriteDirs: cfg.allowedWriteDirs ?? [],
     };
   }
 
+  /**
+   * Everything a bug report needs, in one block the user can paste.
+   *
+   * Written because every stall reported so far began with someone being
+   * asked to find their log directory. The facts that actually decide these
+   * questions — which plan, which model, which runtime read the cookies,
+   * what each browser said — are spread across four places, and none of
+   * them is the transcript. No cookie, token or account address goes in:
+   * this is meant to be pasted into a public issue.
+   */
+  diagnostics(): { text: string } {
+    const cfg = loadConfig();
+    const cooldown = cooldownRemainingMs();
+    const lines: string[] = [];
+    const add = (label: string, value: unknown) => {
+      if (value === undefined || value === null || value === "") return;
+      lines.push(`${label.padEnd(16)} ${String(value)}`);
+    };
+
+    lines.push("OnFlip diagnostics");
+    lines.push("");
+    add("version", ENGINE_VERSION);
+    add("platform", `${process.platform} ${process.arch} · ${os.release()}`);
+    add("engine", `node ${process.versions.node} · module ABI ${process.versions.modules}`);
+    add("cookie reader", process.env.ONFLIP_ELECTRON_PATH ? "the app's own runtime" : "whatever node is on PATH");
+    lines.push("");
+    add("plan", describePlan(cfg.planType) ?? cfg.planType ?? "not read");
+    add("model", `${this.model}${cfg.modelPinned ? " (pinned)" : " (default)"}`);
+    add("thinking", this.thinking ?? "off");
+    add("context", `${reducibleChars(this.history)} of ${this.contextBudgetChars()} chars`);
+    add("transport", this.transport?.name);
+    add("uploads", uploadsAvailable() ? "available" : "unavailable");
+    add("signed in", this.hasSession() ? "yes" : "no");
+    add("cooldown", cooldown > 0 ? `${Math.ceil(cooldown / 1000)}s remaining` : "none");
+    lines.push("");
+    add("approval", this.approvalMode);
+    add("shell", this.shellEnabled ? "on" : "off");
+    add("network", this.networkEnabled ? "on" : "off");
+    add("auto resume", cfg.autoResume === false ? "off" : "on");
+    add("workspace", inScratch(this.cwd) ? "chat (no folder)" : "folder");
+    add("log", logFile() ?? "not open");
+
+    const browsers = lastBrowserReport();
+    if (browsers.length) {
+      lines.push("");
+      lines.push("browser sign-in, last attempt");
+      for (const r of browsers) {
+        lines.push(`  ${r.browser.padEnd(10)} ${r.outcome}${r.detail ? ` — ${r.detail}` : ""}`);
+      }
+    }
+
+    return { text: lines.join("\n") };
+  }
+
   setConfigValue(key: string, value: unknown): ConfigView {
     const allowed: Record<string, (v: unknown) => Partial<OnFlipConfig>> = {
       headed: (v) => ({ headed: Boolean(v) }),
       browserHeadless: (v) => ({ browserHeadless: Boolean(v) }),
+      autoResume: (v) => ({ autoResume: Boolean(v) }),
       maxIterations: (v) => ({ maxIterations: firstPositiveInt([v as number], 40) }),
       replyTimeout: (v) => ({ replyTimeout: firstPositiveInt([v as number], 600) }),
       compactAfterChars: (v) => ({ compactAfterChars: firstPositiveInt([v as number], 45_000) }),

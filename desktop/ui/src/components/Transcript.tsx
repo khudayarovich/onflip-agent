@@ -55,6 +55,7 @@ export function Transcript({
   emptyProject,
   deliveries,
   onRevise,
+  onResume,
   searchOpen,
   onCloseSearch,
 }: {
@@ -68,6 +69,8 @@ export function Transcript({
   deliveries: Record<string, DeliveryState>;
   /** Edit/resend a user message; undefined while a turn is running. */
   onRevise?: (id: string, mode: "edit" | "resend") => void;
+  /** Carry on after a failed turn; undefined while one is running. */
+  onResume?: () => void;
   /** In-chat search (Ctrl+F / the strip button). */
   searchOpen: boolean;
   onCloseSearch: () => void;
@@ -233,7 +236,12 @@ export function Transcript({
               onRevise={onRevise}
             />
           ) : (
-            <TranscriptItem key={item.id} item={item} toolProgress={toolProgress} />
+            <TranscriptItem
+              key={item.id}
+              item={item}
+              toolProgress={toolProgress}
+              onResume={onResume}
+            />
           )
         )}
         {streaming.active && (
@@ -357,9 +365,11 @@ function UserMessage({
 export function TranscriptItem({
   item,
   toolProgress,
+  onResume,
 }: {
   item: ChatItem;
   toolProgress: Record<string, string>;
+  onResume?: () => void;
 }): React.ReactElement | null {
   const t = useT();
   switch (item.type) {
@@ -393,7 +403,16 @@ export function TranscriptItem({
     case "notice":
       return <div className="msg-notice">{item.text}</div>;
     case "error":
-      return <div className="msg-error">{item.text}</div>;
+      return (
+        <div className="msg-error">
+          <div>{item.text}</div>
+          {item.resumable && onResume && (
+            <button className="msg-error-resume" onClick={onResume}>
+              {t("resumeTurn")}
+            </button>
+          )}
+        </div>
+      );
     default:
       return null;
   }
