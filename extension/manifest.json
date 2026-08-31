@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "OnFlip Connector",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Hands your existing ChatGPT session to OnFlip Desktop running on this computer. Nothing leaves the machine.",
   "icons": {
     "128": "icon.png"
@@ -10,24 +10,14 @@
   "host_permissions": [
     "https://chatgpt.com/*",
     "https://chat.openai.com/*",
-    "http://127.0.0.1:43117/*",
-    "http://127.0.0.1:43118/*",
-    "http://127.0.0.1:43119/*",
-    "http://127.0.0.1:43120/*",
-    "http://127.0.0.1:43121/*"
+    "http://127.0.0.1/*"
   ],
   "background": {
     "service_worker": "background.js"
   },
   "content_scripts": [
     {
-      "matches": [
-        "http://127.0.0.1:43117/pair*",
-        "http://127.0.0.1:43118/pair*",
-        "http://127.0.0.1:43119/pair*",
-        "http://127.0.0.1:43120/pair*",
-        "http://127.0.0.1:43121/pair*"
-      ],
+      "matches": ["http://127.0.0.1/pair*"],
       "js": ["content.js"],
       "run_at": "document_idle"
     }

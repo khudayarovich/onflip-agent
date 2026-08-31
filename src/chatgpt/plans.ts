@@ -72,6 +72,15 @@ export const UPLOAD_CEILING_CHARS = 160_000;
 const USABLE_FRACTION = 0.55;
 
 /**
+ * Room kept clear for the reply and the tool output it asks for.
+ *
+ * Separate from the fraction above, which divides what is left after the
+ * system prompt. This is the floor under that division: whatever the
+ * arithmetic says, a send has to leave space for an answer to come back.
+ */
+const REPLY_ROOM_CHARS = 8_000;
+
+/**
  * The ceiling for models with a published window in the hundreds of
  * thousands of tokens.
  *
@@ -109,24 +118,76 @@ export function planProfile(planId: string | undefined): PlanProfile | null {
  */
 const UNKNOWN_PLAN_UPLOAD_BUDGET = 45_000;
 
+/**
+ * The most a transcript may grow to before it is summarised.
+ *
+ * `systemChars` is the size of the system prompt, and leaving it out was a
+ * real bug rather than a refinement. The budget covers the transcript
+ * alone — compaction cannot reclaim the prompt, so it is excluded from the
+ * count — but the *send* carries both, and the window has to hold both.
+ * Measured with all 23 tools attached: a 17,080-character prompt plus the
+ * 17,600 that the Free row allowed came to 34,680 against a 32,000-character
+ * window. Every turn on that plan overflowed by 2,680 characters, and what
+ * falls out of a full window first is the oldest content — the prompt, the
+ * one part of the payload that explains the tools. Free accounts reporting
+ * that the agent "has no tools" were being told so by arithmetic.
+ */
 export function compactionBudget(
   planId: string | undefined,
   canUpload = false,
-  modelTokens?: number | null
+  modelTokens?: number | null,
+  systemChars = 0
 ): number {
   // A model with a published window outranks the plan table: the table's
   // rows date from the GPT-4 era, and Sol's real window is thirty times the
   // Plus row. Only meaningful with uploads — a transcript this size cannot
   // be typed.
   if (canUpload && modelTokens && modelTokens > 0) {
-    const fromModel = Math.floor(modelTokens * CHARS_PER_TOKEN * USABLE_FRACTION);
-    return Math.max(12_000, Math.min(fromModel, LARGE_MODEL_UPLOAD_CEILING_CHARS));
+    const window = modelTokens * CHARS_PER_TOKEN;
+    const fromModel = Math.floor((window - systemChars) * USABLE_FRACTION);
+    return fit(
+      Math.max(12_000, Math.min(fromModel, LARGE_MODEL_UPLOAD_CEILING_CHARS)),
+      window,
+      systemChars
+    );
   }
   const ceiling = canUpload ? UPLOAD_CEILING_CHARS : COMPOSER_CEILING_CHARS;
   const profile = planProfile(planId);
   if (!profile) return canUpload ? UNKNOWN_PLAN_UPLOAD_BUDGET : COMPOSER_CEILING_CHARS;
-  const fromPlan = Math.floor(profile.contextTokens * CHARS_PER_TOKEN * USABLE_FRACTION);
-  return Math.max(12_000, Math.min(fromPlan, ceiling));
+  const window = profile.contextTokens * CHARS_PER_TOKEN;
+  const fromPlan = Math.floor((window - systemChars) * USABLE_FRACTION);
+  return fit(Math.max(12_000, Math.min(fromPlan, ceiling)), window, systemChars);
+}
+
+/**
+ * The last word: prompt plus transcript plus an answer must fit the window.
+ *
+ * Applied after the floor, because a floor that overflows the window is
+ * worse than compacting often — a transcript the model cannot see all of
+ * is not a transcript, and the part it loses is the part that tells it what
+ * it can do.
+ */
+function fit(budget: number, windowChars: number, systemChars: number): number {
+  if (systemChars <= 0) return budget;
+  const room = windowChars - systemChars - REPLY_ROOM_CHARS;
+  return Math.max(2_000, Math.min(budget, room));
+}
+
+/**
+ * Is the system prompt taking so much of the window that little is left?
+ *
+ * Worth saying out loud rather than silently compacting every other turn.
+ * On a plan whose window is smaller than about three times the prompt, the
+ * agent works but spends much of its allowance re-reading itself.
+ */
+export function promptCrowdsPlan(
+  planId: string | undefined,
+  systemChars: number
+): { windowChars: number; systemChars: number } | null {
+  const profile = planProfile(planId);
+  if (!profile || systemChars <= 0) return null;
+  const windowChars = profile.contextTokens * CHARS_PER_TOKEN;
+  return systemChars * 3 > windowChars ? { windowChars, systemChars } : null;
 }
 
 /** For the About page and the status line. */

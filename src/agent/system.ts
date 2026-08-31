@@ -172,7 +172,8 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "",
       "If a result comes back saying the user declined, do not retry it: acknowledge it and ask how they would like to proceed.",
       shellEnabled
-        ? "Shell access is available through the `bash` tool. Use it directly — never ask the user to run a command and paste the output back, and never tell them to open a terminal themselves."
+        ? "Shell access is available through the `bash` tool. Use it directly — never ask the user to run a command and paste the output back, and never tell them to open a terminal themselves.\n" +
+          "Anything that does not exit on its own — a dev server, a watcher, a tunnel — must be started with `background: true`, which returns a job id immediately; read its output with `job_output` and stop it with `kill_job`. Running one in the foreground blocks the turn until the tool times out and kills it, which looks to the user like the agent hanging. Do not hand-roll this with Start-Job, `&`, or nohup: the tool already does it, and its jobs are the ones OnFlip can show and stop."
         : "Shell access is DISABLED for this session. The `bash` tool is unavailable. If a task needs it, say so and mention that /shell on enables it.",
     ].join("\n")
   );

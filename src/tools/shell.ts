@@ -19,12 +19,41 @@ export interface ShellHost {
   name: string;
 }
 
-/** Make a PowerShell child speak UTF-8 in both directions. */
+/**
+ * Make a PowerShell child speak UTF-8 in every direction it has.
+ *
+ * `InputEncoding` is here for completeness — it governs stdin, which a
+ * command reading input relies on. It is explicitly *not* the fix for the
+ * mojibake reported from a Russian-locale Windows ("boot РІР‚вЂќ degraded",
+ * an em dash encoded to UTF-8 and decoded as cp1251 twice over). That was
+ * measured here against a console forced to cp1251, and none of the four
+ * encoding settings changed the result: with output redirected to a pipe,
+ * which is how OnFlip always reads it, the bytes come through untouched.
+ * So the corruption happens somewhere else — most likely the text was
+ * already mangled in the file the program was printing. `looksMisdecoded`
+ * below exists to find out which, rather than guessing again.
+ */
 const WINDOWS_UTF8_PRELUDE =
   "$ProgressPreference='SilentlyContinue'; " +
   "chcp 65001 > $null; " +
   "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
+  "[Console]::InputEncoding=[Text.Encoding]::UTF8; " +
   "$OutputEncoding=[Text.Encoding]::UTF8; ";
+
+/**
+ * Does this output look like UTF-8 that something decoded as a byte
+ * codepage?
+ *
+ * The signature is narrow on purpose. `вЂ` and `Ð` are what the leading
+ * bytes of common UTF-8 punctuation become when read as cp1251 or
+ * latin-1, and neither sequence occurs in real Russian, Ukrainian or any
+ * other text worth reading. Saying so matters more than it sounds: a
+ * model that is handed mangled characters copies them faithfully into the
+ * next file it writes, and the corruption becomes permanent.
+ */
+export function looksMisdecoded(text: string): boolean {
+  return /вЂ|РІР|[ÐÃ][\u0080-\u00bf]/.test(text);
+}
 
 export function shellHost(): ShellHost {
   if (process.platform === "win32") {
@@ -309,6 +338,12 @@ export const bashTool: ToolDefinition = {
     if (stdout) parts.push(clip(stdout, MAX_OUTPUT_LINES));
     if (stderr) parts.push(`[stderr]\n${clip(stderr, Math.floor(MAX_OUTPUT_LINES / 2))}`);
     if (result.timedOut) parts.push(`[timed out after ${timeout}ms — process killed]`);
+    if (looksMisdecoded(result.stdout) || looksMisdecoded(result.stderr)) {
+      parts.push(
+        "[OnFlip] Some characters above look mis-decoded — UTF-8 text read as a byte codepage. " +
+          "Treat them as unreliable, and do not copy them into a file: check the source with `read` first."
+      );
+    }
     if (parts.length === 0) parts.push("(no output)");
     parts.push(`[exit code ${result.code ?? "unknown"}]`);
 
