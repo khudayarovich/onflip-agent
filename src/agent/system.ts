@@ -93,6 +93,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "",
       "- NEVER use your built-in python/analysis/code-interpreter/browsing tools. Their results are about the wrong computer.",
       "- NEVER say that you lack access to the user's machine, that the OnFlip tools are unavailable or not exposed, or that you cannot act \"from this chat\" or \"in this turn\". You can, on every turn: emit an onflip block and OnFlip runs it there. Saying otherwise is always false, and it ends the turn having done nothing.",
+      "- These tools are NOT function-calling tools and will NOT appear in any tool menu you can inspect — there is no such menu in this conversation. Looking for one and not finding it proves nothing. The block you type IS the call: OnFlip reads it out of your reply, runs it, and sends the result back as the next message.",
       "- NEVER invent, guess, remember, or predict file contents, directory listings, command output, test results, or error messages. If you have not seen it in a tool result in this conversation, you do not know it.",
       "- If you need to know something about the user's machine, call a tool and wait for the real result.",
       "- Fabricated output is the single worst failure mode here: it silently corrupts the user's work.",
@@ -260,15 +261,64 @@ export function turnReminder(shellEnabled: boolean, tools?: string[]): string {
     .join("\n");
 }
 
+export interface CorrectionContext {
+  /** Every tool attached to this conversation, by name. */
+  tools?: string[];
+  /** 1 for the first correction of this turn, 2 for the next. */
+  attempt?: number;
+  /** The model claimed the tools were not available to it. */
+  denial?: boolean;
+}
+
 /**
- * Sent when a reply parsed as neither a tool call nor a plausible final answer
- * (for example the model narrated running a command it never called).
+ * Sent when a reply parsed as neither a tool call nor a plausible final
+ * answer — the model narrated running a command it never called, or said it
+ * had no tools to call.
+ *
+ * The denial case needed its own answer. Repeating the syntax at a model
+ * that has just said the tool namespace is not exposed to it argues with a
+ * claim it did not make: it is not confused about the format, it is looking
+ * for a function-calling menu, not finding one, and concluding the tools are
+ * gone. Two sessions in the field deadlocked exactly there and both were
+ * broken by the same thing — the user asking it to list the tools. It read
+ * the roster out of the prompt it already had, and started calling them on
+ * the very next turn.
+ *
+ * So the roster goes in the correction. Naming the tools is evidence against
+ * the claim; the syntax alone is not.
  */
-export function protocolCorrection(reason: string): string {
-  return [
-    "[OnFlip protocol error]",
-    reason,
-    "",
+export function protocolCorrection(reason: string, ctx: CorrectionContext = {}): string {
+  const lines = ["[OnFlip protocol error]", reason, ""];
+
+  if (ctx.denial && ctx.tools?.length) {
+    lines.push(
+      "These are the tools attached to this conversation, by name:",
+      "",
+      ctx.tools.join(", "),
+      "",
+      "They are not a menu you have to be granted, and they will not appear among your own function-calling tools, because they are not that kind of tool. They are this conversation's protocol: the block you type IS the call, and OnFlip on the user's machine runs it and sends the result back. Nothing else has to happen first.",
+      ""
+    );
+  }
+
+  // The second correction of a turn is the last one, so it stops explaining
+  // and asks for the smallest call there is. A single harmless call settles
+  // the question the model keeps asking itself, and its result is proof.
+  if (ctx.denial && (ctx.attempt ?? 1) >= 2) {
+    lines.push(
+      "Emit exactly this and nothing else, so the point is settled:",
+      "",
+      "```onflip",
+      "tool: list",
+      "path: .",
+      "```",
+      "",
+      "The result will come back in this conversation. Then carry on with the task."
+    );
+    return lines.join("\n");
+  }
+
+  lines.push(
     "Reply again using the block form exactly:",
     "",
     "```onflip",
@@ -279,10 +329,10 @@ export function protocolCorrection(reason: string): string {
     "```",
     "",
     "Escape nothing — quotes, backslashes, `$_` and newlines are all safe inside a `|` block, and that is the whole point of it. Or, if no tool is needed, give your final answer as prose.",
-    "Do not describe output you have not received from a tool result.",
-  ].join("\n");
+    "Do not describe output you have not received from a tool result."
+  );
+  return lines.join("\n");
 }
-
 /** Instruction used to compact a long conversation into a carry-forward brief. */
 /**
  * Ask for a handover brief — a short one.

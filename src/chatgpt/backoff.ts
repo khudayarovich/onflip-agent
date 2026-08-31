@@ -146,6 +146,13 @@ export function serviceMessage(text: string): string | null {
   const t = (text ?? "").trim();
   if (!t || t.length > 400) return null;
 
+  // Not moderation but the same channel: ChatGPT declining a capability of
+  // its own, which reads as the agent giving up on the task it was asked to
+  // do. Seen in the field as "image creation is temporarily unavailable"
+  // mid-way through building a page that wanted a banner.
+  if (/image (creation|generation) is (currently |temporarily )?unavailable/i.test(t)) {
+    return "That was ChatGPT declining to generate an image, not OnFlip refusing the task. OnFlip has no image tool — ask for SVG or CSS instead and the agent can write it directly into your files.";
+  }
   if (/image we created may violate|content polic/i.test(t)) {
     return "That message came from ChatGPT's image moderation, not from OnFlip — the picture was generated and then blocked. Rewording the prompt usually clears it; brand and game names are a common trigger. OnFlip has no image tool, so a generated image stays in the web chat rather than being saved to your project.";
   }

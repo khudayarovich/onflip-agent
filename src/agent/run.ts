@@ -172,7 +172,12 @@ export async function runTurn(
         logger.warn("protocol", "reply did not parse", { reason: malformed, reply });
         protocolCorrections++;
         events.onNotice?.(`Malformed tool call — ${malformed} Asking for a retry.`);
-        history.push(newMessage("user", protocolCorrection(malformed)));
+        history.push(
+          newMessage(
+            "user",
+            protocolCorrection(malformed, { attempt: protocolCorrections })
+          )
+        );
         continue;
       }
       // Out of retries on a call that never parsed. The reply is a broken tool
@@ -194,8 +199,9 @@ export async function runTurn(
       // denial message itself tells the model to acknowledge it and ask how to
       // proceed, so correcting it for doing exactly that is a contradiction —
       // and an expensive one, since each correction costs a round trip.
+      const denial = detectToolDenial(text);
       const slip =
-        detectToolDenial(text) ??
+        denial ??
         (deniedCalls === 0 ? detectPermissionRequest(text) : null) ??
         (executedCalls === 0 ? detectFabrication(text) : null) ??
         // Held back after a denial for the same reason as the permission
@@ -205,7 +211,16 @@ export async function runTurn(
       if (slip && protocolCorrections < MAX_PROTOCOL_CORRECTIONS) {
         protocolCorrections++;
         events.onNotice?.(`Protocol slip — ${slip}. Asking for a retry.`);
-        history.push(newMessage("user", protocolCorrection(slip)));
+        history.push(
+          newMessage(
+            "user",
+            protocolCorrection(slip, {
+              tools: opts.tools.list.map((t) => t.name),
+              attempt: protocolCorrections,
+              denial: Boolean(denial),
+            })
+          )
+        );
         continue;
       }
       // Corrections are spent and it still will not call a tool. Saying so
@@ -220,7 +235,9 @@ export async function runTurn(
         });
         events.onNotice?.(
           `This model answered in prose and would not emit a tool call, even after ${protocolCorrections} corrections — so nothing was run. ` +
-            "That is the model declining the protocol, not a missing tool. Switch model with the chip under the composer (the lighter tiers often refuse it) and send again."
+            "The tools were attached and listed the whole time; this is the model declining the protocol, not a missing tool. " +
+            "Asking it to list its OnFlip tools usually breaks the deadlock — it reads them out of the prompt it already has and starts calling them. " +
+            "Failing that, switch model with the chip under the composer: the lighter tiers refuse the protocol far more often."
         );
       }
       // ChatGPT's own service messages come back through the same channel as a
@@ -530,7 +547,7 @@ function straighten(text: string): string {
  * worth correcting, because the alternative is a turn that does nothing and
  * a user who is told their agent has no tools.
  */
-function detectToolDenial(text: string): string | null {
+export function detectToolDenial(text: string): string | null {
   // ChatGPT renders apostrophes as U+2019, so a pattern written with the
   // typewriter apostrophe matches nothing it actually says.
   const t = straighten(text.trim());
@@ -579,7 +596,24 @@ function detectToolDenial(text: string): string | null {
     // negation comes before the word "tool", so both earlier shapes missed
     // it and the excuse ended the turn with the plan at 1/5.
     /\b(onflip|machine-side|execution channel|tool channel)\b[^.]{0,60}\b(is|are)( \w+){0,2} not\b[^.]{0,60}\b(exposed|available|invokable|callable|attached|accessible|enabled)\b/i.test(t) ||
-    /\bnot\b[^.]{0,40}\b(exposed|invokable|callable|available)\b[^.]{0,30}\btools?\b/i.test(t);
+    /\bnot\b[^.]{0,40}\b(exposed|invokable|callable|available)\b[^.]{0,30}\btools?\b/i.test(t) ||
+    // "I can't safely update the README without an actual machine-execution
+    // tool available to this response." The negation is carried by
+    // "without", so every pattern above — all of which look for a negated
+    // verb or a negated adjective — walked straight past it. Anchored on a
+    // "cannot" earlier in the same sentence so that advice about the
+    // user's own system ("this will not run without a linter available")
+    // is not swept up with it.
+    /\b(cannot|can'?t|unable to|won'?t be able to)\b[^.]{0,80}\bwithout\b[^.]{0,60}\btools?\b/i.test(t) ||
+    // "the required OnFlip execution channel is currently unavailable to me
+    // in this turn" — the same subject as the clause above but with the
+    // negation inside the adjective, where a search for "not" cannot see it.
+    /\b(onflip|machine-side|execution channel|tool channel|execution interface|tool interface)\b[^.]{0,60}\b(is|are)( \w+){0,2} (unavailable|inaccessible|missing|absent)\b/i.test(t) ||
+    // "The execution channel currently exposes only plugin-management
+    // tools, not the OnFlip filesystem tools." Not a refusal in form at
+    // all — a confident description of a tool namespace the model went
+    // looking for and did not find, which ends the turn just as dead.
+    /\bnot\b[^.]{0,40}\bthe onflip\b[^.]{0,30}\btools?\b/i.test(t);
   if (!denies) return null;
   return (
     "you said a tool could not run, or that OnFlip executed nothing — but " +
@@ -600,7 +634,7 @@ function detectServiceMessage(text: string): string | null {
   return serviceMessage(text);
 }
 
-function detectPermissionRequest(raw: string): string | null {
+export function detectPermissionRequest(raw: string): string | null {
   const text = straighten(raw).trim();
   if (!text) return null;
   // A permission stall is short — it is a question, not a report. A long
@@ -652,7 +686,7 @@ function detectPermissionRequest(raw: string): string | null {
  * it happens *after* tools have run, which is precisely where fabrication
  * detection stops looking.
  */
-function detectAbandonedTurn(raw: string): string | null {
+export function detectAbandonedTurn(raw: string): string | null {
   const text = straighten(raw).trim();
   // A closing report may reasonably mention what happens next. This is aimed
   // at the one-line "here is what I am about to do" that ends a working turn.
@@ -678,7 +712,14 @@ function detectAbandonedTurn(raw: string): string | null {
 
   const announcesNextStep =
     /\b(i'?ll|i will|i'?m going to|i am going to|let me|next,? i'?ll)\b[^.]{0,40}\b(restore|rebuild|re-?read|read|run|fix|patch|apply|edit|update|write|create|add|remove|delete|check|verify|inspect|search|look|build|test|install|revert|continue|implement|refactor|rename|move|open|list|grep|start|try)\b/i;
-  if (!announcesNextStep.test(text)) return null;
+  // "I'm proceeding with the machine-side Excel report now." It is not a
+  // promise about the next turn, which is what the pattern above catches —
+  // it is the present tense, describing work supposedly under way in a
+  // reply that called nothing. Perception verbs are excluded: "I'm
+  // continuing to see the same error" is a report, not an abandoned turn.
+  const claimsToBeWorking =
+    /\bi'?m (now )?(proceeding|continuing|starting|beginning|carrying on)\b(?![^.]{0,30}\b(to see|seeing|to get|to observe|to notice)\b)/i;
+  if (!announcesNextStep.test(text) && !claimsToBeWorking.test(text)) return null;
 
   return (
     "you ended the turn by saying what you would do next instead of doing it — " +
@@ -686,7 +727,7 @@ function detectAbandonedTurn(raw: string): string | null {
   );
 }
 
-function detectFabrication(raw: string): string | null {
+export function detectFabrication(raw: string): string | null {
   const text = straighten(raw);
   if (!text.trim()) return "the reply was empty";
 
