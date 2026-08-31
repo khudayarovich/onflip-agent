@@ -20,7 +20,7 @@ body:
     attributes:
       label: OnFlip version
       description: Shown in the account menu → About.
-      placeholder: "0.7.5"
+      placeholder: "0.7.7"
     validations:
       required: true
   - type: dropdown
