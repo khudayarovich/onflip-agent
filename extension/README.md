@@ -15,9 +15,11 @@ Every file here is a few dozen lines and worth reading before you install it.
 
 ## Installing
 
+You do not need to clone anything: this folder ships inside the app. OnFlip shows you its exact location — **Sign in → Use my browser** puts the path on screen with a button that opens it, and the page that appears in your browser prints it too.
+
 Chrome, Edge, Brave, Opera and every other Chromium browser:
 
-1. Open `chrome://extensions` (`edge://extensions` on Edge).
+1. Open `chrome://extensions` (`edge://extensions` on Edge). It has to be typed into the address bar — Chrome refuses to open it from a link, which is why OnFlip cannot do this step for you.
 2. Turn on **Developer mode**, top right.
 3. Choose **Load unpacked** and pick this `extension` folder.
 

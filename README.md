@@ -66,7 +66,7 @@ Download the latest build from the [releases page](https://github.com/khudayarov
 
 On first launch OnFlip asks you to sign in to ChatGPT. If you are already signed in in a browser whose cookies it can read — Firefox, and Chromium browsers that have not moved to app-bound encryption — it picks that session up and you never see a login form.
 
-For Chrome and Edge, which encrypt their cookies so no other program can read them, **Use my browser** opens your real browser and asks it for the session instead. That needs the small connector extension in [`extension/`](extension/) — load it once via *Developer mode → Load unpacked*, and every sign-in after that is one click. It reads `chatgpt.com` cookies and posts them to OnFlip on `127.0.0.1`; there is no remote endpoint in it.
+For Chrome and Edge, which encrypt their cookies so no other program can read them, **Use my browser** opens your real browser and asks it for the session instead. That needs the small connector extension in [`extension/`](extension/), which ships inside the app — OnFlip shows you the folder and opens it for you. Load it once via *Developer mode → Load unpacked* and every sign-in after that is one click. It reads `chatgpt.com` cookies and posts them to OnFlip on `127.0.0.1`; there is no remote endpoint in it.
 
 Failing both, the app has its own sign-in window, which is an ordinary browser window and remembers the session afterwards.
 

@@ -144,6 +144,22 @@ export function findFirefoxCookieLocations(): BrowserCookieLocation[] {
   return results;
 }
 
+/**
+ * Every browser this platform knows about, whether or not it is installed.
+ *
+ * The search only reports on browsers it actually found, which reads as
+ * silence about the rest: a user whose Firefox is not installed saw a table
+ * with no Firefox row and concluded the check had failed. Naming what was
+ * looked for turns that into an answer.
+ */
+export function knownBrowserNames(): string[] {
+  const chromium =
+    process.platform === "linux"
+      ? ["Chrome", "Edge", "Brave", "Chromium", "Vivaldi"]
+      : ["Chrome", "Edge", "Brave", "Chromium", "Vivaldi", "Arc"];
+  return [...chromium, "Firefox"];
+}
+
 export function allCookieLocations(): BrowserCookieLocation[] {
   return [...findChromiumCookieLocations(), ...findFirefoxCookieLocations()];
 }

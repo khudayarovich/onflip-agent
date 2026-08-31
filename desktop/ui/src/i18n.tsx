@@ -258,6 +258,16 @@ const en = {
   skillsUse: "Use",
   resumeTurn: "Continue",
   signInUseMyBrowser: "Use my browser",
+  connectorTitle: "One-time setup: the OnFlip connector",
+  connectorBody:
+    "Chrome and Edge encrypt their cookies so no other program can read them, so OnFlip asks the browser instead. That takes a small extension, which ships with the app — install it once and every sign-in after this is a single click.",
+  connectorStep1:
+    "Type chrome://extensions into the address bar of the browser that just opened (edge://extensions on Edge). It cannot be opened from a link.",
+  connectorStep2: "Turn on Developer mode, top right.",
+  connectorStep3: "Choose Load unpacked and pick this folder:",
+  connectorOpenFolder: "Open the folder",
+  connectorCopyPath: "Copy the path",
+  reportNotInstalled: "not installed",
   signInPairingWait: "Waiting for your browser…",
   signInExtensionHint:
     "\"Use my browser\" opens your normal browser and asks it for the ChatGPT session you are already signed in to. It needs the small OnFlip Connector extension, which ships in the extension folder of the OnFlip repository — Chrome and Edge encrypt their cookies so that no other program can read them, and asking the browser is the way in that does not work around that.",
@@ -512,6 +522,16 @@ const ru: Partial<Record<StringKey, string>> = {
   skillsUse: "Применить",
   resumeTurn: "Продолжить",
   signInUseMyBrowser: "Через мой браузер",
+  connectorTitle: "Разовая настройка: коннектор OnFlip",
+  connectorBody:
+    "Chrome и Edge шифруют cookie так, что другие программы их не прочитают, поэтому OnFlip запрашивает сессию у самого браузера. Для этого нужно небольшое расширение — оно поставляется вместе с приложением. Установите его один раз, и дальше вход будет в один клик.",
+  connectorStep1:
+    "Введите chrome://extensions в адресной строке открывшегося браузера (edge://extensions в Edge). По ссылке эта страница не открывается.",
+  connectorStep2: "Включите «Режим разработчика» справа вверху.",
+  connectorStep3: "Нажмите «Загрузить распакованное расширение» и выберите эту папку:",
+  connectorOpenFolder: "Открыть папку",
+  connectorCopyPath: "Скопировать путь",
+  reportNotInstalled: "не установлен",
   signInPairingWait: "Ждём браузер…",
   signInExtensionHint:
     "«Через мой браузер» открывает ваш обычный браузер и запрашивает у него сессию ChatGPT, в которую вы уже вошли. Нужно небольшое расширение OnFlip Connector — оно лежит в папке extension репозитория OnFlip. Chrome и Edge шифруют свои cookie так, что другие программы их не прочитают, и запрос к браузеру — это путь, который ничего не обходит.",
@@ -764,6 +784,16 @@ const uz: Partial<Record<StringKey, string>> = {
   skillsUse: "Ishlatish",
   resumeTurn: "Davom etish",
   signInUseMyBrowser: "Brauzerim orqali",
+  connectorTitle: "Bir martalik sozlash: OnFlip konnektori",
+  connectorBody:
+    "Chrome va Edge cookie fayllarini boshqa dasturlar o'qiy olmaydigan qilib shifrlaydi, shuning uchun OnFlip sessiyani brauzerning o'zidan so'raydi. Buning uchun kichik kengaytma kerak — u dastur bilan birga keladi. Bir marta o'rnating, keyingi kirishlar bir bosishda bo'ladi.",
+  connectorStep1:
+    "Ochilgan brauzer manzil satriga chrome://extensions deb yozing (Edge da edge://extensions). Bu sahifa havola orqali ochilmaydi.",
+  connectorStep2: "O'ng yuqoridagi «Developer mode» ni yoqing.",
+  connectorStep3: "«Load unpacked» ni tanlab, shu papkani ko'rsating:",
+  connectorOpenFolder: "Papkani ochish",
+  connectorCopyPath: "Yo'lni nusxalash",
+  reportNotInstalled: "o‘rnatilmagan",
   signInPairingWait: "Brauzer kutilmoqda…",
   signInExtensionHint:
     "«Brauzerim orqali» oddiy brauzeringizni ochib, unda allaqachon kirgan ChatGPT sessiyasini so'raydi. Buning uchun kichik OnFlip Connector kengaytmasi kerak — u OnFlip omborining extension papkasida. Chrome va Edge cookie fayllarini boshqa dasturlar o'qiy olmaydigan qilib shifrlaydi, brauzerdan so'rash esa buni aylanib o'tmaydigan yo'l.",

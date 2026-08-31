@@ -4,6 +4,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import {
   allCookieLocations,
+  knownBrowserNames,
   BrowserCookieLocation,
 } from "./browser";
 import { decryptChromiumCookieValue, getCookieKey, CryptoError } from "./crypto";
@@ -179,7 +180,7 @@ const defaultReader: CookieReader = (loc) =>
 /** What each installed browser had to say, for the message and the log. */
 export interface BrowserReport {
   browser: string;
-  outcome: "session" | "no-session" | "app-bound" | "locked" | "error";
+  outcome: "session" | "no-session" | "app-bound" | "locked" | "error" | "not-installed";
   detail?: string;
 }
 
@@ -226,14 +227,22 @@ export function extractSessionTokenFromBrowser(
       // Any other failure is this browser's problem, not the search's.
     }
   }
+  // Anything never reached is not installed, or has no cookie store where
+  // one was expected. Either way the honest answer is that there was
+  // nothing here to read, which beats leaving the row out.
+  for (const name of knownBrowserNames()) {
+    if (!report.some((r) => r.browser === name)) {
+      report.push({ browser: name, outcome: "not-installed" });
+    }
+  }
   lastReport = report;
 
   if (appBound) {
     throw new CryptoError(
-      `No ChatGPT session could be read from any browser (tried ${tried.join(
-)}). ` +
+      `No ChatGPT session could be read from any browser (tried ${tried.join(", ")}). ` +
         `Chrome-family cookies use app-bound encryption, which cannot be decrypted. ` +
-        `Sign in to ChatGPT in Firefox, which OnFlip can read, or use the app's own sign-in window.`
+        `Use "Use my browser", which asks Chrome for the session instead of reading it, ` +
+        `or sign in through the app's own window.`
     );
   }
   return null;

@@ -42,6 +42,59 @@ function browserUserAgent(): string {
     .trim();
 }
 
+/**
+ * The same edit, applied to the header the user agent does not cover.
+ *
+ * Modern Chromium announces itself twice: in `User-Agent`, and again in the
+ * `Sec-CH-UA` client hints, which are built from a brand list the user agent
+ * string cannot reach. Electron puts itself in both. Stripping only the
+ * first left the second still saying `"Electron";v="33"`, and a sign-in that
+ * reads brands rather than the user agent — Google's does — went on refusing
+ * the window as an embedded browser.
+ *
+ * What is left is Chromium, which is what is actually rendering the page. No
+ * brand is added: the window does not claim to be Google Chrome, it stops
+ * claiming to be an app.
+ */
+export function stripEmbedderBrands(value: string): string {
+  const appToken = app.getName().toLowerCase();
+  const brands = value
+    .split(",")
+    .map((brand) => brand.trim())
+    .filter((brand) => {
+      const lower = brand.toLowerCase();
+      return !lower.includes('"electron"') && !lower.includes('"' + appToken + '"');
+    });
+  return brands.join(", ");
+}
+
+/** Apply it to every request the sign-in partition makes. */
+function honestClientHints(ses: Session): void {
+  ses.webRequest.onBeforeSendHeaders((details, callback) => {
+    const headers = { ...details.requestHeaders };
+    for (const name of Object.keys(headers)) {
+      if (!/^sec-ch-ua(-full-version-list)?$/i.test(name)) continue;
+      const value = headers[name];
+      if (typeof value === "string") headers[name] = stripEmbedderBrands(value);
+    }
+    callback({ requestHeaders: headers });
+  });
+}
+
+/**
+ * Google's refusal, recognised so it can be explained.
+ *
+ * When Google decides a window is an embedded browser it does not fail — it
+ * navigates to a page saying the browser may not be secure, and then sits
+ * there. Without this the window simply never produced a cookie and the app
+ * reported a timeout, which tells the user nothing about what to do next.
+ */
+export function isGoogleRefusal(url: string): boolean {
+  return /accounts\.google\.com\/.*(signin\/rejected|disallowed_?useragent|deniedsigninrejected)/i.test(
+    url
+  );
+}
+
 /** Persisted so a signed-in profile stays signed in between launches. */
 const PARTITION = "persist:chatgpt-auth";
 const LOGIN_URL = "https://chatgpt.com/auth/login";
@@ -156,6 +209,7 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
   // Set on the session, so the identity providers' own popup windows — which
   // share this partition — introduce themselves the same way.
   ses.setUserAgent(browserUserAgent());
+  honestClientHints(ses);
 
   const bounds = parent?.getBounds();
   const width = 520;
@@ -252,6 +306,15 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
 
     // The user closing the window is a cancellation, not a failure.
     win.on("closed", () => finish({ ok: false, reason: "cancelled" }));
+
+    win.webContents.on("did-navigate", (_e, url) => {
+      if (!isGoogleRefusal(url)) return;
+      finish({
+        ok: false,
+        reason:
+          "Google would not accept this window as a browser. Sign in with your email and password instead, or use \"Use my browser\" to hand over the session from the browser you normally use.",
+      });
+    });
 
     win.webContents.on("did-fail-load", (_e, code, description, url) => {
       // Sub-resource failures are noise; only a failed main document matters.

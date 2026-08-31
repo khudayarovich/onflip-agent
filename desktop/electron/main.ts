@@ -17,7 +17,7 @@ import * as path from "node:path";
 import { Peer } from "../shared/wire";
 import { runSignIn, clearSignIn } from "./signin";
 import { checkForUpdate } from "./updates";
-import { pairWithBrowser } from "./pairing";
+import { pairWithBrowser, extensionDir } from "./pairing";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
@@ -582,6 +582,21 @@ function registerIpc(): void {
   }));
 
   ipcMain.handle("check-update", () => checkForUpdate());
+
+  // Load unpacked wants a folder, so the app has to be able to say which
+  // one and put it in front of the user. Shipped in resources, because
+  // nobody who ran the installer has a checkout to point at.
+  ipcMain.handle("extension-info", () => {
+    const dir = extensionDir();
+    return { dir, present: fs.existsSync(path.join(dir, "manifest.json")) };
+  });
+
+  ipcMain.handle("open-extension-folder", async () => {
+    const dir = extensionDir();
+    if (!fs.existsSync(dir)) return false;
+    await shell.openPath(dir);
+    return true;
+  });
 
   // The renderer decides when to offer an update; opening the page is the
   // one thing it cannot do for itself.

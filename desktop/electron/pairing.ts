@@ -1,4 +1,6 @@
+import * as fs from "node:fs";
 import * as http from "node:http";
+import * as path from "node:path";
 import { randomBytes } from "node:crypto";
 import { shell } from "electron";
 
@@ -47,7 +49,36 @@ export const PAIRING_PORTS = [43117, 43118, 43119, 43120, 43121];
 /** Long enough to install the extension mid-flow, short enough to be safe. */
 const WINDOW_MS = 3 * 60_000;
 
-function page(token: string): string {
+/** A Windows path can hold characters the page would otherwise swallow. */
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+/**
+ * Where the connector is, for the instructions.
+ *
+ * Packaged it sits beside the app in `resources`; from a checkout it is the
+ * repository's own folder. A path is what Load unpacked asks for, so the page
+ * prints the real one rather than telling people to go and find it — nobody
+ * who installed the `.exe` has a copy of the repository to look in.
+ */
+export function extensionDir(): string {
+  // Guarded on `resourcesPath` itself, not on the file: joining onto an empty
+  // string gives the relative "extension", which exists whenever the process
+  // happens to be started from the repository root — so the unpackaged case
+  // silently reported a path Load unpacked cannot use.
+  if (process.resourcesPath) {
+    const packaged = path.join(process.resourcesPath, "extension");
+    if (fs.existsSync(path.join(packaged, "manifest.json"))) return packaged;
+  }
+  return path.resolve(path.join(__dirname, "..", "..", "..", "extension"));
+}
+
+function page(token: string, dir: string): string {
   return [
     "<!doctype html>",
     '<html lang="en">',
@@ -67,6 +98,18 @@ function page(token: string): string {
     "  p { margin:0 0 1rem; opacity:.78; }",
     "  .state { margin-top:1.75rem; font-weight:500; opacity:.6; }",
     "  .ok { color:#3fb950; opacity:1; }",
+    "  .install { display:none; margin-top:2rem; text-align:left;",
+    "    border-top:1px solid rgba(128,128,128,.25); padding-top:1.5rem; }",
+    "  .install.show { display:block; }",
+    "  h2 { font-size:1rem; font-weight:600; margin:0 0 .6rem; }",
+    "  ol { margin:0 0 1rem; padding-left:1.2rem; }",
+    "  li { margin-bottom:.4rem; opacity:.85; }",
+    "  .path { font:13px ui-monospace,Menlo,Consolas,monospace; word-break:break-all;",
+    "    padding:.7rem .8rem; border-radius:8px; background:rgba(128,128,128,.14); }",
+    "  button { margin-top:.8rem; font:inherit; font-size:.85rem; cursor:pointer;",
+    "    padding:.45rem 1rem; border-radius:8px; border:1px solid rgba(128,128,128,.4);",
+    "    background:transparent; color:inherit; }",
+    "  .after { font-size:.85rem; margin-top:1rem; }",
     "</style>",
     "</head>",
     "<body>",
@@ -74,12 +117,39 @@ function page(token: string): string {
     "<h1>Connect OnFlip</h1>",
     "<p>OnFlip is asking this browser for the ChatGPT session you are already",
     "signed in to. Nothing leaves this computer.</p>",
-    "<p>If nothing happens, the OnFlip extension is not installed in this",
-    "browser yet — the app shows you where to find it.</p>",
     '<div class="state" id="state">Waiting for the extension…</div>',
+
+    // Revealed only once waiting has plainly not worked, so the common case
+    // — the extension is already there — stays a single line of text.
+    '<div class="install" id="install">',
+    "<h2>The connector is not in this browser yet</h2>",
+    "<p>It is a four-file extension that reads your chatgpt.com cookies and",
+    "hands them to OnFlip. Install it once and this page finishes by itself",
+    "every time after.</p>",
+    "<ol>",
+    "<li>Open <b>chrome://extensions</b> — or <b>edge://extensions</b> on Edge. It has to be typed into the address bar; a link cannot open it.</li>",
+    "<li>Turn on <b>Developer mode</b>, top right.</li>",
+    "<li>Choose <b>Load unpacked</b> and pick this folder:</li>",
+    "</ol>",
+    '<div class="path" id="path">' + escapeHtml(dir) + "</div>",
+    '<button id="copy">Copy the folder path</button>',
+    "<p class=\"after\">Then come back to this tab — it finishes on its own.</p>",
+    "</div>",
     "</main>",
     "<script>",
     'var state = document.getElementById("state");',
+    // Eight seconds: long enough for a browser that has the extension to
+    // finish, short enough that someone who does not is not left guessing.
+    "setTimeout(function () {",
+    "  if (state.className.indexOf(\"ok\") === -1) {",
+    "    document.getElementById(\"install\").className = \"install show\";",
+    "    state.textContent = \"Still waiting for the extension…\";",
+    "  }",
+    "}, 8000);",
+    "document.getElementById(\"copy\").onclick = function () {",
+    "  navigator.clipboard.writeText(document.getElementById(\"path\").textContent);",
+    "  this.textContent = \"Copied\";",
+    "};",
     "var tick = setInterval(function () {",
     '  fetch("/status", { cache: "no-store" })',
     "    .then(function (r) { return r.json(); })",
@@ -133,7 +203,7 @@ export function pairWithBrowser(): Promise<PairResult> {
 
       if (req.method === "GET" && (url === "/pair" || url === "/")) {
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
-        res.end(page(token));
+        res.end(page(token, extensionDir()));
         return;
       }
 

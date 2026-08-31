@@ -25,6 +25,8 @@ interface OnFlipBridge {
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
   pairBrowser(): Promise<{ ok: boolean; reason?: string }>;
+  extensionInfo(): Promise<{ dir: string; present: boolean }>;
+  openExtensionFolder(): Promise<boolean>;
   signOut(): Promise<{ ok: boolean; reason?: string }>;
   winControl(action: "minimize" | "maximize" | "close" | "query"): Promise<{ maximized: boolean }>;
   onWinState(listener: (state: { maximized: boolean }) => void): () => void;
