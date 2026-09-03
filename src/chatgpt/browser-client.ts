@@ -63,6 +63,8 @@ let context: BrowserContext | null = null;
 let page: Page | null = null;
 /** One conversation is reused per session; reset() forces a fresh one. */
 let inConversation = false;
+/** The session last put into the profile, for a reload that has to put it back. */
+let injectedCookies: SessionCookie[] = [];
 /** How many assistant turns existed before the current send. */
 let priorTurnCount = 0;
 
@@ -838,6 +840,7 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
   }
 
   await injectCookies(context, cookies);
+  injectedCookies = cookies;
 
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
@@ -961,6 +964,21 @@ async function openNewChat(p: Page, model?: string): Promise<void> {
     timeout: 45_000,
   });
   await assertLoggedIn(p);
+
+  // The first document of a launch has come up anonymous on every start
+  // measured — the chip reads "ChatGPT", the page talks to /backend-anon —
+  // and a reload with the session put back is logged in. Left to the
+  // recovery in `sendViaBrowser`, every step below ran first and failed
+  // slowly: the model check, the conversation snapshot, three tries at an
+  // access token. Checked here, it is one cheap reload before any of them.
+  if (injectedCookies.length > 0 && context && (await looksAnonymous(p).catch(() => false))) {
+    logger.warn("browser", "new chat came up logged out; putting the session back and reloading", {
+      url: p.url(),
+    });
+    await injectCookies(context, injectedCookies);
+    await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 });
+    await assertLoggedIn(p);
+  }
 
   const composer = await firstVisible(p, COMPOSER_SELECTORS, 30_000);
   if (!composer) {

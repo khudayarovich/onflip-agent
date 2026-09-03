@@ -1,13 +1,13 @@
-# OnFlip Desktop 0.8.0
+# OnFlip Desktop 0.8.1
 
-**Turns no longer stop half-way.** The agent now ends every turn with a closing block of its own — `done` with the final answer, or `ask_user` with a question only you can settle. A reply that carries neither is sent straight back to the model for correction instead of ending the turn. The old approach guessed from the wording of the reply ("I'll verify the build now…"), and every session found a sentence it had not seen, in English, Russian or Uzbek. That guessing is gone.
+**First message after launch.** The session is put into OnFlip's browser cleanly at every launch — the profile's stale copies are cleared first and the new ones are set the way ChatGPT itself sets them — so the first page no longer comes up logged out with a request that never answers. If ChatGPT still serves a logged-out page, the new chat is reloaded once with the session put back, before anything else is tried.
 
-**Several times faster.** OnFlip reads ChatGPT's own reply stream through the browser and accepts a reply the moment ChatGPT reports it finished, instead of waiting for the page to go quiet. A three-step task that used to take minutes now takes under half a minute.
+**Requests that fail now fail fast.** A message whose request ChatGPT rejects (an expired session, a throttle, a server error) is reported within seconds with the reason and retried the right way, instead of a minutes-long "thinking" freeze.
 
-**Cut-off replies are handled.** A reply that hit ChatGPT's length limit is continued with ChatGPT's own control, or asked for again — never executed half-written.
+Everything from 0.8.0 is included:
 
-**Sign-in and the first message.** The stored session is put into OnFlip's browser cleanly at every launch, so the first message of a session no longer lands on a logged-out page. A message whose request ChatGPT rejects (an expired session, a throttle, a server error) is reported within seconds with the reason, instead of a minutes-long "thinking" freeze.
-
-**Throttling is waited out, not retried.** ChatGPT's "you are sending requests too often" limit is recognised and the app pauses, rather than reloading and opening fresh chats that make it worse.
-
-Also: questions from the agent are shown as their own item in the chat; a fresh chat's first turn is typed instead of uploaded; per-turn statistics are written to the log (`scripts/turn-stats.js` reads them).
+- Turns end on the agent's own `done` / `ask_user` block; a reply without one is sent back for correction instead of ending the turn half-way, whatever language the reply is in.
+- Replies are accepted the moment ChatGPT's own stream reports them finished, so multi-step tasks run several times faster.
+- Replies cut off at ChatGPT's length limit are continued or asked for again, never executed half-written.
+- ChatGPT's "too many requests" throttle is recognised and waited out instead of retried.
+- Questions from the agent are shown as their own item; a fresh chat's first turn is typed instead of uploaded; per-turn statistics are written to the log.
