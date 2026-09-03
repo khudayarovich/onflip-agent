@@ -204,6 +204,9 @@ const en = {
   themeLight: "Light",
   setLanguage: "Language",
   setLanguageDesc: "Interface language.",
+  setNotifications: "Desktop notifications",
+  setNotificationsDesc:
+    "A system notification when a task finishes, needs your approval or asks a question while OnFlip is in the background.",
   setBrowser: "Automation browser",
   setHeaded: "Show the ChatGPT browser window",
   setHeadedDesc: "Headed mode — useful when something goes wrong and you want to watch the page.",
@@ -455,6 +458,9 @@ const ru: Partial<Record<StringKey, string>> = {
   themeLight: "Светлая",
   setLanguage: "Язык",
   setLanguageDesc: "Язык интерфейса.",
+  setNotifications: "Уведомления",
+  setNotificationsDesc:
+    "Системное уведомление, когда задача завершена, нужно ваше разрешение или задан вопрос, пока OnFlip в фоне.",
   setBrowser: "Браузер автоматизации",
   setHeaded: "Показывать окно браузера ChatGPT",
   setHeadedDesc: "Полезно, когда что-то идёт не так и нужно видеть страницу.",
@@ -704,6 +710,9 @@ const uz: Partial<Record<StringKey, string>> = {
   themeLight: "Yorug'",
   setLanguage: "Til",
   setLanguageDesc: "Interfeys tili.",
+  setNotifications: "Bildirishnomalar",
+  setNotificationsDesc:
+    "Vazifa tugaganda, ruxsat kerak bo'lganda yoki savol berilganda, OnFlip fonda bo'lsa, tizim bildirishnomasi.",
   setBrowser: "Avtomatlashtirish brauzeri",
   setHeaded: "ChatGPT brauzer oynasini ko'rsatish",
   setHeadedDesc: "Biror narsa noto'g'ri ketganda sahifani kuzatish uchun foydali.",

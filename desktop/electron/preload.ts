@@ -29,6 +29,7 @@ export interface OnFlipBridge {
   }>;
   openRelease(url: string): Promise<boolean>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
+  setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
   pairBrowser(): Promise<{ ok: boolean; reason?: string }>;
   extensionInfo(): Promise<{ dir: string; present: boolean }>;
@@ -85,6 +86,7 @@ const bridge: OnFlipBridge = {
   openRelease: (url) => ipcRenderer.invoke("open-release", { url }),
 
   setTheme: (theme) => ipcRenderer.invoke("set-theme", { theme }),
+  setPrefs: (prefs) => ipcRenderer.invoke("set-prefs", prefs),
   signIn: () => ipcRenderer.invoke("sign-in"),
   pairBrowser: () => ipcRenderer.invoke("pair-browser"),
   extensionInfo: () => ipcRenderer.invoke("extension-info"),

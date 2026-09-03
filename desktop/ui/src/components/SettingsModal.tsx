@@ -18,6 +18,8 @@ export function SettingsModal({
   onSetTheme,
   lang,
   onSetLang,
+  notifications,
+  onSetNotifications,
 }: {
   status: EngineStatus | null;
   onClose: () => void;
@@ -27,6 +29,8 @@ export function SettingsModal({
   onSetTheme: (theme: "dark" | "light") => void;
   lang: Lang;
   onSetLang: (lang: Lang) => void;
+  notifications: boolean;
+  onSetNotifications: (on: boolean) => void;
 }): React.ReactElement {
   const t = useT();
   const [config, setConfig] = useState<ConfigView | null>(null);
@@ -112,6 +116,13 @@ export function SettingsModal({
               </button>
             ))}
           </div>
+        </div>
+        <div className="setting-row">
+          <div className="info">
+            <div className="name">{t("setNotifications")}</div>
+            <div className="desc">{t("setNotificationsDesc")}</div>
+          </div>
+          <Toggle on={notifications} onChange={onSetNotifications} />
         </div>
       </div>
 

@@ -11,6 +11,7 @@ import {
   IpcMainInvokeEvent,
   IpcMainEvent,
 } from "electron";
+import { Notification } from "electron";
 import { spawn, ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -43,6 +44,86 @@ interface Workspace {
   engineExited: boolean;
   /** The built-in terminal's running command, one per window. */
   termChild: ChildProcess | null;
+  /** The turn's final answer or question so far, for the notification that ends it. */
+  lastFinal?: { kind: "assistant" | "question"; text: string };
+}
+
+// ---------------------------------------------------------------------------
+// system notifications
+// ---------------------------------------------------------------------------
+
+/**
+ * A toast when something happened that the person is not looking at.
+ *
+ * A turn can run for minutes, and the whole point of an agent is not having
+ * to watch it; Codex and Claude's apps both tap you on the shoulder when
+ * the work is done or needs you. Shown only while the window is hidden,
+ * minimised or behind something else — a toast over a window you are
+ * reading is noise — and worded in the interface language the renderer
+ * reported. Clicking it brings that window forward.
+ */
+type NoticeKind = "finished" | "question" | "approval" | "error" | "exhausted";
+
+const NOTICE_TITLES: Record<string, Record<NoticeKind, string>> = {
+  en: {
+    finished: "OnFlip finished the task",
+    question: "OnFlip needs your decision",
+    approval: "OnFlip needs your approval",
+    error: "OnFlip stopped with an error",
+    exhausted: "OnFlip stopped early",
+  },
+  ru: {
+    finished: "OnFlip завершил задачу",
+    question: "OnFlip ждёт вашего решения",
+    approval: "OnFlip ждёт вашего разрешения",
+    error: "OnFlip остановился с ошибкой",
+    exhausted: "OnFlip остановился раньше времени",
+  },
+  uz: {
+    finished: "OnFlip vazifani tugatdi",
+    question: "OnFlip sizning qaroringizni kutmoqda",
+    approval: "OnFlip sizning ruxsatingizni kutmoqda",
+    error: "OnFlip xato bilan to'xtadi",
+    exhausted: "OnFlip erta to'xtadi",
+  },
+};
+
+/** Markdown and line breaks stripped, cut to what a toast can show. */
+function toastLine(text: string, max = 160): string {
+  const flat = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/[`*_#>]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+function notifyAway(ws: Workspace, kind: NoticeKind, body: string): void {
+  try {
+    const state = loadState();
+    if (state.notifications === false) return;
+    if (!Notification.isSupported()) return;
+    const win = ws.win;
+    if (win.isDestroyed()) return;
+    const away = !win.isVisible() || win.isMinimized() || !win.isFocused();
+    if (!away) return;
+    const lang = state.language && NOTICE_TITLES[state.language] ? state.language : "en";
+    const toast = new Notification({
+      title: NOTICE_TITLES[lang][kind],
+      body: toastLine(body),
+      icon: appIcon(),
+    });
+    toast.on("click", () => {
+      if (win.isDestroyed()) return;
+      if (win.isMinimized()) win.restore();
+      win.show();
+      win.focus();
+    });
+    toast.show();
+  } catch (e) {
+    // A notification that cannot be shown is not worth a failed turn.
+    console.error("[desktop] notification failed:", e instanceof Error ? e.message : String(e));
+  }
 }
 
 const workspaces = new Map<number, Workspace>();
@@ -79,6 +160,10 @@ interface DesktopState {
   lastCwd?: string;
   bounds?: { x?: number; y?: number; width: number; height: number };
   maximized?: boolean;
+  /** System notifications when a turn ends or needs the user; on unless switched off. */
+  notifications?: boolean;
+  /** The renderer's interface language, so notifications are worded in it. */
+  language?: string;
 }
 
 /**
@@ -360,6 +445,26 @@ function startEngine(ws: Workspace, requested?: string): void {
         if (waiter.ws === ws) approvalWaiters.delete(id);
       }
     }
+    // What the turn ended with arrives as an item before the turn-end event;
+    // kept so the toast for the end can quote it. A question is announced
+    // as itself, and not again when the turn ends on it.
+    if (event === "item") {
+      const item = data as { type?: string; text?: string };
+      if (item.type === "assistant" || item.type === "question") {
+        ws.lastFinal = { kind: item.type, text: item.text ?? "" };
+      }
+      if (item.type === "question") notifyAway(ws, "question", item.text ?? "");
+    }
+    if (event === "turn") {
+      const turn = data as { state?: string; interrupted?: boolean; exhausted?: boolean; error?: string };
+      if (turn.state === "start") {
+        ws.lastFinal = undefined;
+      } else if (turn.state === "end" && !turn.interrupted) {
+        if (turn.exhausted) notifyAway(ws, "exhausted", turn.error ?? "");
+        else if (turn.error) notifyAway(ws, "error", turn.error);
+        else if (ws.lastFinal?.kind !== "question") notifyAway(ws, "finished", ws.lastFinal?.text ?? "");
+      }
+    }
     sendTo(ws, "engine-event", { event, data });
   };
 
@@ -391,6 +496,11 @@ function askRendererForApproval(ws: Workspace, request: unknown): Promise<Approv
   return new Promise<ApprovalDecisionDTO>((resolve) => {
     approvalWaiters.set(id, { ws, request, resolve });
     sendTo(ws, "approval-request", { id, request });
+    // Judged before the window is brought forward: on Windows a background
+    // window asked to focus usually only flashes in the taskbar, and the
+    // toast is what actually reaches the person.
+    const ask = (request ?? {}) as { tool?: string; subject?: string; reason?: string };
+    notifyAway(ws, "approval", [ask.tool, ask.subject].filter(Boolean).join(": ") || ask.reason || "");
     if (!ws.win.isDestroyed()) {
       ws.win.show();
       ws.win.focus();
@@ -799,6 +909,16 @@ function registerIpc(): void {
     return true;
   });
 
+  // Notification preference and interface language, which the main process
+  // needs because the toasts are its own.
+  ipcMain.handle("set-prefs", (_e, payload: { notifications?: boolean; language?: string }) => {
+    const prefs: Partial<DesktopState> = {};
+    if (typeof payload?.notifications === "boolean") prefs.notifications = payload.notifications;
+    if (typeof payload?.language === "string") prefs.language = payload.language.slice(0, 8);
+    if (Object.keys(prefs).length) saveState(prefs);
+    return true;
+  });
+
   // Window controls for the frameless titlebar. Close goes through the same
   // close path as the OS button, so the last window hides to the tray rather
   // than quitting.
@@ -1059,6 +1179,10 @@ if (!singleInstance) {
   app.on("second-instance", () => {
     showWindow();
   });
+
+  // Windows shows toasts only for an app with an AppUserModelID; the
+  // installer gives the shortcut this one, and a dev checkout needs it set.
+  if (process.platform === "win32") app.setAppUserModelId("com.onflip.desktop");
 
   void app.whenReady().then(() => {
     // No menu bar on Windows and Linux: the window draws its own chrome, and

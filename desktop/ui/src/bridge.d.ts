@@ -23,6 +23,7 @@ interface OnFlipBridge {
   }>;
   openRelease(url: string): Promise<boolean>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
+  setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
   pairBrowser(): Promise<{ ok: boolean; reason?: string }>;
   extensionInfo(): Promise<{ dir: string; present: boolean }>;

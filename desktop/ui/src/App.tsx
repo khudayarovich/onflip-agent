@@ -245,6 +245,24 @@ export function App(): React.ReactElement {
     void window.onflip.setTheme(theme);
   }, [theme]);
 
+  // System notifications are the main process's, so it is told whether they
+  // are wanted and which language to word them in.
+  const [notifications, setNotifications] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem("onflip.notifications") !== "off";
+    } catch {
+      return true;
+    }
+  });
+  useEffect(() => {
+    try {
+      localStorage.setItem("onflip.notifications", notifications ? "on" : "off");
+    } catch {
+      /* cosmetic */
+    }
+    void window.onflip.setPrefs({ notifications, language: lang });
+  }, [notifications, lang]);
+
   useEffect(() => saveLang(lang), [lang]);
 
   /** When the running turn began, for the timer and the closing duration. */
@@ -1152,6 +1170,8 @@ export function App(): React.ReactElement {
           onSetTheme={setTheme}
           lang={lang}
           onSetLang={setLang}
+          notifications={notifications}
+          onSetNotifications={setNotifications}
         />
       )}
       {modal === "diff" && <DiffModal onClose={() => setModal(null)} />}
