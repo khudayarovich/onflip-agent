@@ -35,6 +35,10 @@ console.info = toStderr("info");
 console.warn = toStderr("warn");
 console.error = toStderr("error");
 
+// When the parent dies, every write to stdout is EPIPE, and an unhandled
+// `error` on the stream becomes an uncaughtException — whose handler below
+// writes to stdout again. Swallowed here so the shutdown can finish quietly.
+process.stdout.on("error", () => {});
 const peer = new Peer((chunk) => process.stdout.write(chunk));
 const engine = new Engine(peer, argValue("--cwd") ?? process.cwd());
 
@@ -65,12 +69,12 @@ process.on("SIGINT", () => void shutdown());
 // file to go on.
 process.on("uncaughtException", (e) => {
   logger.error("session", "uncaught exception", { stack: e?.stack ?? String(e) });
-  peer.emit("log", { line: `uncaught: ${e?.stack ?? e}` });
+  if (!shuttingDown) peer.emit("log", { line: `uncaught: ${e?.stack ?? e}` });
 });
 process.on("unhandledRejection", (e) => {
   const stack = e instanceof Error ? e.stack : String(e);
   logger.error("session", "unhandled rejection", { stack });
-  peer.emit("log", { line: `unhandled rejection: ${stack}` });
+  if (!shuttingDown) peer.emit("log", { line: `unhandled rejection: ${stack}` });
 });
 
 peer.onRequest = async (method, rawParams) => {
@@ -119,6 +123,14 @@ peer.onRequest = async (method, rawParams) => {
         (params.cookies as { name: string; value: string }[]) ?? [],
         params.account as { name?: string; email?: string } | undefined
       );
+    case "signInBrowserInfo":
+      return engine.signInBrowserInfo();
+    case "signInWithBrowser":
+      return engine.signInWithBrowser();
+    case "finishBrowserSignIn":
+      return engine.finishBrowserSignIn();
+    case "cancelBrowserSignIn":
+      return engine.cancelBrowserSignIn();
 
     case "recentProjects":
       return engine.recentProjectList();

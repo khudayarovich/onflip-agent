@@ -501,6 +501,42 @@ function ambiguousAdvice(haystack: string, needle: string, count: number, where:
   );
 }
 
+/**
+ * Match the file the way the model saw it, not the way it is stored.
+ *
+ * `read` splits on \r?\n, so a CRLF file comes back looking like an LF one
+ * and the model writes LF newlines into `old_string`. Against the raw bytes
+ * a multi-line string then never matches — and the indentation advice,
+ * which trims each line, insists the text *is* there, so the model copies it
+ * again and loops. When the literal string is absent from a CRLF file, the
+ * match is retried with CRLF newlines, and the replacement converted the
+ * same way so the file keeps its line endings.
+ */
+function matchLineEndings(
+  haystack: string,
+  oldStr: string,
+  newStr: string
+): { oldStr: string; newStr: string; count: number } {
+  const count = haystack.split(oldStr).length - 1;
+  if (count > 0 || !haystack.includes("\r\n") || !oldStr.includes("\n")) return { oldStr, newStr, count };
+  const crlf = (s: string) => s.replace(/\r?\n/g, "\r\n");
+  const oldCrlf = crlf(oldStr);
+  if (oldCrlf === oldStr) return { oldStr, newStr, count };
+  const retried = haystack.split(oldCrlf).length - 1;
+  if (retried === 0) return { oldStr, newStr, count };
+  return { oldStr: oldCrlf, newStr: crlf(newStr), count: retried };
+}
+
+/**
+ * Replace the first occurrence, literally. `String.replace` with a string
+ * replacement expands `$&`, `$$` and friends, which halved the `$$` in a
+ * Makefile and mangled every regex replacement string the model wrote; a
+ * function replacement is inserted verbatim.
+ */
+function replaceFirst(haystack: string, oldStr: string, newStr: string): string {
+  return haystack.replace(oldStr, () => newStr);
+}
+
 export const editTool: ToolDefinition = {
   name: "edit",
   description:
@@ -527,12 +563,12 @@ export const editTool: ToolDefinition = {
     const before = beforeRevision.contents;
     if (before === null) return err(`File not found: ${relative(ctx.cwd, file)}`);
 
-    const oldStr = String(args.old_string ?? "");
-    const newStr = String(args.new_string ?? "");
-    if (!oldStr) return err("`old_string` must be non-empty. Use the `write` tool to create a file.");
-    if (oldStr === newStr) return err("`old_string` and `new_string` are identical — nothing to do.");
+    const rawOld = String(args.old_string ?? "");
+    const rawNew = String(args.new_string ?? "");
+    if (!rawOld) return err("`old_string` must be non-empty. Use the `write` tool to create a file.");
+    if (rawOld === rawNew) return err("`old_string` and `new_string` are identical — nothing to do.");
 
-    const occurrences = before.split(oldStr).length - 1;
+    const { oldStr, newStr, count: occurrences } = matchLineEndings(before, rawOld, rawNew);
     if (occurrences === 0) {
       return err(notFoundAdvice(before, oldStr, relative(ctx.cwd, file)));
     }
@@ -541,7 +577,7 @@ export const editTool: ToolDefinition = {
       return err(ambiguousAdvice(before, oldStr, occurrences, relative(ctx.cwd, file)));
     }
 
-    const after = replaceAll ? before.split(oldStr).join(newStr) : before.replace(oldStr, newStr);
+    const after = replaceAll ? before.split(oldStr).join(newStr) : replaceFirst(before, oldStr, newStr);
 
     const decision = await ctx.requestPermission({
       kind: "write",
@@ -615,10 +651,10 @@ export const multiEditTool: ToolDefinition = {
     let applied = 0;
     for (const [i, raw] of (args.edits as unknown[]).entries()) {
       const e = raw as Record<string, unknown>;
-      const oldStr = String(e.old_string ?? "");
-      const newStr = String(e.new_string ?? "");
-      if (!oldStr) return err(`edits[${i}]: \`old_string\` must be non-empty`);
-      const count = working.split(oldStr).length - 1;
+      const rawOld = String(e.old_string ?? "");
+      const rawNew = String(e.new_string ?? "");
+      if (!rawOld) return err(`edits[${i}]: \`old_string\` must be non-empty`);
+      const { oldStr, newStr, count } = matchLineEndings(working, rawOld, rawNew);
       // The same advice as `edit` gives, against the working copy: after an
       // earlier edit in the batch the file on disk is no longer what a line
       // number would be counted against.
@@ -629,7 +665,7 @@ export const multiEditTool: ToolDefinition = {
       if (count > 1 && !asBool(e.replace_all)) {
         return err(`edits[${i}]: ${ambiguousAdvice(working, oldStr, count, where)} No changes were written.`);
       }
-      working = asBool(e.replace_all) ? working.split(oldStr).join(newStr) : working.replace(oldStr, newStr);
+      working = asBool(e.replace_all) ? working.split(oldStr).join(newStr) : replaceFirst(working, oldStr, newStr);
       applied += count;
     }
 

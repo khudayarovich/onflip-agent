@@ -1,8 +1,17 @@
 import { ChatMessage, ToolCall, ToolResult, SessionState } from "../types";
 import { ToolRegistry } from "../tools";
-import { Transport, SendOptions } from "../chatgpt/transport";
+import { isTerminalTool, TerminalToolName, TERMINAL_TOOL_NAMES } from "../tools/terminal";
+import { Transport, SendOptions, TransportReply, ReplyMeta } from "../chatgpt/transport";
 import { newMessage, parseTurn, formatToolResult } from "./protocol";
-import { turnReminder, protocolCorrection, compactInstruction } from "./system";
+import {
+  turnReminder,
+  protocolCorrection,
+  noBlockNudge,
+  doneWithOpenTodosNudge,
+  truncationNudge,
+  compactInstruction,
+  SlipVariant,
+} from "./system";
 import { logger } from "../log";
 import {
   classifyFailure,
@@ -17,9 +26,31 @@ import {
  *
  * One call to `runTurn` handles a single user request. Inside it the model may
  * go around the loop many times — each iteration is one model reply plus the
- * tool calls it asked for. The loop ends when the model answers with prose and
- * no tool call, when the step budget runs out, or when the user interrupts.
+ * tool calls it asked for.
+ *
+ * A turn ends structurally, not by reading the prose. The model closes it
+ * with a `done` block (the final answer) or an `ask_user` block (a question
+ * only the user can settle); a reply with neither and no tool call is a
+ * protocol error, answered with an automated nudge and then — so nothing the
+ * model wrote is ever lost — accepted as the answer. The loop also ends when
+ * the step budget runs out or the user interrupts.
+ *
+ * It used to end on any reply without a tool call, and a bank of verb
+ * patterns tried to tell a final answer from "I'll verify the build now."
+ * Every session found a sentence the patterns had not seen — in English,
+ * then in Russian and Uzbek — and each miss ended the run with the plan
+ * unfinished. The patterns that survive are hints about *which* nudge to
+ * send; none of them decides whether the turn is over.
  */
+
+export interface FinalMeta {
+  /** How the turn ended: the model's own closing block, or accepted prose. */
+  kind: "done" | "ask_user" | "prose";
+  /** Task-list items still open when it ended. */
+  openTodos: number;
+  /** Choices offered with an `ask_user` question. */
+  options?: string[];
+}
 
 export interface AgentEvents {
   /** The model is being queried; `iteration` is 1-based. */
@@ -39,8 +70,8 @@ export interface AgentEvents {
    * *sent*, and a transcript that empties itself looks like lost work.
    */
   onCompacted?(dropped: ChatMessage[]): void;
-  /** The model's final prose answer. */
-  onFinal?(text: string): void;
+  /** The model's final answer, or its question to the user. */
+  onFinal?(text: string, meta?: FinalMeta): void;
 }
 
 export interface AgentOptions {
@@ -66,16 +97,42 @@ export interface AgentOptions {
   compactAfterChars?: number;
 }
 
+/** Why a turn stopped, for the log and for the stats over it. */
+export type TurnEnd =
+  | "done"
+  | "ask_user"
+  /** Block-less prose accepted after the nudges were spent. */
+  | "prose"
+  /** The model sent the same block-less reply twice; nudging it again was pointless. */
+  | "repeat"
+  | "exhausted"
+  | "interrupted";
+
 export interface AgentTurnResult {
   finalAnswer: string;
   iterations: number;
   /** True when the loop stopped because the step budget ran out. */
   exhausted: boolean;
   interrupted: boolean;
+  endedBy: TurnEnd;
 }
 
 const MAX_TRANSPORT_RETRIES = 2;
+/** Malformed calls re-requested before the turn is failed. */
 const MAX_PROTOCOL_CORRECTIONS = 2;
+/**
+ * Block-less replies answered with a nudge before the prose is accepted.
+ *
+ * Two, like the corrections: the first reminder is usually enough, the
+ * second settles a model that answered the first conversationally, and a
+ * third has never changed anything. Resets once a tool runs, because a
+ * reply that acts is the model back on protocol.
+ */
+const MAX_NO_BLOCK_NUDGES = 2;
+/** Every automated message of a turn together, so alternating slips cannot loop. */
+const MAX_NUDGES_PER_TURN = 6;
+/** Replies ChatGPT reported as cut off that are re-requested before being used as they are. */
+const MAX_TRUNCATION_NUDGES = 2;
 
 /**
  * Run one user turn to completion.
@@ -89,13 +146,59 @@ export async function runTurn(
   opts: AgentOptions
 ): Promise<AgentTurnResult> {
   const events = opts.events ?? {};
+  /** Corrections and nudges since the last reply that acted; resets when a tool runs. */
   let protocolCorrections = 0;
+  /** Every automated message this turn, never reset. */
+  let totalNudges = 0;
+  /** The one reminder a `done` with open task-list items gets. */
+  let doneNudged = false;
+  let truncationNudges = 0;
   /** Tool calls actually executed this turn; gates fabrication detection. */
   let executedCalls = 0;
   /** Tool calls the policy refused this turn; gates permission-slip detection. */
   let deniedCalls = 0;
   /** Identical calls that have already failed, so a repeat can be named as one. */
   const failedCalls = new Map<string, number>();
+  /**
+   * Prose from block-less replies that were nudged rather than shown.
+   *
+   * A long answer followed, after the nudge, by a bare `done` block is that
+   * answer plus a one-line summary: the answer has to survive to the final
+   * message. It is emptied once a tool runs, at which point it was
+   * narration, and is shown as such.
+   */
+  let pendingProse = "";
+  /** The last block-less reply, squashed, so an identical resend is recognised. */
+  let lastNoCallText = "";
+  // Telemetry for the "turn finished" line.
+  let noBlockReplies = 0;
+  let truncatedReplies = 0;
+  const acceptedVia: Record<string, number> = {};
+  // What the registry answers to, aliases included, so an unfenced `tool:`
+  // line naming anything else is read as the prose it is.
+  const knownTool = toolKnownTo(opts.tools);
+  const terminalName = (call: ToolCall): TerminalToolName | null =>
+    terminalNameOf(opts.tools, call.tool);
+
+  const finish = (endedBy: TurnEnd, finalAnswer: string, iterations: number): AgentTurnResult => {
+    logger.info("agent", "turn finished", {
+      endedBy,
+      iterations,
+      nudges: totalNudges,
+      noBlockReplies,
+      doneNudged,
+      truncatedReplies,
+      openTodos: openTodoCount(opts.session.todos),
+      acceptedVia,
+    });
+    return {
+      finalAnswer,
+      iterations,
+      exhausted: endedBy === "exhausted",
+      interrupted: endedBy === "interrupted",
+      endedBy,
+    };
+  };
 
   // A non-numeric budget would make `iteration <= budget` false on the first
   // comparison, so the loop would fall straight through and report a turn that
@@ -112,9 +215,7 @@ export async function runTurn(
   let compactionExhausted = false;
 
   for (let iteration = 1; iteration <= budget; iteration++) {
-    if (opts.signal.aborted) {
-      return { finalAnswer: "", iterations: iteration - 1, exhausted: false, interrupted: true };
-    }
+    if (opts.signal.aborted) return finish("interrupted", "", iteration - 1);
 
     // Checked before every send, not once per user turn. A single turn can run
     // dozens of iterations and add a hundred messages, and that long turn is
@@ -128,180 +229,304 @@ export async function runTurn(
 
     events.onThinking?.(iteration);
 
-    let reply: string;
+    let reply: TransportReply;
     try {
       reply = await sendWithRetry(history, opts, events);
     } catch (e) {
-      if (opts.signal.aborted) {
-        return { finalAnswer: "", iterations: iteration, exhausted: false, interrupted: true };
-      }
+      if (opts.signal.aborted) return finish("interrupted", "", iteration);
       throw e;
     }
+    const raw = reply.content;
+    const meta: ReplyMeta = reply.meta ?? {};
+    if (meta.acceptedVia) acceptedVia[meta.acceptedVia] = (acceptedVia[meta.acceptedVia] ?? 0) + 1;
+    if (meta.truncated) truncatedReplies++;
 
-    history.push(newMessage("assistant", reply));
+    history.push(newMessage("assistant", raw));
 
-    let { text, calls, malformed } = parseTurn(reply);
+    let { text, calls, malformed } = parseTurn(raw, knownTool);
 
     // A reply carrying our own instructions is the page handing back what
     // we sent. Its 'tool calls' are the worked examples out of the prompt,
     // and running them writes files nobody asked for.
-    if (calls.length > 0 && looksLikeOwnPayload(reply)) {
+    if (calls.length > 0 && looksLikeOwnPayload(raw)) {
       logger.warn("protocol", "reply contained our own prompt", {
-        chars: reply.length,
+        chars: raw.length,
         calls: calls.map((c) => c.tool),
       });
       calls = [];
       malformed =
         "the reply came back containing OnFlip's own instructions rather than an answer.";
     }
+
+    // The closing blocks are the loop's to act on, never the registry's.
+    const terminal = calls.find((c) => terminalName(c) !== null) ?? null;
+    const realCalls = calls.filter((c) => terminalName(c) === null);
+    const openTodos = openTodoLines(opts.session.todos);
+
     logger.info("agent", `iteration ${iteration} parsed`, {
-      calls: calls.map((c) => c.tool),
+      calls: realCalls.map((c) => c.tool),
+      terminal: terminal ? terminalName(terminal) : null,
       proseChars: text.length,
       malformed: malformed ?? null,
+      truncated: Boolean(meta.truncated),
     });
 
-    // ---- no tool calls: the final answer, or a protocol slip ---------------
-    if (calls.length === 0) {
-      // A call that was attempted but did not parse must never be shown to the
-      // user as an answer — that is how a broken JSON blob ends up on screen
-      // instead of the disk usage they asked for.
-      if (malformed && protocolCorrections < MAX_PROTOCOL_CORRECTIONS) {
-        // The raw reply is the only thing that explains a parse failure, so it
-        // is recorded at warn level rather than debug — a normal run that goes
-        // wrong must leave enough behind to diagnose without reproducing it.
-        logger.warn("protocol", "reply did not parse", { reason: malformed, reply });
-        protocolCorrections++;
-        events.onNotice?.(`Malformed tool call — ${malformed} Asking for a retry.`);
-        history.push(
-          newMessage(
-            "user",
-            protocolCorrection(malformed, { attempt: protocolCorrections })
-          )
-        );
-        continue;
-      }
-      // Out of retries on a call that never parsed. The reply is a broken tool
-      // call, not an answer, so it is reported as a failure rather than
-      // printed at the user as though it were one.
-      if (malformed) {
-        throw new Error(
-          `ChatGPT kept returning a tool call that could not be parsed (${malformed.replace(/\.$/, "")}). ` +
-            "This usually means the reply is being mangled in transit. Try /new to start a fresh conversation, or a different model with /model."
-        );
-      }
-
-      // Fabrication detection only applies while nothing has actually run.
-      // Once a tool has produced real output, "I ran the build and it failed"
-      // is an accurate summary, not an invention — flagging it there would
-      // reject the model's closing answer on almost every successful turn.
-      //
-      // Permission-slip detection stops once something has been refused: the
-      // denial message itself tells the model to acknowledge it and ask how to
-      // proceed, so correcting it for doing exactly that is a contradiction —
-      // and an expensive one, since each correction costs a round trip.
-      const denial = detectToolDenial(text);
-      const slip =
-        denial ??
-        (deniedCalls === 0 ? detectPermissionRequest(text) : null) ??
-        (executedCalls === 0 ? detectFabrication(text) : null) ??
-        // Held back after a denial for the same reason as the permission
-        // check: "I'll wait to hear how you want to proceed" is the correct
-        // way to end a turn that was refused, not a slip.
-        (deniedCalls === 0 ? detectAbandonedTurn(text) : null);
-      if (slip && protocolCorrections < MAX_PROTOCOL_CORRECTIONS) {
-        protocolCorrections++;
-        events.onNotice?.(`Protocol slip — ${slip}. Asking for a retry.`);
-        history.push(
-          newMessage(
-            "user",
-            protocolCorrection(slip, {
-              tools: opts.tools.list.map((t) => t.name),
-              attempt: protocolCorrections,
-              denial: Boolean(denial),
-            })
-          )
-        );
-        continue;
-      }
-      // Corrections are spent and it still will not call a tool. Saying so
-      // is worth more than the refusal itself: the protocol is text a model
-      // has to be willing to follow, and the lighter tiers frequently are
-      // not — which reads to the user as "the app has no tools" when the
-      // tools were there and listed all along.
-      if (slip) {
-        logger.warn("agent", "model refused the tool protocol", {
-          model: opts.model,
-          corrections: protocolCorrections,
-        });
-        events.onNotice?.(
-          `This model answered in prose and would not emit a tool call, even after ${protocolCorrections} corrections — so nothing was run. ` +
-            "The tools were attached and listed the whole time; this is the model declining the protocol, not a missing tool. " +
-            "Asking it to list its OnFlip tools usually breaks the deadlock — it reads them out of the prompt it already has and starts calling them. " +
-            "Failing that, switch model with the chip under the composer: the lighter tiers refuse the protocol far more often."
-        );
-      }
-      // ChatGPT's own service messages come back through the same channel as a
-      // reply and read like the agent's answer. Saying whose message it is
-      // saves the user debugging OnFlip for something OnFlip did not do.
-      const service = detectServiceMessage(text);
-      if (service) {
-        logger.warn("agent", "chatgpt service message", { text: text.trim().slice(0, 300) });
-        events.onNotice?.(service);
-      }
-      events.onFinal?.(text);
-      return { finalAnswer: text, iterations: iteration, exhausted: false, interrupted: false };
-    }
-
-    protocolCorrections = 0;
-    if (text.trim()) events.onNarration?.(text.trim());
-
-    // ---- execute the requested tools ---------------------------------------
-    const resultBlocks: string[] = [];
-    for (const call of calls) {
-      if (opts.signal.aborted) {
-        // Keep whatever already ran so the transcript stays truthful.
-        if (resultBlocks.length) {
-          history.push(newMessage("user", resultBlocks.join("\n\n")));
-        }
-        return { finalAnswer: "", iterations: iteration, exhausted: false, interrupted: true };
-      }
-
-      events.onToolStart?.(call);
-      logger.info("tool", `run ${call.tool}`, { args: call.arguments });
-      const startedAt = Date.now();
-      const result = await opts.tools.run(call.tool, call.arguments);
-      logger.info("tool", `done ${call.tool}`, {
-        ms: Date.now() - startedAt,
-        error: Boolean(result.error),
-        denied: Boolean(result.denied),
-        outputChars: result.output.length,
+    // ---- a reply ChatGPT itself reported as cut off ------------------------
+    // Nothing in it can be trusted whole: a `write` whose content stopped at
+    // the length limit would put half a file on disk, and a `done` after it
+    // would call that finished. ChatGPT's own "Continue generating" has
+    // already been tried by the transport; this is the fallback, asking the
+    // model to send the reply again complete.
+    if (meta.truncated && truncationNudges < MAX_TRUNCATION_NUDGES && totalNudges < MAX_NUDGES_PER_TURN) {
+      truncationNudges++;
+      totalNudges++;
+      logger.warn("protocol", "reply was truncated; asking for it again", {
+        attempt: truncationNudges,
+        chars: raw.length,
       });
-      logger.debug("tool", `output ${call.tool}`, { output: result.output });
-      events.onToolEnd?.(call, result);
-      executedCalls++;
-      if (result.denied) deniedCalls++;
-
-      // Watching a model send the same failing call four times in a row is
-      // watching it spend the step budget on a result it has already been
-      // given. The tool's own message clearly is not landing by repetition, so
-      // say plainly that it is a repetition.
-      let output = result.output;
-      if (result.error && !result.denied) {
-        const signature = `${call.tool}:${JSON.stringify(call.arguments ?? {})}`;
-        const attempts = (failedCalls.get(signature) ?? 0) + 1;
-        failedCalls.set(signature, attempts);
-        if (attempts > 1) output = `${output}\n\n${repeatedCallAdvice(call.tool, attempts)}`;
-      }
-
-      resultBlocks.push(formatToolResult(call, output, Boolean(result.error)));
+      events.onNotice?.(
+        `ChatGPT's reply was cut off at its length limit — asking for it again (${truncationNudges} of ${MAX_TRUNCATION_NUDGES}).`
+      );
+      history.push(newMessage("user", truncationNudge({ attempt: truncationNudges })));
+      continue;
     }
 
-    history.push(
-      newMessage("user", resultBlocks.join("\n\n"), { toolName: calls[0].tool })
-    );
+    // ---- tool calls: run them ---------------------------------------------
+    if (realCalls.length > 0) {
+      protocolCorrections = 0;
+      lastNoCallText = "";
+      // What the nudged replies said was narration after all: the model went
+      // on to act. Shown now, in order, so the transcript reads as it happened.
+      if (pendingProse) {
+        events.onNarration?.(pendingProse);
+        pendingProse = "";
+      }
+      if (text.trim()) events.onNarration?.(text.trim());
+
+      const resultBlocks: string[] = [];
+      for (const call of realCalls) {
+        if (opts.signal.aborted) {
+          // Keep whatever already ran so the transcript stays truthful.
+          if (resultBlocks.length) {
+            history.push(newMessage("user", resultBlocks.join("\n\n")));
+          }
+          return finish("interrupted", "", iteration);
+        }
+
+        events.onToolStart?.(call);
+        logger.info("tool", `run ${call.tool}`, { args: loggableArguments(call) });
+        const startedAt = Date.now();
+        const result = await opts.tools.run(call.tool, call.arguments);
+        logger.info("tool", `done ${call.tool}`, {
+          ms: Date.now() - startedAt,
+          error: Boolean(result.error),
+          denied: Boolean(result.denied),
+          outputChars: result.output.length,
+        });
+        logger.debug("tool", `output ${call.tool}`, { output: result.output });
+        events.onToolEnd?.(call, result);
+        executedCalls++;
+        if (result.denied) deniedCalls++;
+
+        // Watching a model send the same failing call four times in a row is
+        // watching it spend the step budget on a result it has already been
+        // given. The tool's own message clearly is not landing by repetition, so
+        // say plainly that it is a repetition.
+        let output = result.output;
+        if (result.error && !result.denied) {
+          const signature = `${call.tool}:${JSON.stringify(call.arguments ?? {})}`;
+          const attempts = (failedCalls.get(signature) ?? 0) + 1;
+          failedCalls.set(signature, attempts);
+          if (attempts > 1) output = `${output}\n\n${repeatedCallAdvice(call.tool, attempts)}`;
+        }
+
+        resultBlocks.push(formatToolResult(call, output, Boolean(result.error)));
+      }
+
+      // A closing block beside tool calls closes nothing: the model wrote
+      // its summary before seeing what the calls returned. The calls ran;
+      // the block is named so it is sent again, alone, once they are in.
+      if (terminal) {
+        const name = terminalName(terminal);
+        logger.info("protocol", "closing block ignored beside tool calls", { block: name });
+        resultBlocks.push(
+          `[OnFlip] The ${name} block in that reply was ignored: it arrived beside tool calls whose results you had not seen. ` +
+            `Read the results above, and when the turn really is over send the ${name} block alone, in its own reply.`
+        );
+      }
+
+      history.push(
+        newMessage("user", resultBlocks.join("\n\n"), { toolName: realCalls[0].tool })
+      );
+      continue;
+    }
+
+    // ---- a closing block: the model says the turn is over ------------------
+    if (terminal) {
+      const name = terminalName(terminal)!;
+      const open = openTodoCount(opts.session.todos);
+      if (name === "done") {
+        // Done with items still open on its own list is the one shape of
+        // stopping short the protocol can see without reading a word. Said
+        // once; a second `done` is the model insisting, and it may be right
+        // (the list is stale) — the open items are named in the notice.
+        if (open > 0 && !doneNudged && totalNudges < MAX_NUDGES_PER_TURN) {
+          doneNudged = true;
+          totalNudges++;
+          events.onNotice?.(
+            `ChatGPT said it was done with ${open} task${open === 1 ? "" : "s"} still open on its list — asking it to finish or close them.`
+          );
+          history.push(newMessage("user", doneWithOpenTodosNudge({ openTodos, openCount: open })));
+          continue;
+        }
+        const summary = stringArgument(terminal.arguments.summary);
+        const final = composeFinal(pendingProse, text, summary) || "Done.";
+        if (open > 0) {
+          events.onNotice?.(
+            `ChatGPT finished with ${open} task${open === 1 ? "" : "s"} still open on its list — say "continue" if they matter.`
+          );
+        }
+        events.onFinal?.(final, { kind: "done", openTodos: open });
+        return finish("done", final, iteration);
+      }
+      // ask_user: the question is the final message, options as a list.
+      const question = stringArgument(terminal.arguments.question);
+      const options = stringList(terminal.arguments.options);
+      const asked = [question, ...options.map((o) => `- ${o}`)].filter(Boolean).join("\n");
+      const final =
+        composeFinal(pendingProse, text, asked) ||
+        "ChatGPT ended the turn with a question but left it blank — say how to proceed.";
+      events.onFinal?.(final, { kind: "ask_user", openTodos: open, options });
+      return finish("ask_user", final, iteration);
+    }
+
+    // ---- no block at all: a broken call, or a reply that ends nothing -----
+    // A call that was attempted but did not parse must never be shown to the
+    // user as an answer — that is how a broken JSON blob ends up on screen
+    // instead of the disk usage they asked for.
+    if (malformed && protocolCorrections < MAX_PROTOCOL_CORRECTIONS && totalNudges < MAX_NUDGES_PER_TURN) {
+      // The raw reply is the only thing that explains a parse failure, so it
+      // is recorded at warn level rather than debug — a normal run that goes
+      // wrong must leave enough behind to diagnose without reproducing it.
+      logger.warn("protocol", "reply did not parse", { reason: malformed, reply: raw });
+      protocolCorrections++;
+      totalNudges++;
+      events.onNotice?.(`Malformed tool call — ${malformed} Asking for a retry.`);
+      history.push(
+        newMessage("user", protocolCorrection(malformed, { attempt: protocolCorrections }))
+      );
+      continue;
+    }
+    // Out of retries on a call that never parsed. The reply is a broken tool
+    // call, not an answer, so it is reported as a failure rather than
+    // printed at the user as though it were one.
+    if (malformed) {
+      throw new Error(
+        `ChatGPT kept returning a tool call that could not be parsed (${malformed.replace(/\.$/, "")}). ` +
+          "This usually means the reply is being mangled in transit. Try /new to start a fresh conversation, or a different model with /model."
+      );
+    }
+
+    noBlockReplies++;
+
+    // ChatGPT's own service messages come back through the same channel as a
+    // reply and read like the agent's answer. Saying whose message it is
+    // saves the user debugging OnFlip for something OnFlip did not do — and
+    // nudging ChatGPT's error page to "finish properly" would be absurd.
+    const service = detectServiceMessage(text);
+    if (service) {
+      logger.warn("agent", "chatgpt service message", { text: text.trim().slice(0, 300) });
+      events.onNotice?.(service);
+      const final = composeFinal(pendingProse, text);
+      events.onFinal?.(final, { kind: "prose", openTodos: openTodoCount(opts.session.todos) });
+      return finish("prose", final, iteration);
+    }
+
+    const squashed = squash(text);
+    const repeated = Boolean(squashed) && squashed === lastNoCallText;
+    const variant = classifySlip(text, executedCalls, deniedCalls);
+    const open = openTodoCount(opts.session.todos);
+
+    if (!repeated && protocolCorrections < MAX_NO_BLOCK_NUDGES && totalNudges < MAX_NUDGES_PER_TURN) {
+      protocolCorrections++;
+      totalNudges++;
+      pendingProse = composeFinal(pendingProse, text);
+      lastNoCallText = squashed;
+      // The long form goes to the model; the person gets one plain line.
+      // Reported live: the full correction, repeated on every retry, read
+      // as the app shouting at them about a "protocol" they never saw.
+      const what =
+        variant === "handoff"
+          ? "ChatGPT tried to hand the task to its own ChatGPT Work agent, which cannot see this computer"
+          : variant === "denial"
+            ? "ChatGPT replied that it could not use its tools"
+            : variant === "permission"
+              ? "ChatGPT asked for permission instead of acting"
+              : variant === "fabrication"
+                ? "ChatGPT described running something without actually calling a tool"
+                : variant === "cut"
+                  ? "ChatGPT's reply looks cut off"
+                  : open > 0
+                    ? `ChatGPT stopped with ${open} task${open === 1 ? "" : "s"} still open on its list`
+                    : "ChatGPT replied without closing the turn";
+      logger.info("protocol", "no block in reply; nudging", {
+        attempt: protocolCorrections,
+        variant,
+        openTodos: open,
+        proseChars: text.length,
+      });
+      events.onNotice?.(
+        `${what} — asking it to continue or finish (${protocolCorrections} of ${MAX_NO_BLOCK_NUDGES}).`
+      );
+      history.push(
+        newMessage(
+          "user",
+          noBlockNudge({
+            tools: opts.tools.list.map((t) => t.name),
+            attempt: protocolCorrections,
+            variant,
+            openTodos,
+            openCount: open,
+          })
+        )
+      );
+      continue;
+    }
+
+    // Nudges spent, or the model sent the same thing twice: the prose is the
+    // answer. Saying why is worth more than the acceptance itself — a
+    // denial in particular reads to the user as "the app has no tools" when
+    // the tools were there and listed all along.
+    if (repeated) {
+      logger.info("protocol", "block-less reply repeated verbatim; accepting it", { proseChars: text.length });
+      events.onNotice?.("ChatGPT sent the same reply again — showing it as the answer.");
+    } else if (variant === "denial") {
+      logger.warn("agent", "model refused the tool protocol", {
+        model: opts.model,
+        nudges: protocolCorrections,
+      });
+      events.onNotice?.(
+        `ChatGPT would not use its tools even after ${protocolCorrections} reminders, so nothing was run. ` +
+          "The tools were attached the whole time — this is the model declining to follow them, which the lighter models do often. " +
+          "Switch to a stronger model with the chip under the composer and send again; asking it to list its OnFlip tools also often breaks the deadlock."
+      );
+    } else {
+      logger.info("protocol", "nudges spent; accepting prose as the answer", {
+        nudges: protocolCorrections,
+        variant,
+        openTodos: open,
+      });
+      events.onNotice?.(
+        `ChatGPT gave no closing block after ${protocolCorrections} reminders — showing its reply as the answer.` +
+          (open > 0 ? ` ${open} task${open === 1 ? "" : "s"} on its list ${open === 1 ? "is" : "are"} still open; say "continue" to carry on.` : "")
+      );
+    }
+    const final = composeFinal(pendingProse, text);
+    events.onFinal?.(final, { kind: "prose", openTodos: open });
+    return finish(repeated ? "repeat" : "prose", final, iteration);
   }
 
-  return { finalAnswer: "", iterations: budget, exhausted: true, interrupted: false };
+  return finish("exhausted", "", budget);
 }
 
 /**
@@ -368,9 +593,8 @@ async function compactIfLarge(
   const before = transcriptChars(history);
   logger.info("agent", "compacting", { reason, messages: history.length, chars: before });
   events.onNotice?.(`Context is getting long (${reason}) — compacting.`);
-  const dropped = history.filter((m) => m.role !== "system");
-  await compact(history, opts);
-  events.onCompacted?.(dropped);
+  const dropped = await compact(history, opts);
+  if (dropped.length) events.onCompacted?.(dropped);
 
   const after = transcriptChars(history);
   logger.info("agent", "compacted", {
@@ -401,7 +625,7 @@ async function sendWithRetry(
   history: ChatMessage[],
   opts: AgentOptions,
   events: AgentEvents
-): Promise<string> {
+): Promise<TransportReply> {
   const sendOptions: SendOptions = {
     model: opts.model,
     thinking: opts.thinking,
@@ -417,7 +641,7 @@ async function sendWithRetry(
       if (reply.content.trim()) {
         // A reply that lands is the only proof the block has lifted.
         clearCooldown();
-        return reply.content;
+        return reply;
       }
       lastError = new Error("ChatGPT returned an empty reply.");
     } catch (e) {
@@ -437,6 +661,15 @@ async function sendWithRetry(
         throw e;
       }
       if (failure.kind === "fatal") throw e;
+      // A server error page twice from the same thread is that thread, not
+      // the moment: measured, three identical retries into one conversation
+      // all died at thirty seconds. The next attempt replays into a fresh
+      // chat instead, which costs a full resend and is the only retry that
+      // has a chance.
+      if (attempt >= 1 && attempt < MAX_TRANSPORT_RETRIES && /reached the model/.test(message)) {
+        opts.transport.reset();
+        events.onNotice?.("That chat keeps failing — the next try starts a fresh one.");
+      }
     }
 
     if (attempt < MAX_TRANSPORT_RETRIES) {
@@ -455,7 +688,122 @@ async function sendWithRetry(
       await delay(waitMs, opts.signal);
     }
   }
-  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+  const finalMessage = lastError instanceof Error ? lastError.message : String(lastError);
+  // Repeated server errors on Auto have one likely cause worth naming: on a
+  // paid plan Auto routes an agent's prompts into Pro thinking, and a long
+  // silent reasoning pass is what ChatGPT's own front end gives up on at
+  // thirty seconds. A fast model does not reach that limit.
+  if (/reached the model/.test(finalMessage) && /^auto$/i.test(String(opts.model ?? "").trim())) {
+    throw new Error(
+      `${finalMessage} It failed ${MAX_TRANSPORT_RETRIES + 1} times in a row, each about thirty seconds in — the shape of a long reasoning pass timing out on ChatGPT's side. ` +
+        "The model is set to Auto, which can route into Pro thinking: pick GPT-5.6 Luna (or another fast model) in the chip under the composer and send again."
+    );
+  }
+  throw lastError instanceof Error ? lastError : new Error(finalMessage);
+}
+
+/**
+ * Whether the registry would resolve a name — aliases and spelling included,
+ * since `get` is what the loop itself dispatches through. A registry without
+ * one (a scripted fake) falls back to the advertised names plus the closing
+ * blocks, which every registry answers to.
+ */
+function toolKnownTo(tools: ToolRegistry): (name: string) => boolean {
+  if (typeof tools.get === "function") return (name) => tools.get(name) !== undefined;
+  const names = new Set([
+    ...(tools.list ?? []).map((t) => t.name.toLowerCase()),
+    ...TERMINAL_TOOL_NAMES,
+  ]);
+  return (name) => names.has(name.trim().toLowerCase());
+}
+
+/**
+ * Which closing block a call is, if it is one.
+ *
+ * Resolved through the registry's own alias table when there is one, so
+ * `finish`, `attempt_completion` and `final_answer` — the names other agent
+ * protocols use, which a model reaches for out of habit — close the turn
+ * exactly as `done` does. A registry without the method (a scripted fake)
+ * gets the spelling folded and the two names matched literally.
+ */
+function terminalNameOf(tools: ToolRegistry, name: string): TerminalToolName | null {
+  const canon =
+    typeof tools.canonical === "function"
+      ? tools.canonical(name)
+      : name.trim().toLowerCase().replace(/[-\s]/g, "_");
+  return isTerminalTool(canon) ? canon : null;
+}
+
+/** An argument as text, whatever shape the model gave it. */
+function stringArgument(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+/**
+ * A list argument as strings: a real array, a block scalar with one item
+ * per line (with or without `- `), or a single value.
+ */
+function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => stringArgument(v).trim()).filter(Boolean);
+  const text = stringArgument(value).trim();
+  if (!text) return [];
+  return text
+    .split("\n")
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim())
+    .filter(Boolean);
+}
+
+function squash(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
+/**
+ * The user-facing message assembled from what the model wrote across the
+ * replies that closed a turn: prose it sent before a nudge, prose in front
+ * of the closing block, and the block's own summary.
+ *
+ * Parts are kept in order and de-duplicated by containment, because the
+ * summary often repeats the prose word for word — the nudge tells the model
+ * not to, and it does anyway. Empty when every part is.
+ */
+export function composeFinal(...parts: Array<string | undefined>): string {
+  const kept: string[] = [];
+  for (const raw of parts) {
+    const part = (raw ?? "").trim();
+    if (!part) continue;
+    const s = squash(part);
+    if (kept.some((k) => squash(k).includes(s))) continue;
+    for (let i = kept.length - 1; i >= 0; i--) {
+      if (s.includes(squash(kept[i]))) kept.splice(i, 1);
+    }
+    kept.push(part);
+  }
+  return kept.join("\n\n");
+}
+
+/**
+ * Tool arguments as they may be written to the log.
+ *
+ * `browser_type` types whatever it is handed, and what it is handed is
+ * sometimes a password — the model filling in a login form the user asked it
+ * to. Every other argument stays verbatim, because verbatim is what makes the
+ * log diagnosable; this one is replaced by its length, which still tells a
+ * flattened payload from an empty one.
+ */
+function loggableArguments(call: ToolCall): Record<string, unknown> {
+  if (call.tool.toLowerCase().replace(/[-\s]/g, "_") !== "browser_type") return call.arguments;
+  const text = call.arguments?.text;
+  if (typeof text !== "string") return call.arguments;
+  return { ...call.arguments, text: `<redacted ${text.length} chars>` };
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -498,29 +846,6 @@ function repeatedCallAdvice(tool: string, attempts: number): string {
 }
 
 /**
- * Catch the characteristic failure of driving a chat model as an agent: it
- * narrates having run something instead of emitting a tool call, then reports
- * output it invented. Only strong signals fire — a false positive costs the
- * user a wasted round trip.
- */
-/**
- * The model asking for permission instead of calling the tool.
- *
- * OnFlip owns approval, so a request for it is a dead end: nothing runs, the
- * turn ends, and the user is left staring at a question they already answered
- * by asking in the first place. The signature is narrow on purpose — an
- * ordinary clarifying question ("which of these did you mean?") must survive.
- */
-/**
- * Is this ChatGPT talking, rather than the model answering?
- *
- * Image moderation, rate limits and internal errors all arrive as ordinary
- * assistant text, so they get rendered as the agent's answer — and the user
- * goes looking for the bug in OnFlip. Gated on a short reply, because a long
- * answer that happens to quote one of these phrases is discussing it, not
- * being it.
- */
-/**
  * Does this text carry the instructions OnFlip sends, rather than a reply?
  *
  * Two independent markers, both of which ride on every payload and neither
@@ -536,7 +861,129 @@ function looksLikeOwnPayload(text: string): boolean {
 
 /** Replace typographic quotes with their ASCII equivalents. */
 function straighten(text: string): string {
-  return text.replace(/[‘’ʼ]/g, "'").replace(/[“”]/g, '"');
+  // Uzbek's oʻ/gʻ are written with several different apostrophes; one form
+  // is what the patterns below look for.
+  return text.replace(/[‘’ʼʻ`´]/g, "'").replace(/[“”]/g, '"');
+}
+
+// ---------------------------------------------------------------------------
+// wording hints
+// ---------------------------------------------------------------------------
+//
+// None of what follows decides whether a turn is over — the closing blocks
+// do that. These read a block-less reply only to pick the nudge that answers
+// it: a model that says the tools are missing needs the roster, one asking
+// for permission needs to hear that approval is OnFlip's job, one narrating
+// output it never saw needs to be told the output is invented. A reply none
+// of them recognise gets the plain nudge, which is enough.
+
+/**
+ * The same slips, in the languages OnFlip's own UI ships in.
+ *
+ * The model answers in the language it is written to, and Russian- and
+ * Uzbek-speaking users are written to in Russian and Uzbek. Word boundaries
+ * are ASCII-only in these patterns' engine, so Cyrillic is anchored on
+ * neighbouring non-letters instead of `\b`. Uzbek is matched in Latin
+ * script, which is what the model writes.
+ */
+const RU_DENIES_TOOLS =
+  /(?:(?:не\s+могу|не\s+смогу|не\s+имею\s+возможности|невозможно|нет\s+возможности)[^.]{0,60}(?:инструмент|onflip|команд[уы]|выполнить|запустить|вызвать|редактировать|изменить\s+файл)|(?:инструмент\w*|onflip)[^.]{0,40}(?:недоступ|не\s+доступ|не\s+подключ|не\s+активн|отсутству|не\s+предоставлен|не\s+вижу)|нет\s+доступа\s+к[^.]{0,40}(?:инструмент|файл|машин|компьютер|систем)|в\s+этом\s+(?:чате|разговоре|сообщении|ходе|диалоге)[^.]{0,40}(?:не\s+могу|недоступ|нельзя))/i;
+const UZ_DENIES_TOOLS =
+  /(?:(?:vosita|asbob|onflip|buyruq)[^.]{0,50}(?:mavjud\s+emas|yo'q|ishlamaydi|ulanmagan|faol\s+emas|ko'rinmayapti)|(?:ishga\s+tushira\s+olmayman|bajara\s+olmayman|foydalana\s+olmayman|ishlata\s+olmayman|kirish\s+(?:huquqim|imkonim)\s+yo'q)|bu\s+(?:chat|suhbat|xabar)da[^.]{0,40}(?:olmayman|mumkin\s+emas|mavjud\s+emas))/i;
+
+const RU_ASKS_PERMISSION =
+  /(?:подтвердите|разрешите|разрешаете|одобрите|одобряете|можно\s+ли\s+(?:мне\s+)?(?:запустить|выполнить|изменить|удалить|создать|перезаписать)|могу\s+ли\s+я\s+(?:запустить|выполнить|изменить|удалить)|нужно\s+(?:ваше\s+)?(?:разрешение|подтверждение|одобрение)|жду\s+(?:вашего\s+)?(?:разрешения|подтверждения|одобрения)|дайте\s+(?:разрешение|добро))/i;
+const UZ_ASKS_PERMISSION =
+  /(?:ruxsat\s+ber|tasdiqla(?:ng|shingiz)|ruxsat\s+berasizmi|ruxsatingiz\s+kerak|tasdiqlashingiz\s+kerak|(?:ishga\s+tushir|bajar|o'zgartir|o'chir|yarat)[^.?]{0,30}mumkinmi|ruxsatingizni\s+kutaman)/i;
+
+const RU_CLAIMS_EXECUTION =
+  /(?:^|[^а-яё])я\s+(?:уже\s+)?(?:запустил|выполнил|прочитал|проверил|создал|обновил|собрал|установил|изменил|удалил|открыл|посмотрел|отредактировал|прогнал)(?:а)?(?=\s|[.,;:!?]|$)/i;
+const UZ_CLAIMS_EXECUTION =
+  /(?:ishga\s+tushirdim|bajardim|o'qidim|tekshirdim|yaratdim|yangiladim|o'rnatdim|o'zgartirdim|o'chirdim|ochdim|ko'rib\s+chiqdim|tuzatdim)/i;
+
+/** Somewhere a tool of the *user's* lives: their machine, repo or manifest. */
+const THEIR_PLACE =
+  "(?:in|on|from|inside|within) (?:(?:your|the|this|that) )?(?:app|application|site|website|page|project|admin|dashboard|machine|computer|repo|repository|package\\.json|codebase|workspace)\\b";
+const TOOL_THEN_PLACE = new RegExp(`\\btools?\\b[^.]{0,40}\\b${THEIR_PLACE}`, "i");
+const PLACE_THEN_TOOL = new RegExp(`\\b${THEIR_PLACE}[^.]{0,60}\\btools?\\b`, "i");
+
+function openTodoCount(todos: SessionState["todos"] | undefined): number {
+  return (todos ?? []).filter((t) => t.status === "pending" || t.status === "in_progress").length;
+}
+
+/** The open task-list items, one line each, for a nudge to name. */
+function openTodoLines(todos: SessionState["todos"] | undefined): string[] {
+  return (todos ?? [])
+    .filter((t) => t.status === "pending" || t.status === "in_progress")
+    .slice(0, 8)
+    .map((t) => `${t.status === "in_progress" ? "[~]" : "[ ]"} ${t.content}`);
+}
+
+/**
+ * Which nudge a block-less reply gets.
+ *
+ * Gated the way the detectors always were. Fabrication only applies while
+ * nothing has actually run: once a tool has produced real output, "I ran
+ * the build and it failed" is an accurate summary, not an invention.
+ * Permission and denial stop once something has been refused: the denial
+ * message itself tells the model to acknowledge it and ask how to proceed,
+ * so correcting "since you declined, I can't run npm install" for doing
+ * exactly that would be a contradiction. The hand-off is checked first: it
+ * is the most certain of the slips and the only one the others cannot see,
+ * since the card claims nothing and asks nothing.
+ */
+export function classifySlip(
+  text: string,
+  executedCalls: number,
+  deniedCalls: number
+): SlipVariant | null {
+  if (detectWorkHandoff(text)) return "handoff";
+  if (deniedCalls === 0 && detectToolDenial(text)) return "denial";
+  if (deniedCalls === 0 && detectPermissionRequest(text)) return "permission";
+  if (executedCalls === 0 && detectFabrication(text)) return "fabrication";
+  if (looksCutOff(text)) return "cut";
+  return null;
+}
+
+/**
+ * A reply that stops mid-clause is a truncated stream, not an answer.
+ *
+ * Live: a paused generation was accepted seven characters in — "I'll re".
+ * Two structural tells, neither about the verb: a fence opened and never
+ * closed, and a very short reply that ends inside a promise with no
+ * punctuation. ChatGPT's own truncation flag (`meta.truncated`) is handled
+ * before any of this; this is for the transports that have no such flag.
+ */
+export function looksCutOff(raw: string): boolean {
+  const text = straighten(raw).trim();
+  if (!text) return false;
+  const fenceLines = text.split("\n").filter((line) => /^\s*(`{3,}|~{3,})/.test(line)).length;
+  if (fenceLines % 2 === 1) return true;
+  return (
+    text.length < 100 &&
+    /\b(i'?ll|i will|i'?m going to|let me)\s+\w{0,12}$/i.test(text) &&
+    !/[.!?…)"']$/.test(text)
+  );
+}
+
+/**
+ * ChatGPT routing the task to its own agent product instead of answering.
+ *
+ * Live, on a coding request: the reply was a "Continue in ChatGPT Work"
+ * card — a one-line summary of the task, then "Continuing…" and a button —
+ * with no tool call and nothing done. Work runs on OpenAI's computers and
+ * cannot see this one, so the hand-off is a refusal in a friendlier shape.
+ * Matched on the card's own wording, which the model does not otherwise use.
+ */
+export function detectWorkHandoff(text: string): boolean {
+  const t = straighten(text.trim());
+  if (!t || t.length > 1200) return false;
+  return (
+    /\bcontinue in (chatgpt )?work\b/i.test(t) ||
+    /\bcontinuing in (chatgpt )?work\b/i.test(t) ||
+    /\b(open|opened|run|running|continue|continuing|hand(ed|ing)? (this |it )?(off )?to|moved? (this |it )?to) (in |into )?(chatgpt work|codex|agent mode)\b/i.test(t) ||
+    /\bfix issues and run checks in work\b/i.test(t)
+  );
 }
 
 /**
@@ -544,22 +991,26 @@ function straighten(text: string): string {
  *
  * It says this while sitting in a thread that was handed the whole tool
  * list, so it is a misreading of the protocol rather than a fact — and one
- * worth correcting, because the alternative is a turn that does nothing and
- * a user who is told their agent has no tools.
+ * worth answering with the roster, because the alternative is a turn that
+ * does nothing and a user who is told their agent has no tools.
  */
-export function detectToolDenial(text: string): string | null {
+export function detectToolDenial(text: string): boolean {
   // ChatGPT renders apostrophes as U+2019, so a pattern written with the
   // typewriter apostrophe matches nothing it actually says.
   const t = straighten(text.trim());
-  if (!t || t.length > 600) return null;
+  if (!t || t.length > 600) return false;
   // Talking about the *user's* tools — "the export tool in your app is not
-  // accessible from the admin page" — is an answer about their code, not a
-  // refusal about OnFlip's own tools. OnFlip denials say "in this
-  // conversation/chat/turn", never "in your app".
-  if (/\btools?\b[^.]{0,30}\bin (your|the|this) (app|application|site|website|page|project|admin|dashboard)\b/i.test(t)) {
-    return null;
-  }
-  const denies =
+  // accessible from the admin page", "I don't see a build tool in
+  // package.json", "the gh CLI is not available on this machine, so I could
+  // not use that tool" — is an answer about their code or their machine,
+  // not a refusal about OnFlip's own tools. OnFlip denials say "in this
+  // conversation/chat/turn", never "in your app" or "on this machine", so
+  // a sentence that says both is still read as one.
+  const aboutTheirs = TOOL_THEN_PLACE.test(t) || PLACE_THEN_TOOL.test(t);
+  const aboutOurs =
+    /\b(?:onflip|(?:this|the) (?:chat|conversation|turn|message|thread|context|session|runtime))\b/i.test(t);
+  if (aboutTheirs && !aboutOurs) return false;
+  return (
     /\b(do ?n'?t|cannot|can'?t|no|not) (have|see|access|reach|use)\b[^.]{0,40}\btools?\b/i.test(t) ||
     // "I'm sorry, but I can't execute the local file-editing tool in this
     // turn." Live, and missed by everything else here: the verb is `execute`,
@@ -613,14 +1064,9 @@ export function detectToolDenial(text: string): string | null {
     // tools, not the OnFlip filesystem tools." Not a refusal in form at
     // all — a confident description of a tool namespace the model went
     // looking for and did not find, which ends the turn just as dead.
-    /\bnot\b[^.]{0,40}\bthe onflip\b[^.]{0,30}\btools?\b/i.test(t);
-  if (!denies) return null;
-  return (
-    "you said a tool could not run, or that OnFlip executed nothing — but " +
-    "OnFlip runs every onflip block you emit, and this reply contained none. " +
-    "The tools are attached to this conversation and callable on every turn " +
-    "of it, this one included — emit the onflip block now instead of " +
-    "describing what did not happen"
+    /\bnot\b[^.]{0,40}\bthe onflip\b[^.]{0,30}\btools?\b/i.test(t) ||
+    RU_DENIES_TOOLS.test(t) ||
+    UZ_DENIES_TOOLS.test(t)
   );
 }
 
@@ -634,32 +1080,65 @@ function detectServiceMessage(text: string): string | null {
   return serviceMessage(text);
 }
 
-export function detectPermissionRequest(raw: string): string | null {
+/**
+ * "confirm" followed by something that can be done, rather than something
+ * that can merely be true: the call, the go-ahead, "that I should", "and
+ * I'll". A bare "that …" is left out on purpose — "confirm that the path is
+ * right" is a question about a fact.
+ */
+const ASKS_TO_CONFIRM_ACTION = new RegExp(
+  "\\b(?:please|kindly|do you|can you|could you|will you) confirm,?\\s+(?:" +
+    "this|it" +
+    "|(?:the|this|that|these|those|each|all)(?: \\w+){0,2} (?:commands?|calls?|actions?|changes?|edits?|runs?|steps?|operations?|deletions?|writes?|installs?|installation|removal|execution|invocation|requests?|plan)" +
+    "|(?:that )?(?:i|you want me to|you'?d like me to)" +
+    "|(?:whether|if) (?:i|you)" +
+    "|(?:so|and|before) (?:that )?i" +
+    "|(?:to )?(?:proceed|continue|go ahead)" +
+    ")\\b",
+  "i"
+);
+
+/**
+ * The model asking for permission instead of calling the tool.
+ *
+ * OnFlip owns approval, so a request for it is a dead end: nothing runs, the
+ * turn ends, and the user is left staring at a question they already answered
+ * by asking in the first place. The signature is narrow on purpose — an
+ * ordinary clarifying question ("which of these did you mean?") must survive,
+ * and now has a block of its own (`ask_user`) that never comes through here.
+ */
+export function detectPermissionRequest(raw: string): boolean {
   const text = straighten(raw).trim();
-  if (!text) return null;
+  if (!text) return false;
   // A permission stall is short — it is a question, not a report. A long
   // final answer that happens to contain "confirm" near "run" is an answer,
   // and correcting it costs a full round trip. Live: an audit report saying
   // "to confirm the fix, run the build" was rejected as a permission slip.
-  if (text.length > 600) return null;
+  if (text.length > 600) return false;
   // "What would you like me to check?" is a genuine scoping question — one
   // of the legitimate ways to end a turn — where "Would you like me to check
   // X?" is a yes/no stall about work the model should simply do. The
   // question word is the difference; forcing a retry on the former makes the
   // model guess at scope instead of asking.
   if (/\b(what|which|where|when|how (much|many))\b[^.?!]{0,30}\bwould you like me to\b/i.test(text)) {
-    return null;
+    return false;
   }
 
   // Asking the user to approve: a request aimed at them, not the mere
   // co-occurrence of "confirm" and "run" somewhere in the reply — which is
   // what this used to match, and most working replies contain both.
   const asksToRun =
-    /\b(please|kindly) (approve|confirm|grant)\b/i.test(text) ||
-    /\b(do you|can you|could you|will you) (approve|confirm|grant)\b/i.test(text) ||
+    /\b(please|kindly) (approve|grant)\b/i.test(text) ||
+    /\b(do you|can you|could you|will you) (approve|grant)\b/i.test(text) ||
+    // "Could you confirm the file path?" is a clarifying question; "could
+    // you confirm this / that I should run it / and I'll proceed" is a
+    // stall. What is being confirmed has to be an action or the go-ahead.
+    ASKS_TO_CONFIRM_ACTION.test(text) ||
     /\b(approval|permission|confirmation)\b[^.?!]{0,40}\b(before|so|and) i\b/i.test(text) ||
     /\bwait(ing)? for (your )?(approval|permission|confirmation|go-?ahead)\b/i.test(text) ||
-    /\bneeds? (your )?(approval|permission|confirmation)\b/i.test(text) ||
+    // Only when the model is the one who needs it. "The PR needs approval
+    // from a code owner" is a report about the user's repository.
+    /\b(?:i|i'?ll|i'?d|i'?m|i will|i would)\b[^.?!]{0,30}\bneeds? (your )?(approval|permission|confirmation)\b/i.test(text) ||
     /\bapprove (this|it|that|the (command|call|action))\b/i.test(text);
   const offersToRun =
     /\b(shall|should) i (run|execute|check|inspect)\b/i.test(text) ||
@@ -667,88 +1146,49 @@ export function detectPermissionRequest(raw: string): string | null {
     /\bwould you like me to (run|execute|check|inspect)\b/i.test(text) ||
     /\bi (can|could) (run|check|inspect)\b[^.]*\bbut\b/i.test(text);
 
-  if (asksToRun || offersToRun) {
-    return "you asked the user for permission instead of emitting the tool call — OnFlip handles approval itself, so nothing ran and the turn ended";
-  }
-  return null;
+  return asksToRun || offersToRun || RU_ASKS_PERMISSION.test(text) || UZ_ASKS_PERMISSION.test(text);
 }
 
 /**
- * The model announcing its next move instead of making it.
- *
- * A turn ends the moment a reply carries no tool call, so "I'll restore the
- * file and rebuild" is not a plan — it is the session stopping with the work
- * half done, and the user typing "continue" to do by hand what the loop should
- * have done itself.
- *
- * Neither of the other detectors sees it. Nothing false was claimed, so it is
- * not fabrication; nothing was asked for, so it is not a permission slip. And
- * it happens *after* tools have run, which is precisely where fabrication
- * detection stops looking.
+ * Something the verb acted on: "the build", "`npm test`", a path, a file name,
+ * a command. Without one, "I read the trace as a null dereference" and "I run
+ * into this a lot" both counted as claims of execution.
  */
-export function detectAbandonedTurn(raw: string): string | null {
-  const text = straighten(raw).trim();
-  // A closing report may reasonably mention what happens next. This is aimed
-  // at the one-line "here is what I am about to do" that ends a working turn.
-  if (!text || text.length > 400) return null;
+const EXECUTION_TARGET =
+  "(?:" +
+  "(?:the|a|an|this|that|these|those|your|my|our|its|each|every|both|all)\\b(?: \\S+){0,2} (?:files?|commands?|scripts?|tests?|suite|build|output|logs?|director(?:y|ies)|folders?|repo|repository|codebase|packages?|dependencies|contents?|results?|diff|changes?)\\b" +
+  "|`" +
+  "|(?:[A-Za-z]:[\\\\/]|\\.{1,2}[\\\\/]|~[\\\\/]|/)\\S+" +
+  "|\\S+[\\\\/]\\S+" +
+  "|[\\w-]+\\.[A-Za-z]{1,6}\\b" +
+  "|(?:npm|npx|yarn|pnpm|node|git|python|pip|cargo|go|dotnet|make|tsc|pytest|jest|ls|dir|cat|grep|rg)\\b" +
+  ")";
+// "I ran", "I've run", "I have run", "I just ran", "I've just run". The old
+// form wrote the contraction as a separate token — `i 've` — and so could
+// never match the way it is actually written.
+const CLAIMS_EXECUTION = new RegExp(
+  "\\bi(?:'ve| have)?(?: just)? (?:ran|run|executed|checked|opened|listed|searched|read|created|wrote|edited|installed|inspected)\\b(?::\\s*|\\s+)" +
+    EXECUTION_TARGET,
+  "i"
+);
 
-  // Handing the work back is a legitimate way to finish.
-  if (/\bi'?ll (leave|let you|let the|need you|wait|stop|hold|defer)\b/i.test(text)) return null;
-  if (/\byou'?ll need to\b|\bover to you\b/i.test(text)) return null;
-
-  // A reply that stops mid-clause is a truncated stream, not an answer.
-  // Live: a paused generation was accepted seven characters in — "I'll re" —
-  // and no verb-based pattern can see a verb that never finished arriving.
-  if (
-    text.length < 100 &&
-    /\b(i'?ll|i will|i'?m going to|let me)\s+\w{0,12}$/i.test(text) &&
-    !/[.!?…)"']$/.test(text)
-  ) {
-    return (
-      "your reply appears to be cut off mid-sentence — send the complete reply, " +
-      "continuing from where it stopped, with the tool call included"
-    );
-  }
-
-  const announcesNextStep =
-    /\b(i'?ll|i will|i'?m going to|i am going to|let me|next,? i'?ll)\b[^.]{0,40}\b(restore|rebuild|re-?read|read|run|fix|patch|apply|edit|update|write|create|add|remove|delete|check|verify|inspect|search|look|build|test|install|revert|continue|implement|refactor|rename|move|open|list|grep|start|try)\b/i;
-  // "I'm proceeding with the machine-side Excel report now." It is not a
-  // promise about the next turn, which is what the pattern above catches —
-  // it is the present tense, describing work supposedly under way in a
-  // reply that called nothing. Perception verbs are excluded: "I'm
-  // continuing to see the same error" is a report, not an abandoned turn.
-  const claimsToBeWorking =
-    /\bi'?m (now )?(proceeding|continuing|starting|beginning|carrying on)\b(?![^.]{0,30}\b(to see|seeing|to get|to observe|to notice)\b)/i;
-  if (!announcesNextStep.test(text) && !claimsToBeWorking.test(text)) return null;
+/**
+ * The characteristic failure of driving a chat model as an agent: it
+ * narrates having run something instead of emitting a tool call, then
+ * reports output it invented. Only strong signals fire — the nudge it
+ * selects says the output is invented, which must not be said of a real
+ * answer.
+ */
+export function detectFabrication(raw: string): boolean {
+  const text = straighten(raw);
+  if (!text.trim()) return false;
 
   return (
-    "you ended the turn by saying what you would do next instead of doing it — " +
-    "a reply with no tool call *is* the end of the turn, so emit the call now rather than describing it"
+    CLAIMS_EXECUTION.test(text) ||
+    /\b(?:running|executing) the (?:command|test|build)\b/i.test(text) ||
+    RU_CLAIMS_EXECUTION.test(text) ||
+    UZ_CLAIMS_EXECUTION.test(text)
   );
-}
-
-export function detectFabrication(raw: string): string | null {
-  const text = straighten(raw);
-  if (!text.trim()) return "the reply was empty";
-
-  const claimsExecution =
-    /\bi (?:just |have |'ve )?(?:ran|run|executed|checked|opened|listed|searched|read|created|wrote|edited|installed|inspected)\b/i.test(
-      text
-    ) || /\b(?:running|executing) the (?:command|test|build)\b/i.test(text);
-
-  // Content only obtainable by actually running something.
-  const showsOutput =
-    /```[\s\S]*?```/.test(text) ||
-    /^\s*(?:total \d+|drwx|-rw-|\$ |PS [A-Z]:\\)/m.test(text) ||
-    /\b(?:PASS|FAIL|\d+ passing|\d+ failing|exit code \d+)\b/.test(text);
-
-  if (claimsExecution && showsOutput) {
-    return "you described running something and showed its output, but emitted no tool call — that output is invented";
-  }
-  if (claimsExecution) {
-    return "you said you ran or read something, but emitted no tool call";
-  }
-  return null;
 }
 
 /**
@@ -757,8 +1197,13 @@ export function detectFabrication(raw: string): string | null {
  * The system prompt survives verbatim; everything after it collapses into one
  * handover brief. The transport is reset so the next send opens a clean thread
  * rather than appending to one whose beginning the model can no longer see.
+ *
+ * Returns the messages that actually left the transcript, which is what the
+ * caller archives — not "everything but the system prompt", which on a failed
+ * summary archived the kept tail while it was still live, and the desktop
+ * showed those messages twice.
  */
-async function compact(history: ChatMessage[], opts: AgentOptions): Promise<void> {
+async function compact(history: ChatMessage[], opts: AgentOptions): Promise<ChatMessage[]> {
   const systemMessage = history[0]?.role === "system" ? history[0] : null;
 
   // A summary is only worth having if it leaves room to work: a fifth of the
@@ -774,10 +1219,22 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<void
       [...history, newMessage("user", compactInstruction(target))],
       { model: opts.model, thinking: "low", signal: opts.signal }
     );
-    summary = parseTurn(reply.content).text.trim();
+    // The brief is asked for as prose, but a model that has been closing
+    // every reply with a `done` block may close this one too — and its
+    // summary argument is the brief.
+    const parsed = parseTurn(reply.content, toolKnownTo(opts.tools));
+    const closing = parsed.calls.find((c) => terminalNameOf(opts.tools, c.tool) === "done");
+    summary = (closing ? stringArgument(closing.arguments.summary) : "").trim() || parsed.text.trim();
   } catch {
     // Summarising is best-effort; losing the session would be worse.
   }
+
+  // Esc while the summary was being written: the browser client throws on
+  // abort and the catch above swallows it, so this used to carry on with an
+  // empty summary — reset the transport and cut the transcript to its tail.
+  // An interrupt that quietly lost the conversation. Nothing has been touched
+  // yet, so leaving now leaves everything as it was.
+  if (opts.signal?.aborted) return [];
 
   // Asked for a limit and given more anyway: keep the head, which is where a
   // handover brief puts the request and the state, and say it was cut.
@@ -792,7 +1249,10 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<void
   }
 
   opts.transport.reset();
-  const tail = history.slice(-8);
+  // The system message goes back on its own below; a short transcript used
+  // to keep it in the tail as well and push it twice.
+  const rest = history.filter((m) => m.role !== "system");
+  const tail = rest.slice(-8);
   history.length = 0;
   if (systemMessage) history.push(systemMessage);
 
@@ -809,10 +1269,11 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<void
         ].join("\n")
       )
     );
-  } else {
-    // No summary — keep the most recent exchanges verbatim instead.
-    history.push(...tail);
+    return rest;
   }
+  // No summary — keep the most recent exchanges verbatim instead.
+  history.push(...tail);
+  return rest.slice(0, rest.length - tail.length);
 }
 
 /** Explicit compaction, exposed to the /compact command. */
@@ -820,7 +1281,6 @@ export async function compactNow(
   history: ChatMessage[],
   opts: AgentOptions
 ): Promise<void> {
-  const dropped = history.filter((m) => m.role !== "system");
-  await compact(history, opts);
-  opts.events?.onCompacted?.(dropped);
+  const dropped = await compact(history, opts);
+  if (dropped.length) opts.events?.onCompacted?.(dropped);
 }

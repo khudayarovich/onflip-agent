@@ -84,6 +84,9 @@ export function Transcript({
   const [matchCount, setMatchCount] = useState(0);
   /** Live text ranges of every occurrence, in document order. */
   const rangesRef = useRef<Range[]>([]);
+  /** The cursor as a ref, for the effect below that must not re-run on it. */
+  const cursorRef = useRef(0);
+  cursorRef.current = matchCursor;
 
   useEffect(() => setMatchCursor(0), [query]);
   useEffect(() => {
@@ -125,6 +128,11 @@ export function Transcript({
     const Ctor = highlightCtor();
     if (registry && Ctor && ranges.length > 0) {
       registry.set("chat-find", new Ctor(...ranges));
+      // This runs on every streaming delta and has just dropped the current
+      // paint; the cursor effect below will not re-run for a delta, so the
+      // current occurrence is painted again here, without moving the view.
+      const current = ranges[Math.min(cursorRef.current, ranges.length - 1)];
+      registry.set("chat-find-current", new Ctor(current));
     }
     return () => {
       registry?.delete("chat-find");
@@ -142,6 +150,9 @@ export function Transcript({
     const range = ranges[Math.min(matchCursor, ranges.length - 1)];
     const Ctor = highlightCtor();
     if (registry && Ctor) registry.set("chat-find-current", new Ctor(range));
+    // Going to a match is leaving the bottom on purpose; the follow-output
+    // pin must not pull the view back, now or when the search closes.
+    pinnedRef.current = false;
     range.startContainer.parentElement?.scrollIntoView({ block: "center", behavior: "smooth" });
   }, [searchOpen, matchCursor, matchCount]);
 
@@ -164,7 +175,14 @@ export function Transcript({
 
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
+    if (!el || !pinnedRef.current) return;
+    // While a search has somewhere to go, it owns the scroll position: this
+    // effect runs after the one that centres a match, and would win.
+    if (searchOpen && matchCount > 0) return;
+    // Instant, not the container's smooth default: a smooth scroll fires
+    // intermediate onScroll events from above the threshold, which read as
+    // the user scrolling up and silently unpinned the view mid-stream.
+    el.scrollTo({ top: el.scrollHeight, behavior: "instant" });
   });
 
   if (items.length === 0 && !streaming.active) {
@@ -398,6 +416,13 @@ export function TranscriptItem({
         <div className="msg-duration">
           {item.interrupted ? t("workedUntilStopped", { time: formatElapsed(item.ms) })
                             : t("workedFor", { time: formatElapsed(item.ms) })}
+        </div>
+      );
+    case "question":
+      return (
+        <div className="msg-question">
+          <div className="msg-question-label">{t("questionLabel")}</div>
+          <Markdown text={item.text} />
         </div>
       );
     case "notice":

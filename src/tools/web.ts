@@ -1,10 +1,48 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ToolDefinition } from "../types";
-import { err, denied, asBool, asNumber, clip } from "./util";
+import { err, denied, asBool, asNumber, clip, resolveIn } from "./util";
 
 const FETCH_TIMEOUT = 30_000;
 const MAX_BYTES = 2_000_000;
+
+/**
+ * Read a body without first holding all of it.
+ *
+ * `res.arrayBuffer()` buffers the whole response before a size check can
+ * run, so a multi-gigabyte URL was pulled down in full and only then
+ * refused. A declared Content-Length over the cap is refused before a byte
+ * is read; otherwise the stream is consumed chunk by chunk and the request
+ * aborted the moment it goes over. `bytes` is the declared size when the
+ * server said one, null when the cap was hit mid-stream.
+ */
+async function readBodyCapped(
+  res: Response,
+  controller: AbortController,
+  maxBytes: number
+): Promise<{ buf: Buffer } | { tooLarge: true; bytes: number | null }> {
+  const declared = res.headers.get("content-length");
+  const expected = declared ? Number(declared) : NaN;
+  if (Number.isFinite(expected) && expected > maxBytes) {
+    controller.abort();
+    return { tooLarge: true, bytes: expected };
+  }
+  if (!res.body) return { buf: Buffer.alloc(0) };
+  const chunks: Buffer[] = [];
+  let total = 0;
+  const reader = res.body.getReader();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      controller.abort();
+      return { tooLarge: true, bytes: null };
+    }
+    chunks.push(Buffer.from(value));
+  }
+  return { buf: Buffer.concat(chunks) };
+}
 
 /**
  * Fetch a URL and return it as readable text. The agent already runs against a
@@ -78,10 +116,14 @@ export const webFetchTool: ToolDefinition = {
       });
 
       const contentType = res.headers.get("content-type") ?? "";
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length > MAX_BYTES) {
-        return err(`Response is ${Math.round(buf.length / 1024)}KB, over the 2MB limit.`);
+      const body = await readBodyCapped(res, controller, MAX_BYTES);
+      if ("tooLarge" in body) {
+        const size = body.bytes === null ? "Response is" : `Response is ${Math.round(body.bytes / 1024)}KB,`;
+        return err(
+          `${size} over the 2MB limit. Fetch a narrower URL, or download_file it and read the saved file in parts.`
+        );
       }
+      const { buf } = body;
 
       let text = buf.toString("utf8");
       if (!asBool(args.raw) && /text\/html/i.test(contentType)) text = htmlToText(text);
@@ -125,10 +167,23 @@ function htmlToText(html: string): string {
     .replace(/&gt;/gi, ">")
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
-    .replace(/&#(\d+);/g, (_m, code: string) => String.fromCharCode(Number(code)))
+    .replace(/&#(x[0-9a-f]+|\d+);/gi, numericEntity)
     .replace(/[ \t]+/g, " ")
     .replace(/\n\s*\n\s*\n+/g, "\n\n")
     .trim();
+}
+
+/**
+ * `&#8212;` or `&#x2014;` as the character it names — by code point, since
+ * fromCharCode cannot reach an emoji — or the entity itself if it names none.
+ */
+function numericEntity(entity: string, code: string): string {
+  const n = /^x/i.test(code) ? parseInt(code.slice(1), 16) : Number(code);
+  try {
+    return String.fromCodePoint(n);
+  } catch {
+    return entity;
+  }
 }
 
 /**
@@ -335,7 +390,9 @@ export const downloadFileTool: ToolDefinition = {
     if (url.protocol !== "http:" && url.protocol !== "https:") {
       return err(`Unsupported protocol: ${url.protocol}`);
     }
-    const target = path.resolve(ctx.cwd, rawPath);
+    // Resolved like the file tools do, so `~/Downloads/x.zip` lands in the
+    // home directory rather than in a folder literally named `~`.
+    const target = resolveIn(ctx.cwd, rawPath);
 
     const decision = await ctx.requestPermission({
       kind: "write",
@@ -358,10 +415,14 @@ export const downloadFileTool: ToolDefinition = {
         redirect: "follow",
       });
       if (!res.ok) return err(`Download failed: HTTP ${res.status} ${res.statusText}`);
-      const buf = Buffer.from(await res.arrayBuffer());
-      if (buf.length > MAX_DOWNLOAD_BYTES) {
-        return err(`File is ${Math.round(buf.length / 1024 / 1024)}MB, over the 50MB limit.`);
+      const body = await readBodyCapped(res, controller, MAX_DOWNLOAD_BYTES);
+      if ("tooLarge" in body) {
+        const size = body.bytes === null ? "File is" : `File is ${Math.round(body.bytes / 1024 / 1024)}MB,`;
+        return err(
+          `${size} over the 50MB limit. Nothing was saved; ask the user whether to fetch it with a shell command instead.`
+        );
       }
+      const { buf } = body;
       fs.mkdirSync(path.dirname(target), { recursive: true });
       fs.writeFileSync(target, buf);
       const kb = Math.max(1, Math.round(buf.length / 1024));

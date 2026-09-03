@@ -1,6 +1,10 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+// log.ts imports `configDir` from here, so this is a cycle. It is safe because
+// neither side touches the other at load time — the logger is only called
+// from inside functions, by which point both modules are complete.
+import { logger } from "./log";
 
 export interface OnFlipConfig {
   // -- auth ---------------------------------------------------------------
@@ -133,6 +137,12 @@ export interface OnFlipConfig {
   headed?: boolean;
   /** Reuse a persistent browser profile between runs. */
   persistProfile?: boolean;
+  /**
+   * The browser the automation profile belongs to. Recorded when the user
+   * signs in through it, because only that browser can read the cookies it
+   * wrote: Chrome's are encrypted with a key bound to Chrome.
+   */
+  browserChannel?: "chrome" | "msedge" | "chromium";
 
   /** Legacy key from earlier versions; migrated into `shell` on load. */
   sandbox?: boolean;
@@ -149,13 +159,80 @@ export function configPath(): string {
   return CONFIG_PATH;
 }
 
+/**
+ * Set while the config file exists but could not be read back.
+ *
+ * A parse failure used to read as an empty config, and the next save merged
+ * its patch into that emptiness and wrote the result over the file — one bad
+ * byte in config.json, from a write cut short or a hand edit, and the session
+ * cookies, the token, the model and every rule were gone. Now the file is set
+ * aside for inspection and every write is refused until a load succeeds.
+ */
+let lastLoadFailed = false;
+/** The copy is made once per process, not once per load. */
+let quarantined = false;
+
+function isMissing(error: unknown): boolean {
+  return (error as NodeJS.ErrnoException)?.code === "ENOENT";
+}
+
+/**
+ * PowerShell's `Set-Content -Encoding utf8` puts a byte-order mark on the
+ * file and JSON.parse rejects it, so a hand-edited config.json — or session
+ * file — would otherwise count as corrupt. Spelled as a code point rather
+ * than a literal, which is invisible in source.
+ */
+export function withoutBom(text: string): string {
+  return text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
+}
+
+function quarantineConfig(error: unknown): void {
+  const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+  const copy = `${CONFIG_PATH}.corrupt-${stamp}`;
+  let copied = false;
+  if (!quarantined) {
+    quarantined = true;
+    try {
+      fs.copyFileSync(CONFIG_PATH, copy);
+      copied = true;
+    } catch {
+      // Best effort: the original is left where it is either way.
+    }
+  }
+  logger.warn("config", "config.json could not be parsed; leaving it as it is and refusing to save over it", {
+    path: CONFIG_PATH,
+    error: error instanceof Error ? error.message : String(error),
+    copy: copied ? copy : null,
+  });
+}
+
 export function loadConfig(): OnFlipConfig {
-  let config: OnFlipConfig;
+  let raw: string;
   try {
-    config = JSON.parse(fs.readFileSync(CONFIG_PATH, "utf8")) as OnFlipConfig;
-  } catch {
+    raw = fs.readFileSync(CONFIG_PATH, "utf8");
+  } catch (e) {
+    // No file is the fresh-install case. Anything else — permissions, a
+    // directory in its place — means the contents are unknown, and writing
+    // over unknown contents is how they get lost.
+    lastLoadFailed = !isMissing(e);
     return {};
   }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(withoutBom(raw));
+  } catch (e) {
+    if (!lastLoadFailed) quarantineConfig(e);
+    lastLoadFailed = true;
+    return {};
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    if (!lastLoadFailed) quarantineConfig(new Error("the file is valid JSON but not an object"));
+    lastLoadFailed = true;
+    return {};
+  }
+  lastLoadFailed = false;
+  quarantined = false;
+  const config = parsed as OnFlipConfig;
   // `sandbox` used to mean "shell allowed". Keep old configs working.
   if (config.shell === undefined && typeof config.sandbox === "boolean") {
     config.shell = config.sandbox;
@@ -163,26 +240,55 @@ export function loadConfig(): OnFlipConfig {
   return config;
 }
 
-export function saveConfig(patch: OnFlipConfig): void {
+/**
+ * Write a file so that a crash mid-write cannot leave it truncated.
+ *
+ * The contents go to a sibling temp file and are renamed into place; the
+ * rename is atomic on every filesystem this runs on, so a reader sees either
+ * the old file or the new one and never half of the new one. Shared with the
+ * session store, which has the same thing to lose.
+ */
+export function writeFileAtomically(file: string, contents: string): void {
+  const temp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  fs.writeFileSync(temp, contents, { mode: 0o600 });
+  try {
+    fs.renameSync(temp, file);
+  } catch (e) {
+    try {
+      fs.rmSync(temp, { force: true });
+    } catch {
+      // The temp file is the lesser problem; the rename failure is reported.
+    }
+    throw e;
+  }
+}
+
+function writeConfig(config: OnFlipConfig, action: string): void {
+  if (lastLoadFailed) {
+    logger.warn("config", `not ${action}: the existing config.json could not be read, and saving would overwrite it`, {
+      path: CONFIG_PATH,
+    });
+    return;
+  }
   try {
     fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    const merged: OnFlipConfig = { ...loadConfig(), ...patch };
-    fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
+    writeFileAtomically(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
   } catch {
     // A read-only home directory should not stop the agent from running.
   }
 }
 
+export function saveConfig(patch: OnFlipConfig): void {
+  // Load first: it is what decides whether the file may be written at all.
+  const current = loadConfig();
+  writeConfig({ ...current, ...patch }, "saving config");
+}
+
 /** Remove keys entirely rather than setting them to undefined. */
 export function clearConfigKeys(keys: (keyof OnFlipConfig)[]): void {
-  try {
-    const config = loadConfig();
-    for (const key of keys) delete config[key];
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
-    fs.writeFileSync(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`, { mode: 0o600 });
-  } catch {
-    /* nothing to clear */
-  }
+  const config = loadConfig();
+  for (const key of keys) delete config[key];
+  writeConfig(config, "clearing config keys");
 }
 
 /**

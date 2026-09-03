@@ -215,21 +215,21 @@ export function normalizePlanId(planId: string | undefined): string {
     .replace(/plan$/, "");
 }
 
-/** Plans whose message allowance runs out inside a single agent session. */
-const LUNA_DEFAULT_PLANS = new Set(["free", "go"]);
-
 /**
  * Whether this plan should start on Luna rather than letting ChatGPT choose.
  *
- * Free and Go get a handful of messages on the stronger models and unlimited
- * text chat on Luna. An agent run is not one message — it is dozens of turns,
- * each a full round trip — so a session left on `auto` spends the whole
- * allowance in its first minute and finishes the task downgraded anyway,
- * having lost the thread of the conversation at the point it switched.
- * Starting on the model that can actually see the task through is the more
- * useful default for those two plans, and only for those two: every plan
- * above them has room for whatever ChatGPT would pick itself.
+ * Every plan, now. Free and Go get a handful of messages on the stronger
+ * models and unlimited text chat on Luna, and an agent run is dozens of
+ * turns, so a session left on `auto` spent the allowance in its first minute
+ * and finished downgraded anyway. The plans above were left on `auto` on the
+ * theory that they had room for whatever ChatGPT picked — and what ChatGPT
+ * picks for an agent's prompts on a Pro account is "Pro thinking", measured
+ * at twenty-odd seconds per turn, with the plan's Pro allowance draining
+ * behind it. Luna answers fast on every plan; anyone who wants a heavier
+ * model pins it with one click, and the pin is kept.
  */
 export function prefersLunaByDefault(planId: string | undefined): boolean {
-  return LUNA_DEFAULT_PLANS.has(normalizePlanId(planId));
+  // The plan is still normalised so a caller passing junk fails the same way
+  // it always did, and so the signature stays put for the day this differs.
+  return normalizePlanId(planId) !== "__never__";
 }

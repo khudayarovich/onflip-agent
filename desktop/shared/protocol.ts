@@ -72,6 +72,8 @@ export interface ToolResultDTO {
 export type ChatItem =
   | { type: "user"; id: string; text: string }
   | { type: "assistant"; id: string; text: string }
+  /** The agent ended its turn with a question only the user can settle. */
+  | { type: "question"; id: string; text: string; options?: string[] }
   | { type: "narration"; id: string; text: string }
   | { type: "tool"; id: string; call: ToolCallDTO; result?: ToolResultDTO }
   | { type: "image"; id: string; dataUrl: string; name: string }
@@ -170,6 +172,29 @@ export interface EngineStatus {
 
 export type ConnectState = "connecting" | "ready" | "signed-out" | "error";
 
+/** How far a user message got: accepted by ChatGPT, answered, or neither. */
+export type DeliveryState = "sent" | "read" | "failed";
+
+/** A click, key or scroll from the browser panel, replayed on the agent's page. */
+export interface BrowserInputDTO {
+  kind: "click" | "dblclick" | "contextmenu" | "wheel" | "key" | "text";
+  /** Position as a fraction of the frame, 0..1. */
+  x?: number;
+  y?: number;
+  deltaX?: number;
+  deltaY?: number;
+  /** A Playwright key name, modifiers composed ("Control+a"). */
+  key?: string;
+  text?: string;
+}
+
+export interface BrowserImportResult {
+  ok: boolean;
+  source?: string;
+  reason?: string;
+  report?: { browser: string; outcome: string; detail?: string }[];
+}
+
 // ---------------------------------------------------------------------------
 // approvals (engine → UI request; the UI answers)
 // ---------------------------------------------------------------------------
@@ -207,6 +232,11 @@ export type EngineEvent =
   | { event: "tool-progress"; data: { id: string; chunk: string } }
   | { event: "thinking"; data: { iteration: number } }
   | { event: "delta"; data: { tail: string } }
+  | { event: "delivery"; data: { id: string; state: DeliveryState } }
+  /** The turn stopped while a prompt was up; the prompt is void. */
+  | { event: "approval-cancelled"; data: Record<string, never> }
+  /** Where a browser sign-in has got to. */
+  | { event: "sign-in"; data: { state: "waiting" | "verifying" | "downloading" } }
   | {
       event: "turn";
       data: {
@@ -262,10 +292,44 @@ export interface EngineMethods {
   newSession: { params: Record<string, never>; result: EngineStatus };
   listSessions: { params: { limit?: number }; result: SessionSummaryDTO[] };
   resumeSession: { params: { id: string }; result: EngineStatus };
+  peekSession: {
+    params: { id: string };
+    result: { title: string; cwd: string; items: ChatItem[] };
+  };
   deleteSession: { params: { id: string }; result: { ok: boolean } };
+  /** Drop everything after a user message, handing its text back for editing. */
+  rollback: { params: { messageId: string }; result: { text: string } };
+
+  /** Signing in and out, and the agent's browser panel. */
+  importBrowserSession: { params: Record<string, never>; result: BrowserImportResult };
+  applySignIn: {
+    params: {
+      cookies: { name: string; value: string }[];
+      account?: { name?: string; email?: string };
+    };
+    result: { ok: boolean };
+  };
+  applySignOut: { params: Record<string, never>; result: { ok: boolean } };
+  /** The real browser a sign-in would open, or null when none is installed. */
+  signInBrowserInfo: { params: Record<string, never>; result: { name: string; channel: string } | null };
+  /** Open that browser on OnFlip's profile and wait for a ChatGPT session. */
+  signInWithBrowser: {
+    params: Record<string, never>;
+    result: { ok: boolean; reason?: string; browser?: string };
+  };
+  /** The user says they are done in the window: close it and check. */
+  finishBrowserSignIn: { params: Record<string, never>; result: boolean };
+  cancelBrowserSignIn: { params: Record<string, never>; result: boolean };
+  setBrowserViewport: {
+    params: { width: number; height: number; scale?: number };
+    result: { ok: boolean };
+  };
+  browserInput: { params: BrowserInputDTO; result: boolean };
 
   recentProjects: { params: Record<string, never>; result: RecentProjectDTO[] };
   openProject: { params: { dir: string }; result: EngineStatus };
+  /** A folder-less chat in a private scratch workspace. */
+  openScratch: { params: Record<string, never>; result: EngineStatus };
   changeCwd: { params: { dir: string }; result: EngineStatus };
 
   listModels: { params: Record<string, never>; result: ModelDTO[] };
@@ -285,7 +349,7 @@ export interface EngineMethods {
   sessionDiff: { params: Record<string, never>; result: FileDiff[] };
   undoPreview: {
     params: Record<string, never>;
-    result: { rel: string; existedBefore: boolean } | null;
+    result: { rel: string; existedBefore: boolean; unavailable?: boolean } | null;
   };
   undo: { params: Record<string, never>; result: { ok: boolean; message: string } };
   exportTranscript: { params: Record<string, never>; result: ExportResult };

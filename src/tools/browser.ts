@@ -548,7 +548,9 @@ function describe(shot: Snapshot, note?: string): string {
     lines.push("interactive elements: none found on this page");
   }
 
-  lines.push("", "page text:", clip(shot.text, MAX_TEXT));
+  // MAX_TEXT is a character budget, and clip's second argument counts
+  // lines — passed there, it let four times the intended text through.
+  lines.push("", "page text:", clip(shot.text, Number.POSITIVE_INFINITY, MAX_TEXT));
   return lines.join("\n");
 }
 
@@ -586,9 +588,21 @@ async function respond(p: Page, note: string): Promise<ToolResult> {
   // rather than snapshotting the page that is about to be replaced.
   await p.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
   await p.waitForTimeout(400);
-  const shot = await snapshot(p);
   // Mirror the result into the desktop's browser panel, if one is listening.
   void emitFrame(p, note);
+  let shot: Snapshot;
+  try {
+    shot = await snapshot(p);
+  } catch (e) {
+    // The action itself is done and cannot be taken back, so a snapshot lost
+    // to the navigation it set off must not read as a failure. Reported as
+    // one, the model clicked again and a form went in twice.
+    const reason = e instanceof Error ? e.message : String(e);
+    return ok(
+      `${note} The page changed before it could be read (${reason}) — call browser_snapshot to see where it is now.`,
+      { title: p.url() }
+    );
+  }
   return ok(describe(shot, note), { title: shot.title || shot.url });
 }
 
@@ -729,8 +743,14 @@ export const browserTypeTool: ToolDefinition = {
       .locator(`[data-onflip-ref="${found.ref}"]`)
       .getAttribute("type")
       .catch(() => null);
-    const isSecret = fieldType === "password";
-    const shown = isSecret ? "•".repeat(Math.min(text.length, 12)) : clip(text, 60);
+    // Attribute values keep the page's casing, and `type="Password"` is
+    // still a password field.
+    const isSecret = fieldType?.toLowerCase() === "password";
+    const shown = isSecret
+      ? "•".repeat(Math.min(text.length, 12))
+      : text.length > 60
+        ? `${text.slice(0, 60)}…`
+        : text;
 
     const stop = await allowed(ctx, "browser_type", `type into ${found.ref}: ${shown}`, [
       `page: ${p.url()}`,

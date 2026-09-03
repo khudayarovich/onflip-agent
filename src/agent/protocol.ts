@@ -49,19 +49,59 @@ export interface ParsedTurn {
   malformed?: string;
 }
 
+/**
+ * The names the registry answers to, or a predicate over them.
+ *
+ * Gates the recovery paths that read calls out of *unmarked* text — an
+ * unfenced `tool:` line, a bare JSON object, a collapsed block. Those run over
+ * prose, and prose mentions tools: "Tool: ripgrep / Purpose: fast search" is a
+ * comparison, not two calls, and "Fastest tool: ripgrep." is not a call to
+ * `ripgrep.`. A fenced or tagged call is the model saying "this is a call" and
+ * is taken at its word, so an unknown name there still reaches the registry
+ * and gets its "unknown tool" answer.
+ */
+export type KnownTools = Set<string> | string[] | ((name: string) => boolean);
+
+function toPredicate(knownTools: KnownTools | undefined): (name: string) => boolean {
+  if (knownTools === undefined) return () => true;
+  if (typeof knownTools === "function") return knownTools;
+  const names = new Set([...knownTools].map((name) => name.toLowerCase()));
+  return (name) => names.has(name.trim().toLowerCase());
+}
+
+/** The tool name as written on a `tool:` line, without any quoting. */
+function bareToolName(value: string): string {
+  return value.trim().replace(/^[`"']+|[`"']+$/g, "").trim();
+}
+
 /** Extract every tool call in a model reply, plus the surrounding prose. */
-export function parseTurn(raw: string): ParsedTurn {
+export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
   const calls: ToolCall[] = [];
   const problems: string[] = [];
+  const known = toPredicate(knownTools);
   let text = raw;
 
   // ---- 1. fenced ```onflip blocks (the documented form) -------------------
-  text = replaceFences(text, [FENCE_TAG, "onflip:tool"], (body) => {
-    const parsed = parseCallBody(body, problems);
-    if (!parsed) return null;
-    calls.push(...parsed);
-    return "";
-  });
+  // An untagged fence is accepted too when its first line is `tool:` naming
+  // a tool the registry knows: ChatGPT's renderer shows a fence's language
+  // as a header label rather than keeping it on the code, so a reply full
+  // of correct blocks came back as plain fences and ran nothing.
+  const untaggedCall = (body: string): boolean => {
+    const first = body.split("\n").find((line) => line.trim());
+    const m = first ? /^\s*tool\s*:\s*([A-Za-z0-9_.-]+)\s*$/i.exec(first) : null;
+    return Boolean(m && known(m[1]));
+  };
+  text = replaceFences(
+    text,
+    [FENCE_TAG, "onflip:tool"],
+    (body) => {
+      const parsed = parseCallBody(body, problems);
+      if (!parsed) return null;
+      calls.push(...parsed);
+      return "";
+    },
+    untaggedCall
+  );
 
   // ---- 2. <onflip:tool> tags ---------------------------------------------
   text = replaceTagged(text, TOOL_OPEN, TOOL_CLOSE, (body) => {
@@ -75,7 +115,7 @@ export function parseTurn(raw: string): ParsedTurn {
   // Models routinely emit blocks correctly but drop the fence, and they batch
   // several in one reply. Each `tool:` at the start of a line opens a new one.
   if (calls.length === 0) {
-    const { calls: unfenced, prose } = parseUnfencedBlocks(text);
+    const { calls: unfenced, prose } = parseUnfencedBlocks(text, known);
     if (unfenced.length) {
       calls.push(...unfenced);
       text = prose;
@@ -91,7 +131,7 @@ export function parseTurn(raw: string): ParsedTurn {
   // unfinished. Same acceptance as inside the fence, only when nothing else
   // parsed.
   if (calls.length === 0) {
-    const { calls: bare, prose } = parseBareJsonCalls(text);
+    const { calls: bare, prose } = parseBareJsonCalls(text, known);
     if (bare.length) {
       calls.push(...bare);
       text = prose;
@@ -108,7 +148,7 @@ export function parseTurn(raw: string): ParsedTurn {
     /\btool\s*:\s*\w/i.test(text)
   ) {
     const collapsed = parseCollapsedBlock(text);
-    if (collapsed) {
+    if (collapsed && collapsed.every((call) => known(call.tool))) {
       calls.push(...collapsed);
       text = "";
     }
@@ -118,7 +158,7 @@ export function parseTurn(raw: string): ParsedTurn {
 
   // ---- 5. an attempt that did not parse -----------------------------------
   if (calls.length === 0) {
-    const attempt = detectAttempt(raw, problems);
+    const attempt = detectAttempt(raw, problems, known);
     if (attempt) return { text: tidied, calls, malformed: attempt };
   }
 
@@ -142,7 +182,7 @@ export function parseTurn(raw: string): ParsedTurn {
  * entire point.
  */
 export function parseBlockCall(body: string): ToolCall[] | null {
-  const lines = body.replace(/\r\n/g, "\n").split("\n");
+  const lines = dedent(body.replace(/\r\n/g, "\n")).split("\n");
   const args: Record<string, unknown> = {};
   let toolName = "";
   let seenKey = false;
@@ -226,6 +266,25 @@ export function parseBlockCall(body: string): ToolCall[] | null {
 }
 
 /**
+ * Strip the indentation a block shares.
+ *
+ * A fence inside a numbered list is indented with the list, and the model
+ * keeps that indent on every line of the call. Keys are matched at column 0,
+ * so the first line parsed once its own indent was trimmed and the rest did
+ * not — a call whose arguments were silently dropped. The first non-blank
+ * line sets the indent, and a block scalar is then measured against that.
+ */
+function dedent(body: string): string {
+  const lines = body.split("\n");
+  const first = lines.find((line) => line.trim());
+  if (!first) return body;
+  const indent = (first.match(/^[ \t]*/) ?? [""])[0].length;
+  if (indent === 0) return body;
+  const leading = new RegExp(`^[ \\t]{0,${indent}}`);
+  return lines.map((line) => line.replace(leading, "")).join("\n");
+}
+
+/**
  * Split a reply into consecutive unfenced blocks.
  *
  * Each `tool:` at the start of a line opens a block and closes the previous
@@ -233,12 +292,19 @@ export function parseBlockCall(body: string): ToolCall[] | null {
  * the reply loses every call after the first, which is what happens whenever
  * the model batches — and batching is behaviour the prompt actively asks for.
  */
-function parseUnfencedBlocks(text: string): { calls: ToolCall[]; prose: string } {
+function parseUnfencedBlocks(
+  text: string,
+  known: (name: string) => boolean
+): { calls: ToolCall[]; prose: string } {
   const lines = text.split("\n");
   const fenced = fencedLineMask(lines);
   const starts: number[] = [];
   lines.forEach((line, i) => {
-    if (!fenced[i] && /^[ \t]*tool[ \t]*:[ \t]*\S/i.test(line)) starts.push(i);
+    if (fenced[i]) return;
+    // A `tool:` line naming something the registry has never heard of is a
+    // line of prose, not the start of a block.
+    const start = line.match(/^[ \t]*tool[ \t]*:[ \t]*(\S.*)$/i);
+    if (start && known(bareToolName(start[1]))) starts.push(i);
   });
   if (starts.length === 0) return { calls: [], prose: text };
 
@@ -263,7 +329,10 @@ function parseUnfencedBlocks(text: string): { calls: ToolCall[]; prose: string }
  * some *other* fence are left alone: a model quoting the protocol in a
  * ```json block is explaining it, not calling it.
  */
-function parseBareJsonCalls(text: string): { calls: ToolCall[]; prose: string } {
+function parseBareJsonCalls(
+  text: string,
+  known: (name: string) => boolean
+): { calls: ToolCall[]; prose: string } {
   const calls: ToolCall[] = [];
   const lines = text.split("\n");
   const fenced = fencedLineMask(lines);
@@ -315,7 +384,7 @@ function parseBareJsonCalls(text: string): { calls: ToolCall[]; prose: string } 
         (k) => typeof (parsed as Record<string, unknown>)[k] === "string"
       );
     const call = named ? toToolCall(parsed) : null;
-    if (!call) {
+    if (!call || !known(call.tool)) {
       kept.push(lines[i]);
       continue;
     }
@@ -527,8 +596,9 @@ export function parseCollapsedBlock(text: string): ToolCall[] | null {
   // so the shape has to be convincing before it is believed: a tool name that
   // is a bare identifier, and either arguments or a block marker alongside it.
   // Without both checks a sentence like "the tool: well, it works" parses as a
-  // call to a tool named "well, it works".
-  if (!toolName || !/^[a-z][a-z0-9_.-]{0,39}$/i.test(toolName)) return null;
+  // call to a tool named "well, it works". No `.` in the name: "Fastest tool:
+  // ripgrep." is a sentence, and a tool called `ripgrep.` is what it parsed as.
+  if (!toolName || !/^[a-z][a-z0-9_-]{0,39}$/i.test(toolName)) return null;
   if (!blockMarker && marks.length < 2) return null;
 
   if (blockMarker) args[blockMarker[1].toLowerCase()] = tail.trim();
@@ -537,7 +607,9 @@ export function parseCollapsedBlock(text: string): ToolCall[] | null {
 
 /** Try every representation against one block of text. */
 function parseCallBody(body: string, problems: string[]): ToolCall[] | null {
-  const trimmed = stripFences(body).trim();
+  // Dedent before trimming: trimming alone strips the first line's indent and
+  // leaves every other line indented, which is exactly the broken shape.
+  const trimmed = dedent(stripFences(body)).trim();
   if (!trimmed) return null;
 
   // JSON first: it is unambiguous when it parses.
@@ -640,7 +712,9 @@ function pickString(obj: Record<string, unknown>, key: string): string | null {
 function replaceFences(
   input: string,
   tags: string[],
-  fn: (body: string) => string | null
+  fn: (body: string) => string | null,
+  /** Accept a fence with no language when its body passes this check. */
+  untagged?: (body: string) => boolean
 ): string {
   const wanted = new Set(tags.map((t) => t.toLowerCase()));
   const lines = input.split("\n");
@@ -670,7 +744,8 @@ function replaceFences(
 
     // Treat every ordinary fence as opaque prose. Otherwise a literal
     // ```onflip example nested inside a longer fence becomes executable.
-    if (!wanted.has(info)) {
+    const accepted = wanted.has(info) || (info === "" && untagged?.(body.join("\n")) === true);
+    if (!accepted) {
       out.push(lines[i], ...body);
       if (closed) out.push(lines[j]);
       i = closed ? j : lines.length;
@@ -828,13 +903,21 @@ function findBalancedEnd(s: string, from: number): number {
  * ordinary prose answer is what stops a broken call being shown to the user as
  * though it were the result.
  */
-function detectAttempt(raw: string, problems: string[]): string | null {
+function detectAttempt(
+  raw: string,
+  problems: string[],
+  known: (name: string) => boolean
+): string | null {
   const lines = raw.split("\n");
   const fenced = fencedLineMask(lines);
   const outsideFences = lines.filter((_line, index) => !fenced[index]).join("\n");
-  const hasUnfencedBlock = lines.some(
-    (line, index) => !fenced[index] && /^\s*tool\s*:\s*\w/i.test(line)
-  );
+  // Same rule as the unfenced parser: a `tool:` line that names no known
+  // tool is prose, and prose is not a failed attempt.
+  const hasUnfencedBlock = lines.some((line, index) => {
+    if (fenced[index]) return false;
+    const start = line.match(/^\s*tool\s*:\s*(\w.*)$/i);
+    return start !== null && known(bareToolName(start[1]));
+  });
   const mentionsProtocol =
     outsideFences.includes("onflip:tool") ||
     hasTopLevelFence(raw, [FENCE_TAG, "onflip:tool"]) ||

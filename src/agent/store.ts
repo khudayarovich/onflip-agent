@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ChatMessage, TodoItem, FileSnapshot } from "../types";
-import { configDir } from "../config";
+import { configDir, withoutBom, writeFileAtomically } from "../config";
 
 /**
  * On-disk session store. Sessions are plain JSON so they can be inspected,
@@ -105,9 +105,9 @@ export function saveSession(session: StoredSession): void {
       updatedAt: Date.now(),
       snapshots: trimForDisk(session.snapshots),
     };
-    fs.writeFileSync(sessionFile(session.id), JSON.stringify(trimmed, null, 2), {
-      mode: 0o600,
-    });
+    // Temp file plus rename, so a crash mid-write leaves the previous save
+    // rather than a truncated file that loads as no session at all.
+    writeFileAtomically(sessionFile(session.id), JSON.stringify(trimmed, null, 2));
   } catch {
     // Persistence is a convenience; never let it take down a live session.
   }
@@ -116,7 +116,7 @@ export function saveSession(session: StoredSession): void {
 export function loadSession(id: string): StoredSession | null {
   try {
     const raw = fs.readFileSync(sessionFile(id), "utf8");
-    const parsed = JSON.parse(raw) as StoredSession;
+    const parsed = JSON.parse(withoutBom(raw)) as StoredSession;
     if (!parsed?.id || !Array.isArray(parsed.messages)) return null;
     parsed.todos ??= [];
     parsed.snapshots ??= [];

@@ -94,6 +94,16 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
       }, 10_000);
       request.on("response", (response) => {
         const chunks: Buffer[] = [];
+        // A body that dies mid-stream is an `error` on the response, and an
+        // unhandled one is an exception in the main process.
+        response.on("error", (e: Error) => {
+          clearTimeout(timer);
+          reject(e);
+        });
+        response.on("aborted", () => {
+          clearTimeout(timer);
+          reject(new Error("the connection was closed"));
+        });
         response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
         response.on("end", () => {
           clearTimeout(timer);

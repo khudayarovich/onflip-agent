@@ -37,11 +37,16 @@ export function renderInline(text: string): React.ReactNode[] {
         </a>
       );
     } else if (match[9] !== undefined) {
+      // A bare address usually ends a clause: "see https://x.y/docs." The
+      // punctuation is the sentence's, not the link's, so it goes back to
+      // being text rather than into a 404.
+      const url = match[9].replace(/[.,;:!?]+$/, "");
       out.push(
-        <a key={key++} href={match[9]} target="_blank" rel="noreferrer">
-          {match[9]}
+        <a key={key++} href={url} target="_blank" rel="noreferrer">
+          {url}
         </a>
       );
+      if (url.length < match[9].length) out.push(match[9].slice(url.length));
     }
     last = at + match[0].length;
   }
@@ -58,7 +63,16 @@ interface ListItem {
   text: string;
 }
 
-export function Markdown({ text }: { text: string }): React.ReactElement {
+/**
+ * Memoised on `text`: every streaming delta re-renders the whole transcript,
+ * and without this each finished assistant reply was re-tokenised from
+ * scratch for every character that arrived in the newest one.
+ */
+export const Markdown = React.memo(function Markdown({
+  text,
+}: {
+  text: string;
+}): React.ReactElement {
   const lines = text.replace(/\r\n/g, "\n").split("\n");
   const blocks: React.ReactNode[] = [];
   let key = 0;
@@ -166,4 +180,4 @@ export function Markdown({ text }: { text: string }): React.ReactElement {
   flushAll();
 
   return <div className="markdown">{blocks}</div>;
-}
+});

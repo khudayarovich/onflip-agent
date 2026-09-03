@@ -8,6 +8,7 @@ import {
   sendViaBrowser,
   resetBrowserChat,
   browserInConversation,
+  takeReplyMeta,
   ChatGPTBrowserError,
 } from "./browser-client";
 import { buildTurnPrompt } from "../agent/protocol";
@@ -73,9 +74,31 @@ export interface SendOptions {
   reminder?: string;
 }
 
+/**
+ * What the browser transport learned about a reply beyond its text.
+ *
+ * Optional throughout: the API transport and the scripted fakes in tests
+ * know none of it, and the loop must work identically without it. The one
+ * field the loop acts on is `truncated` — a reply ChatGPT itself reported
+ * as cut off at its length limit is re-requested rather than executed.
+ */
+export interface ReplyMeta {
+  /** Which completion rule accepted the reply. */
+  acceptedVia?: "stream" | "send-button" | "stop-gone" | "text-settled" | "deadline";
+  /** ChatGPT reported the reply stopped at its length limit. */
+  truncated?: boolean;
+  /** The page still showed a stop control when the text was accepted. */
+  generatingAtAccept?: boolean;
+  /** The reply stream was observed for this send. */
+  hookSeen?: boolean;
+  /** How many times ChatGPT's own "Continue generating" was clicked. */
+  continued?: number;
+}
+
 export interface TransportReply {
   content: string;
   conversationId: string | null;
+  meta?: ReplyMeta;
 }
 
 /**
@@ -122,7 +145,13 @@ function clampPayload(text: string): string {
  * Below the threshold nothing changes: a typed message is the more faithful
  * path, and at a few thousand characters it is the faster one too.
  */
-const UPLOAD_ABOVE_CHARS = Number(process.env.ONFLIP_UPLOAD_ABOVE ?? 20_000);
+// 26k, not 20k: the system prompt alone is now just under 21k characters,
+// so at 20k every fresh chat's first turn went up as a file — and the model
+// answered one of those "[attachment unreadable]", which costs a wasted send
+// and a typed retry. Chunked pasting has since made a 21k payload a
+// sub-second type (the 27k measurement above predates it), so the file
+// path is kept for turns that are genuinely large.
+const UPLOAD_ABOVE_CHARS = Number(process.env.ONFLIP_UPLOAD_ABOVE ?? 26_000);
 
 /**
  * Whether a turn too large to type has somewhere else to go.
@@ -286,6 +315,10 @@ export class BrowserTransport implements Transport {
       }
     }
 
+    // Taken now, whatever the checks below decide: a reply's metadata must
+    // never survive to describe the next one.
+    const meta = takeReplyMeta();
+
     // ChatGPT's own error page arrives through the reply channel and looks
     // like a successful send. It is not one: the model never saw the payload,
     // so advancing `sentThrough` past it marks a system prompt as delivered to
@@ -330,7 +363,7 @@ export class BrowserTransport implements Transport {
 
     this.sentThrough = history.length;
     this.needsSystemPrompt = false;
-    return { content, conversationId: null };
+    return { content, conversationId: null, meta };
   }
 
   reset(): void {

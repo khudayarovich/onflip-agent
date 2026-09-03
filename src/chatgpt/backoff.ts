@@ -162,6 +162,28 @@ export function serviceMessage(text: string): string | null {
   if (/^(something went wrong|an error occurred|there was an error)\b/i.test(t)) {
     return "ChatGPT returned an error page instead of a reply, so nothing of what OnFlip sent reached the model. This is usually an oversized message — /compact shrinks the conversation, and /new starts a fresh one.";
   }
+  // The backend's own failure pages, arriving as a one-line "reply". Live:
+  // "Internal Server Error", 21 characters, accepted as the model's answer
+  // to a protocol correction — so the correction was marked delivered, the
+  // turn ended on the error text, and nothing was built. A short reply that
+  // *is* an HTTP status phrase is never an answer. Worded without any of
+  // the words `classifyFailure` treats as fatal or as a throttle, because
+  // it reads this text: the one thing to do about a 5xx is send again.
+  if (
+    t.length <= 160 &&
+    /^(?:\d{3}\s+)?(internal server error|bad gateway|service unavailable|gateway time-?out|request time-?out|server error)\b/i.test(
+      t
+    )
+  ) {
+    return `ChatGPT's server answered with "${t.slice(0, 40)}" instead of a reply, so the message never reached the model. Sending it again.`;
+  }
+  if (
+    /^(hmm+[.…]* ?something seems to have gone wrong|oops[,!.]? (an error|something)|error in message stream|network error|conversation not found)\b/i.test(
+      t
+    )
+  ) {
+    return `ChatGPT's page reported "${t.slice(0, 60)}" instead of a reply, so the message never reached the model. Sending it again.`;
+  }
   return null;
 }
 

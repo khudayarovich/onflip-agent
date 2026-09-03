@@ -1,111 +1,189 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Modal } from "./common";
 import { useT } from "../i18n";
 
 /**
- * The way in, offered before anything else can fail for want of a session.
+ * The way in.
  *
- * It tries the user's own browsers first, because the best sign-in is the one
- * that does not happen: a ChatGPT session already sitting in Firefox, or in a
- * Chromium old enough to have readable cookies, is imported on the spot and
- * the user never sees a login form.
+ * One button, and it opens a real browser: Chrome or Edge, started the way a
+ * person starts it, on a profile that belongs to OnFlip. The person signs in
+ * there — Google, Apple, Microsoft or a password, whatever the account uses —
+ * and closes the window; OnFlip then drives that same profile. Nothing is
+ * decrypted, pasted or installed. Why the earlier ways in were dropped is
+ * written up beside `signInWithRealBrowser` in the core.
  *
- * Current Chrome and Edge encrypt their cookies with a key bound to the
- * browser, so nothing can read them — deliberately, and OnFlip does not work
- * around it. For those, "Use my browser" opens the real browser and asks it,
- * which needs the connector extension: hence the panel below, which appears
- * only when that is the route left and says exactly where the folder is.
+ * A Firefox session can still be imported, because that costs the user
+ * nothing; Chrome and Edge sessions cannot be, by those browsers' design.
  */
+type Phase = "idle" | "waiting" | "verifying" | "downloading";
+
+interface BrowserReport {
+  browser: string;
+  outcome: string;
+  detail?: string;
+}
+
 export function SignInModal({
   onClose,
   onSignedIn,
-  onSignInWindow,
-  onPasteToken,
 }: {
   onClose: () => void;
   onSignedIn: (source?: string) => void;
-  onSignInWindow: () => void;
-  onPasteToken: () => void;
 }): React.ReactElement {
   const t = useT();
-  const [checking, setChecking] = useState(true);
+  // undefined until the engine has answered; null when no browser is installed.
+  const [browser, setBrowser] = useState<{ name: string; channel: string } | null | undefined>(
+    undefined
+  );
+  const [phase, setPhase] = useState<Phase>("idle");
   const [reason, setReason] = useState<string | null>(null);
-  const [report, setReport] = useState<{ browser: string; outcome: string; detail?: string }[]>([]);
-  // The handshake with the user's own browser, which takes as long as it takes
-  // them to look at the tab that just opened.
-  const [pairing, setPairing] = useState(false);
-  const [connector, setConnector] = useState<{ dir: string; present: boolean } | null>(null);
-  const [showConnector, setShowConnector] = useState(false);
-  const [copied, setCopied] = useState(false);
+  const [checking, setChecking] = useState(false);
+  const [report, setReport] = useState<BrowserReport[]>([]);
+  const live = useRef(true);
+  useEffect(
+    () => () => {
+      live.current = false;
+    },
+    []
+  );
 
   useEffect(() => {
-    if (typeof window.onflip.extensionInfo !== "function") return;
-    void window.onflip.extensionInfo().then(setConnector).catch(() => {});
+    void api
+      .signInBrowserInfo()
+      .then((b) => {
+        if (live.current) setBrowser(b);
+      })
+      .catch(() => {
+        if (live.current) setBrowser(null);
+      });
   }, []);
 
-  const useMyBrowser = () => {
-    setPairing(true);
-    setReason(null);
-    // Opened with the handshake rather than after it fails: the browser tab is
-    // about to ask for this extension, and being told where it is only once
-    // the three minutes have run out is being told too late.
-    setShowConnector(true);
-    void window.onflip
-      .pairBrowser()
-      .then((r) => {
-        if (r.ok) onSignedIn("browser");
-        else setReason(r.reason ?? null);
-      })
-      .catch((e: Error) => setReason(e.message))
-      .finally(() => setPairing(false));
-  };
+  // Progress from the engine: the window is up; the profile is being checked.
+  useEffect(
+    () =>
+      window.onflip.onEvent((event, data) => {
+        if (event !== "sign-in") return;
+        const state = (data as { state?: string } | undefined)?.state;
+        if (state === "waiting" || state === "verifying" || state === "downloading") setPhase(state);
+      }),
+    []
+  );
 
-  const tryBrowsers = () => {
+  const start = () => {
+    setReason(null);
+    setPhase("waiting");
+    void api
+      .signInWithBrowser()
+      .then((r) => {
+        if (!live.current) return;
+        if (r.ok) {
+          onSignedIn(r.browser);
+          return;
+        }
+        setPhase("idle");
+        if (r.reason && r.reason !== "cancelled") setReason(r.reason);
+      })
+      .catch((e: Error) => {
+        if (!live.current) return;
+        setPhase("idle");
+        setReason(e.message);
+      });
+  };
+  const finish = () => void api.finishBrowserSignIn().catch(() => {});
+  const cancel = () => void api.cancelBrowserSignIn().catch(() => {});
+
+  const importSession = () => {
     setChecking(true);
     setReason(null);
     void api
       .importBrowserSession()
       .then((r) => {
+        if (!live.current) return;
         setReport(r.report ?? []);
         if (r.ok) onSignedIn(r.source);
         else setReason(r.reason ?? null);
       })
-      .catch((e: Error) => setReason(e.message))
-      .finally(() => setChecking(false));
+      .catch((e: Error) => {
+        if (live.current) setReason(e.message);
+      })
+      .finally(() => {
+        if (live.current) setChecking(false);
+      });
   };
 
-  // Looked for the moment the prompt appears: a user who is already signed in
-  // somewhere should not be asked to sign in at all.
-  useEffect(tryBrowsers, []);
+  const name = browser?.name ?? "your browser";
+  const busy = phase !== "idle";
 
   return (
     <Modal
       title={t("signInTitle")}
-      onClose={onClose}
+      onClose={() => {
+        if (busy) cancel();
+        onClose();
+      }}
       footer={
-        <>
-          <button className="btn" disabled={checking || pairing} onClick={tryBrowsers}>
-            {t("signInRecheck")}
-          </button>
-          <button className="btn" disabled={pairing} onClick={useMyBrowser}>
-            {pairing ? t("signInPairingWait") : t("signInUseMyBrowser")}
-          </button>
-          <button className="btn" onClick={onPasteToken}>
-            {t("signInPasteToken")}
-          </button>
-          <button className="btn primary" disabled={checking} onClick={onSignInWindow}>
-            {t("signInAction")}
-          </button>
-        </>
+        busy ? (
+          <>
+            <button className="btn" onClick={cancel}>
+              {t("cancel")}
+            </button>
+            {phase === "waiting" && (
+              <button className="btn primary" onClick={finish}>
+                {t("signInDone")}
+              </button>
+            )}
+          </>
+        ) : (
+          <>
+            <button className="btn" disabled={checking} onClick={importSession}>
+              {checking ? t("signInChecking") : t("signInImport")}
+            </button>
+            <button className="btn primary" disabled={!browser} onClick={start}>
+              {t("signInOpen", { browser: name })}
+            </button>
+          </>
+        )
       }
     >
-      <p className="modal-note">{t("signInBody")}</p>
-      {checking ? (
-        <p className="modal-note">{t("signInChecking")}</p>
+      <p className="modal-note">{t("signInLead")}</p>
+      {browser === null ? (
+        <p className="modal-note" style={{ color: "var(--yellow)" }}>
+          {t("signInNoBrowser")}
+        </p>
       ) : (
+        <p className="modal-note">{t("signInHow", { browser: name })}</p>
+      )}
+
+      {phase === "waiting" && (
+        <div className="content-loading" style={{ padding: "18px 0" }}>
+          <span className="spinner big" />
+          <span>{t("signInWaiting", { browser: name })}</span>
+        </div>
+      )}
+      {phase === "verifying" && (
+        <div className="content-loading" style={{ padding: "18px 0" }}>
+          <span className="spinner big" />
+          <span>{t("signInVerifying")}</span>
+        </div>
+      )}
+      {phase === "downloading" && (
+        <div className="content-loading" style={{ padding: "18px 0" }}>
+          <span className="spinner big" />
+          <span>{t("signInDownloading")}</span>
+        </div>
+      )}
+
+      {!busy && reason && (
+        <p className="modal-note" style={{ color: "var(--yellow)" }}>
+          {reason}
+        </p>
+      )}
+      {!busy && (
         <>
-          <p className="modal-note">{t("signInBrowserHint")}</p>
+          <p className="modal-note dim" style={{ marginTop: 14 }}>
+            {t("signInImportHint")}
+          </p>
           {report.length > 0 && (
             <table className="signin-report">
               <tbody>
@@ -119,6 +197,8 @@ export function SignInModal({
                           ? t("reportAppBound")
                           : r.outcome === "locked"
                             ? t("reportLocked")
+                            : r.outcome === "needs-access"
+                              ? t("reportNeedsAccess")
                             : r.outcome === "error"
                               ? r.detail || t("reportError")
                               : r.outcome === "not-installed"
@@ -130,40 +210,7 @@ export function SignInModal({
               </tbody>
             </table>
           )}
-          {reason && report.length === 0 && <p className="modal-note dim">{reason}</p>}
         </>
-      )}
-
-      {showConnector && connector?.present && (
-        <div className="connector">
-          <div className="connector-title">{t("connectorTitle")}</div>
-          <p className="modal-note">{t("connectorBody")}</p>
-          <ol className="connector-steps">
-            <li>{t("connectorStep1")}</li>
-            <li>{t("connectorStep2")}</li>
-            <li>{t("connectorStep3")}</li>
-          </ol>
-          <div className="connector-path">{connector.dir}</div>
-          <div className="connector-actions">
-            <button
-              className="btn"
-              onClick={() => void window.onflip.openExtensionFolder().catch(() => {})}
-            >
-              {t("connectorOpenFolder")}
-            </button>
-            <button
-              className="btn"
-              onClick={() => {
-                void navigator.clipboard.writeText(connector.dir).then(() => {
-                  setCopied(true);
-                  window.setTimeout(() => setCopied(false), 2_000);
-                });
-              }}
-            >
-              {copied ? t("copyDiagnosticsDone") : t("connectorCopyPath")}
-            </button>
-          </div>
-        </div>
       )}
     </Modal>
   );

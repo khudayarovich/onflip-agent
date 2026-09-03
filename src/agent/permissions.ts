@@ -86,16 +86,28 @@ export type PermissionDecision =
  */
 const DESTRUCTIVE_PATTERNS: { re: RegExp; why: string }[] = [
   { re: /\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rf]/, why: "recursive/forced delete" },
-  { re: /\brmdir\s+\/s/i, why: "recursive directory delete" },
+  { re: /\brm\b[^|;\n]*\s--(recursive|force)\b/, why: "recursive/forced delete" },
+  { re: /\b(rd|rmdir)\b(\s+\/[a-z])*\s+\/s\b/i, why: "recursive directory delete" },
   { re: /\bdel\s+.*\/[sfq]/i, why: "forced delete" },
-  { re: /\bRemove-Item\b.*-Recurse/i, why: "recursive delete" },
+  // PowerShell spells delete five ways and lets a parameter be any unambiguous
+  // prefix of its name, so `ri -Rec -Fo` is the same call as
+  // `Remove-Item -Recurse -Force`, in either order.
+  { re: /\b(ri|rm|del|erase|rd|rmdir|Remove-Item)\b[^|;\n]*\s-(Rec|Fo)\w*/i, why: "recursive/forced delete" },
+  // `Get-ChildItem -Recurse | Remove-Item`: the recursion sits on the
+  // producer, and every delete later in the pipeline inherits it.
+  { re: /-Rec\w*\b[^\n]*\|\s*(Remove-Item|ri|rm|del|erase|rd|rmdir)\b/i, why: "recursive delete" },
   { re: /\bformat\b\s+[a-z]:/i, why: "disk format" },
+  { re: /\b(Format-Volume|Clear-Disk|Initialize-Disk|Remove-Partition|diskpart)\b/i, why: "disk or partition wipe" },
   { re: /\bmkfs(\.\w+)?\b/, why: "filesystem format" },
   { re: /\bdd\s+.*of=\/dev\//, why: "raw device write" },
   { re: /:\(\)\s*\{.*\}\s*;\s*:/, why: "fork bomb" },
   { re: /\b(shutdown|reboot|halt|poweroff)\b/i, why: "power state change" },
   { re: /\bStop-Computer\b|\bRestart-Computer\b/i, why: "power state change" },
-  { re: /\bgit\s+push\b.*(--force\b|-f\b)/, why: "force push" },
+  { re: /\bgit\s+push\b.*(--force\b(?!-with-lease)|-f\b)/, why: "force push" },
+  // `git push origin +main`: a leading `+` on the refspec is a force push
+  // that never says the word.
+  { re: /\bgit\s+push\b[^|;\n]*\s\+\S/, why: "force push" },
+  { re: /\bgit\s+push\b.*--force-with-lease\b/, why: "force push with lease" },
   { re: /\bgit\s+reset\s+--hard\b/, why: "discards local changes" },
   { re: /\bgit\s+clean\s+-[a-zA-Z]*[fd]/, why: "deletes untracked files" },
   { re: /\bcurl\b[^|]*\|\s*(sudo\s+)?(ba)?sh\b/, why: "pipes remote script to shell" },
@@ -137,6 +149,27 @@ export function commandKey(command: string): string {
     return `${head} ${parts[1].toLowerCase()}`;
   }
   return head;
+}
+
+/**
+ * Where one command ends and the next begins, for either shell.
+ *
+ * A remembered key has to be checked against every command on the line, not
+ * the first: an allowlisted `git status` used to clear `git status && ri
+ * -Recurse -Force C:\proj` on the strength of its first word. Separators,
+ * newlines and both command substitutions all split. A `|` inside quotes
+ * splits too, which costs the user a prompt rather than a bypass.
+ */
+const COMMAND_SEPARATOR = /\|\||&&|;|\||\r?\n|\$\(|`/;
+
+/** The allowlist key of every command on the line, in order. */
+export function commandKeys(command: string): string[] {
+  const keys: string[] = [];
+  for (const segment of command.split(COMMAND_SEPARATOR)) {
+    const key = commandKey(segment);
+    if (key) keys.push(key);
+  }
+  return keys;
 }
 
 export interface PolicyState {
@@ -237,9 +270,12 @@ export function evaluate(policy: PolicyState, req: PermissionRequest): PolicyVer
         dangerous: true,
       };
     }
-    const key = commandKey(req.subject);
-    if (key && policy.allowedCommands.has(key)) {
-      return { outcome: "allow", reason: `"${key}" previously approved` };
+    // Every command on the line has to be cleared, not just the first — the
+    // destructive check above already saw the whole line, this has to too.
+    const keys = commandKeys(req.subject);
+    if (keys.length > 0 && keys.every((key) => policy.allowedCommands.has(key))) {
+      const named = [...new Set(keys)].map((key) => `"${key}"`).join(", ");
+      return { outcome: "allow", reason: `${named} previously approved` };
     }
     if (policy.mode === "full-auto") return { outcome: "allow" };
     return { outcome: "ask", reason: "shell command", dangerous: false };
@@ -253,8 +289,8 @@ export function evaluate(policy: PolicyState, req: PermissionRequest): PolicyVer
 /** Record an "always allow" answer against the policy. */
 export function remember(policy: PolicyState, req: PermissionRequest): void {
   if (req.kind === "command") {
-    const key = commandKey(req.subject);
-    if (key) policy.allowedCommands.add(key);
+    // The user cleared the whole line, so each command on it is cleared.
+    for (const key of commandKeys(req.subject)) policy.allowedCommands.add(key);
   } else if (req.kind === "write" && req.targetPath) {
     policy.allowedWriteDirs.add(path.dirname(path.resolve(req.targetPath)));
   }
@@ -291,8 +327,10 @@ export type BashRules = Record<string, RuleAction>;
 function patternToRegExp(pattern: string): RegExp {
   let out = "";
   for (const ch of pattern.trim()) {
-    if (ch === "*") out += ".*";
-    else if (ch === "?") out += ".";
+    // `.` stops at a newline and `command: |` bodies contain them, so `rm *`
+    // used to match `rm -rf build` and miss `rm -rf build\necho done`.
+    if (ch === "*") out += "[\\s\\S]*";
+    else if (ch === "?") out += "[\\s\\S]";
     else out += ch.replace(/[.+^${}()|[\]\\]/g, "\\$&");
   }
   // Anchored so "git *" cannot match "mygit foo".

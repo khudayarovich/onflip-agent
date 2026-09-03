@@ -163,15 +163,19 @@ export function Composer({
   onSetThinking,
   onSetApproval,
   onLoadModels,
+  onNotice,
   disabled,
   draft,
 }: {
   status: EngineStatus | null;
   busy: boolean;
   models: ModelDTO[];
-  onSend: (text: string, attachments: string[]) => void;
+  /** Returns whether the message was taken; a refusal keeps the text here. */
+  onSend: (text: string, attachments: string[]) => boolean;
   onInterrupt: () => void;
   onCommand: (name: string, arg: string) => void;
+  /** A notice in the transcript that is not a command and not a message. */
+  onNotice: (text: string) => void;
   onSetModel: (slug: string) => void;
   onSetThinking: (level: ThinkingLevel | null) => void;
   onSetApproval: (mode: ApprovalMode) => void;
@@ -279,9 +283,14 @@ export function Composer({
     // Files alone are a message: "look at this" needs no words.
     if (!value && attached.length === 0) return;
     const files = attached;
-    setText("");
-    setAttached([]);
-    requestAnimationFrame(autosize);
+    // Cleared only once something has taken the input. A refusal — signed
+    // out, an ambiguous command — used to wipe the text before anyone saw
+    // it was refused, so a paragraph typed while signed out simply vanished.
+    const clear = () => {
+      setText("");
+      setAttached([]);
+      requestAnimationFrame(autosize);
+    };
     if (value && value.startsWith("/")) {
       const space = value.indexOf(" ");
       const name = (space < 0 ? value : value.slice(0, space)).toLowerCase();
@@ -289,18 +298,29 @@ export function Composer({
       // A unique prefix works, the way it does in the CLI.
       const matches = SLASH_COMMANDS.filter((c) => c.name.startsWith(name));
       if (matches.length === 1) {
+        clear();
         onCommand(matches[0].name, arg);
         return;
       }
       if (matches.length === 0) {
+        clear();
         onCommand(name, arg); // surfaces "unknown command"
         return;
       }
+      // Several commands share the prefix. Guessing would run the wrong one,
+      // and falling through would send "/s hello" to ChatGPT as a prompt —
+      // so the candidates are listed and the text stays put to be finished.
+      onNotice(`Ambiguous command: ${matches.map((c) => c.name).join(", ")}`);
+      return;
     }
-    onSend(value, files);
+    if (onSend(value, files)) clear();
   };
 
   const onKeyDown = (e: React.KeyboardEvent) => {
+    // Enter during IME composition (Japanese, Chinese, Korean input) commits
+    // the candidate, not the message; 229 is the keyCode Chromium reports
+    // for every key while composing.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
     if (atOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();

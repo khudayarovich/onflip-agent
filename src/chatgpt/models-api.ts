@@ -89,9 +89,13 @@ export interface DiscoveryResult {
 /**
  * Ask the user's account which models it has.
  *
- * The API path is tried first because it is a single request; the browser path
- * is the reliable fallback, since it runs the same fetch from inside the
- * logged-in page where Cloudflare is already satisfied.
+ * The browser path goes first: it is the same fetch run from inside the
+ * logged-in page, where the session and Cloudflare clearance already apply.
+ * The direct request — a bearer token sent from Node with none of a
+ * browser's fingerprint — is the request shape that drew the "unusual
+ * activity" flag on an account (see `chooseTransport`), and it used to be
+ * tried first here, on every refresh. It is only tried now when the user has
+ * asked for that transport by name, and even then after the browser.
  */
 export async function discoverModels(auth: {
   accessToken: string;
@@ -101,17 +105,19 @@ export async function discoverModels(auth: {
   const failures: string[] = [];
 
   try {
-    return { models: await viaApi(auth.accessToken, auth.cookies, auth.deviceId), source: "api" };
-  } catch (e) {
-    failures.push(`api: ${e instanceof Error ? e.message : String(e)}`);
-  }
-
-  try {
     const models = normalise(await fetchModelsViaBrowser(auth.cookies));
     if (models.length === 0) throw new Error("empty model list");
     return { models, source: "browser" };
   } catch (e) {
     failures.push(`browser: ${e instanceof Error ? e.message : String(e)}`);
+  }
+
+  if ((process.env.ONFLIP_TRANSPORT ?? "").toLowerCase() === "api") {
+    try {
+      return { models: await viaApi(auth.accessToken, auth.cookies, auth.deviceId), source: "api" };
+    } catch (e) {
+      failures.push(`api: ${e instanceof Error ? e.message : String(e)}`);
+    }
   }
 
   throw new Error(`Could not read the model list from your account (${failures.join("; ")})`);

@@ -68,7 +68,8 @@ export function Menu({
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // Same rule as Modal below: an Escape a layer above has claimed stays claimed.
+      if (e.key === "Escape" && !e.defaultPrevented) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -144,7 +145,11 @@ export function Modal({
 }): React.ReactElement {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      // Escape belongs to the topmost layer. The ApprovalModal listens in the
+      // capture phase and calls preventDefault when it takes the key, so by
+      // the time this bubble-phase listener runs a handled Escape is marked;
+      // acting on it too would close this dialog under the prompt.
+      if (e.key === "Escape" && !e.defaultPrevented) onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);

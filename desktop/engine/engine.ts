@@ -15,6 +15,7 @@ import {
   allModels,
   normalizeModel,
   defaultModel,
+  effectiveModel,
   modelContextTokens,
   isThinkingLevel,
   cacheModels,
@@ -33,6 +34,10 @@ import {
   clearBrowserProfile,
   openConversation,
   checkSignedIn,
+  signInWithRealBrowser,
+  finishRealBrowserSignIn,
+  cancelRealBrowserSignIn,
+  pickSignInBrowser,
   setActiveProject,
   listConversations,
   listProjectConversations,
@@ -281,6 +286,8 @@ export class Engine {
   // startup
   // =========================================================================
 
+  private initInFlight: Promise<EngineStatus> | null = null;
+
   async init(): Promise<EngineStatus> {
     // A renderer reload calls init again on a live engine; hand back the
     // current state rather than tearing down a working transport.
@@ -291,6 +298,19 @@ export class Engine {
       this.emitConnect("ready");
       return current;
     }
+    // A reload during a slow first start asked again before `connected` was
+    // set, and the whole sequence ran twice at once — two transports, two
+    // adoptions of the same session, two logs. The second caller now waits
+    // for the first; a failure clears the way for a genuine retry.
+    if (!this.initInFlight) {
+      this.initInFlight = this.initOnce().finally(() => {
+        this.initInFlight = null;
+      });
+    }
+    return this.initInFlight;
+  }
+
+  private async initOnce(): Promise<EngineStatus> {
     this.emitConnect("connecting");
     configureBrowser({
       headed: this.config.headed ?? false,
@@ -340,14 +360,15 @@ export class Engine {
       bashRules: this.config.bashRules as BashRules | undefined,
     });
 
-    const restored = latestSession(this.cwd);
+    const restored = this.adoptableSession(this.cwd);
     if (restored) {
       this.adoptStoredSession(restored);
     } else {
       this.session = createSession(this.cwd, this.model);
       this.history = this.session.messages;
-    this.archived = this.session.archived ?? [];
+      this.archived = this.session.archived ?? [];
     }
+    this.holdSession();
 
     openLog(this.session.id);
     logger.info("session", "desktop engine started", {
@@ -466,7 +487,13 @@ export class Engine {
   private adoptDefaultModel(): void {
     this.migrateModelPin();
     const cfg = loadConfig();
-    if (process.env.ONFLIP_MODEL || cfg.modelPinned) return;
+    if (process.env.ONFLIP_MODEL) return;
+    // A pin on Auto is not kept: Auto is ChatGPT's own router, which on a
+    // paid plan sends an agent's turns into Pro thinking — measured as
+    // thirty-second server errors and hand-offs to ChatGPT Work — and it
+    // is no longer offered in the picker. The pin itself survives, on the
+    // model the account actually runs well.
+    if (cfg.modelPinned && this.model !== "auto") return;
     const wanted = defaultModel(cfg.planType);
     if (wanted === this.model) return;
     const from = this.model;
@@ -475,8 +502,8 @@ export class Engine {
     if (this.session) this.session.model = wanted;
     logger.info("engine", "adopted the default model", { from, to: wanted, plan: cfg.planType });
     this.notice(
-      wanted === "auto"
-        ? "Letting ChatGPT pick the model. Choose one in the picker to pin it."
+      from === "auto"
+        ? `Auto is no longer offered — on a paid plan it routed the agent's turns into Pro thinking, which kept timing out. Using ${wanted} instead; pick another model in the chip under the composer if you prefer.`
         : `Using ${wanted}, which this plan can run without a message limit.`
     );
   }
@@ -609,7 +636,10 @@ export class Engine {
   }
 
   statusPayload(): EngineStatus {
+    // Read once: this runs after every tool call, and the project lookup
+    // below used to read the file twice more on its own.
     const cfg = loadConfig();
+    const project = this.currentProject(cfg);
     return {
       version: ENGINE_VERSION,
       cwd: this.cwd,
@@ -637,9 +667,7 @@ export class Engine {
       gitBranch: this.context?.git?.branch,
       gitDirty: this.context?.git?.dirty,
       instructionSources: this.context?.instructionSources ?? [],
-      chatProject: this.currentProject()
-        ? { id: this.currentProject()!.id, name: this.currentProject()!.name }
-        : undefined,
+      chatProject: project ? { id: project.id, name: project.name } : undefined,
       cooldownUntil: cfg.cooldownUntil && cfg.cooldownUntil > Date.now() ? cfg.cooldownUntil : undefined,
       headed: cfg.headed ?? false,
       busy: this.busy,
@@ -682,6 +710,7 @@ export class Engine {
   }
 
   private pushStatus(): void {
+    this.holdSession();
     this.peer.emit("status", this.statusPayload());
   }
 
@@ -720,13 +749,36 @@ export class Engine {
     // A turn waiting on this prompt is waiting on a person, and however long
     // that takes it is not stuck. The watchdog holds off while it is up.
     this.awaitingApproval++;
+    // Raced against the turn's own stop. Without that, Stop followed by Allow
+    // ran the action after the stop — the tool was still awaiting an answer
+    // nothing had cancelled — and a prompt the renderer lost to a reload left
+    // the turn waiting for ever, with the watchdog paused for exactly that
+    // wait. The signal is captured now: a queued turn installs a new one.
+    const signal = this.abort.signal;
+    let cancel: (() => void) | null = null;
     try {
-      decision = await this.peer.request<ApprovalDecisionDTO>("approval", dto);
+      const asked = this.peer.request<ApprovalDecisionDTO>("approval", dto);
+      // An answer that lands after the race has settled has nowhere to go.
+      asked.catch(() => {});
+      const stopped = new Promise<ApprovalDecisionDTO>((resolve) => {
+        cancel = () => resolve({ allow: false });
+        if (signal.aborted) cancel();
+        else signal.addEventListener("abort", cancel, { once: true });
+      });
+      decision = await Promise.race([asked, stopped]);
     } catch {
       return { allow: false, reason: "the approval prompt was dismissed" };
     } finally {
+      if (cancel) signal.removeEventListener("abort", cancel);
       this.awaitingApproval--;
       this.markActivity();
+    }
+
+    if (signal.aborted) {
+      // Tells main to forget the waiter and the renderer to take the modal
+      // down; an answer given to it now would credit nothing.
+      this.peer.emit("approval-cancelled", {});
+      return { allow: false, reason: "the turn was stopped before this action was approved" };
     }
 
     if (decision.allow) {
@@ -877,12 +929,28 @@ export class Engine {
     if (loadConfig().autoResume === false) return;
     if (cooldownRemainingMs() > 0) return;
     if (this.queue.length > 0) return;
+    // ChatGPT's own server error, already retried into a fresh chat by the
+    // transport. On Auto the cause is almost certainly the model routing
+    // (the error text says so); a second round of resends changes nothing
+    // but the wait, so the advice is left standing instead.
+    const serverError = /reached the model/.test(reason);
+    if (serverError && /^auto$/i.test(this.model) && this.autoResumes >= 1) {
+      this.notice(
+        "Not trying again by itself: the same server error came back in a fresh chat too. Pick a fast model such as GPT-5.6 Luna in the chip under the composer, then say \"continue\"."
+      );
+      return;
+    }
     if (this.autoResumes >= MAX_AUTO_RESUMES) {
       this.notice(
         `Stopped after ${MAX_AUTO_RESUMES} attempts to carry on. Say "continue" to try again, or turn off automatic resume in Settings.`
       );
       return;
     }
+    // The resume is documented as carrying the work into a fresh
+    // conversation. It only did so when something else had already dropped
+    // the old one: measured, an automatic "continue" went straight back
+    // into the thread that had just answered with a server error.
+    if (serverError) this.transport?.reset();
     this.autoResumes += 1;
     logger.info("session", "resuming after a failed turn", {
       attempt: this.autoResumes,
@@ -1257,7 +1325,9 @@ export class Engine {
       transport: this.transport,
       tools: this.buildTools(),
       session: this.toolState,
-      model: this.model,
+      // The variant the thinking level asks for, not the family the picker
+      // shows: that is the slug the chat is opened with.
+      model: effectiveModel(this.model, this.thinking),
       thinking: this.thinking,
       maxIterations: this.maxIterations,
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
@@ -1289,7 +1359,7 @@ export class Engine {
           const now = Date.now();
           if (now - this.lastDeltaAt < 150) return;
           this.lastDeltaAt = now;
-          this.peer.emit("delta", { tail: full.slice(-240) });
+          this.peer.emit("delta", { tail: presentableTail(full) });
         },
         onNarration: (narration) => {
           this.markActivity();
@@ -1337,7 +1407,17 @@ export class Engine {
         onCompacted: (dropped) => {
           this.archived = [...this.archived, ...dropped];
         },
-        onFinal: (final) => {
+        onFinal: (final, meta) => {
+          // A question is an answer that needs one back, and is drawn so.
+          if (meta?.kind === "ask_user") {
+            this.peer.emit("item", {
+              type: "question",
+              id: randomUUID(),
+              text: final,
+              options: meta.options,
+            } satisfies ChatItem);
+            return;
+          }
           this.peer.emit("item", {
             type: "assistant",
             id: randomUUID(),
@@ -1415,6 +1495,9 @@ export class Engine {
     this.assertIdle();
     const restored = loadSession(id);
     if (!restored) throw new Error("That session could not be read.");
+    if (restored.id !== this.session?.id && sessionHeldElsewhere(restored.id)) {
+      throw new Error("That session is open in another OnFlip window.");
+    }
     this.saveNow();
 
     // A session belongs to a directory; follow it there if it still exists.
@@ -1592,6 +1675,65 @@ export class Engine {
     return { ok: true };
   }
 
+  /** Which browser a sign-in would open, for the button that offers it. */
+  signInBrowserInfo(): { name: string; channel: string } | null {
+    const pick = pickSignInBrowser();
+    return pick ? { name: pick.name, channel: pick.channel } : null;
+  }
+
+  /**
+   * Sign in through a real browser on OnFlip's own profile (see
+   * `signInWithRealBrowser` in the core for why this is the way in).
+   *
+   * On success nothing stored may be injected into that profile any more: a
+   * stale token replayed into a signed-in profile signs it out — the trap
+   * AGENTS.md records — so the stored session is cleared and the profile is
+   * the session from here on.
+   */
+  async signInWithBrowser(): Promise<{ ok: boolean; reason?: string; browser?: string }> {
+    this.assertIdle();
+    const result = await signInWithRealBrowser((state) => this.peer.emit("sign-in", { state }));
+    if (!result.ok || !result.browser) return { ok: false, reason: result.reason };
+
+    clearConfigKeys([
+      "sessionToken",
+      "sessionCookies",
+      "sessionCookieName",
+      "sessionDeviceId",
+      "accessToken",
+      "accessTokenExpiry",
+    ]);
+    saveConfig({
+      signedOut: false,
+      persistProfile: true,
+      browserChannel: result.browser.channel,
+    });
+    this.config = loadConfig();
+    if (this.auth) {
+      this.auth.cookies.length = 0;
+      this.auth.sessionToken = "";
+      this.auth.accessToken = "";
+    }
+    this.probeSignedIn = true;
+    this.account = null;
+    this.transport?.reset();
+    this.maybeIdentifyAccount();
+    this.emitConnect("ready");
+    this.notice(
+      `Signed in to ChatGPT with ${result.browser.name}. The session lives in OnFlip's own browser profile and is kept between launches.`
+    );
+    this.pushStatus();
+    return { ok: true, browser: result.browser.name };
+  }
+
+  finishBrowserSignIn(): boolean {
+    return finishRealBrowserSignIn();
+  }
+
+  cancelBrowserSignIn(): boolean {
+    return cancelRealBrowserSignIn();
+  }
+
   removeSession(id: string): { ok: boolean } {
     if (this.session?.id === id) throw new Error("That session is currently open.");
     // Read the record before the file goes: it names the conversations this
@@ -1663,7 +1805,7 @@ export class Engine {
 
     this.saveNow();
     this.relocate(target);
-    const restored = latestSession(target);
+    const restored = this.adoptableSession(target);
     if (restored) {
       this.adoptStoredSession(restored);
       this.seedSystemPrompt();
@@ -1737,17 +1879,42 @@ export class Engine {
   }
 
   setModel(slug: string): EngineStatus {
-    const normalized = normalizeModel(slug) ?? "auto";
+    const normalized = normalizeModel(slug) ?? defaultModel(loadConfig().planType);
+    const changed = normalized !== this.model;
     this.model = normalized;
     saveConfig({ model: normalized, modelPinned: true });
     this.session.model = normalized;
+    if (changed) this.applyModelChange("model");
     this.pushStatus();
     return this.statusPayload();
   }
 
+  /**
+   * A model or thinking change has to reach ChatGPT, and the only handle on
+   * either is the URL a chat is opened with. Left alone, the live thread
+   * kept answering on the old model until something else happened to open
+   * a new one — a switch to Luna during a Pro-thinking stall changed
+   * nothing, which read as the setting being broken. So the next message
+   * opens a fresh chat and replays the transcript into it.
+   */
+  private applyModelChange(what: "model" | "thinking"): void {
+    if (this.busy) {
+      this.notice(
+        `The ${what} change applies from the next chat OnFlip opens — the running turn keeps its current one.`
+      );
+      return;
+    }
+    this.transport?.reset();
+    this.notice(
+      `The ${what} change applies from your next message, which starts a fresh chat with the conversation so far.`
+    );
+  }
+
   setThinking(level: ThinkingLevel | null): EngineStatus {
+    const changed = (level ?? undefined) !== this.thinking;
     this.thinking = level ?? undefined;
     saveConfig({ thinking: level ?? undefined });
+    if (changed) this.applyModelChange("thinking");
     this.pushStatus();
     return this.statusPayload();
   }
@@ -1971,9 +2138,14 @@ export class Engine {
       return { ok: true };
     } finally {
       this.peer.emit("turn", { state: "end" });
-      this.busy = false;
+      // A message sent while this ran was queued, and is handed on here the
+      // way a finished turn hands on — left in the queue it waited for the
+      // *next* message and then ran after it, out of order.
+      const next = this.queue.shift();
+      this.busy = next !== undefined;
       this.saveNow();
       this.pushStatus();
+      if (next !== undefined) void this.runOneTurn(next.text, next.attachments);
     }
   }
 
@@ -2213,8 +2385,8 @@ export class Engine {
     }
   }
 
-  private currentProject(): RemoteProject | null {
-    const { projectId, projectShortUrl, projectName } = loadConfig();
+  private currentProject(cfg = loadConfig()): RemoteProject | null {
+    const { projectId, projectShortUrl, projectName } = cfg;
     if (!projectId || !projectShortUrl) return null;
     return { id: projectId, shortUrl: projectShortUrl, name: projectName ?? projectId };
   }
@@ -2258,7 +2430,48 @@ export class Engine {
     ].join("|");
   }
 
+  /** The session this engine has marked as its own on disk. */
+  private heldSessionId: string | null = null;
+
+  /**
+   * Mark the current session as this engine's, and let go of the last one.
+   *
+   * Two windows opened in the same folder both adopted the latest session
+   * there — a new window starts where the last one was — and each wrote the
+   * whole transcript on every save, so whichever saved last erased the
+   * other's turns. The lock is what lets `adoptableSession` start a fresh
+   * session instead. Called wherever the session can have changed; the id
+   * comparison makes the repeat calls free.
+   */
+  private holdSession(): void {
+    // A session that has never been written cannot be adopted by anyone, so
+    // it needs no lock; claiming it left a lock file behind for every empty
+    // launch. The claim happens on the first save instead.
+    const id = this.session && sessionFileExists(this.session.id) ? this.session.id : null;
+    if (id === this.heldSessionId) return;
+    if (this.heldSessionId) releaseSessionLock(this.heldSessionId);
+    this.heldSessionId = null;
+    if (id) {
+      claimSessionLock(id);
+      this.heldSessionId = id;
+    }
+  }
+
+  /** The folder's latest session, unless another live engine is writing it. */
+  private adoptableSession(cwd: string): StoredSession | null {
+    const latest = latestSession(cwd);
+    if (latest && sessionHeldElsewhere(latest.id)) {
+      logger.info("session", "latest session is open in another window; starting a new one", {
+        cwd,
+        session: latest.id,
+      });
+      return null;
+    }
+    return latest;
+  }
+
   private saveNow(): void {
+    this.holdSession();
     if (!this.session) return;
     // A session nobody spoke in is not worth a file: persisting it put an
     // "(empty session)" row in the sidebar for every launch and every project
@@ -2275,11 +2488,15 @@ export class Engine {
     this.session.model = this.model;
     saveSession(this.session);
     this.savedFingerprint = current;
+    // Now that the file exists, the lock can name it.
+    this.holdSession();
   }
 
   async shutdown(): Promise<void> {
     this.abort.abort();
     this.saveNow();
+    if (this.heldSessionId) releaseSessionLock(this.heldSessionId);
+    this.heldSessionId = null;
     killAllJobs();
     logger.info("session", "desktop engine ended");
     closeLog();
@@ -2290,6 +2507,148 @@ export class Engine {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// the streaming tail, as a person should see it
+// ---------------------------------------------------------------------------
+
+/**
+ * What the "writing" line shows while a reply streams in.
+ *
+ * The raw page text carries the protocol: fence markers, and the `tool:`
+ * block the model is in the middle of typing. Shown as-is it reads as the
+ * app glitching — a row of backticks, then half a command. A finished tool
+ * block becomes a short label, an unfinished one a note that a call is
+ * being written, and bare fence lines are dropped; the prose around them is
+ * what people are actually waiting to read.
+ */
+export function presentableTail(full: string): string {
+  const lines = full.split("\n");
+  const out: string[] = [];
+  let inFence = false;
+  let fenceIsCall = false;
+  let fenceTool = "";
+  let fenceStart = -1;
+  /**
+   * The summary of a `done` block, or the question of an `ask_user` one, is
+   * prose the person is waiting to read — it streams as itself, not as a
+   * "▸ done call" label.
+   */
+  let closingBody: string[] = [];
+  let inClosingBody = false;
+  const flush = (label: string): void => {
+    const replacement = isClosingBlock(fenceTool) && closingBody.length ? closingBody : [label];
+    out.splice(fenceStart, out.length - fenceStart, ...replacement);
+  };
+  for (const line of lines) {
+    if (/^\s*(`{3,}|~{3,})/.test(line)) {
+      if (!inFence) {
+        inFence = true;
+        fenceIsCall = false;
+        fenceTool = "";
+        fenceStart = out.length;
+        closingBody = [];
+        inClosingBody = false;
+      } else {
+        inFence = false;
+        if (fenceIsCall) flush(`▸ ${fenceTool || "tool"} call`);
+      }
+      continue;
+    }
+    if (inFence && !fenceIsCall && out.length === fenceStart) {
+      const m = /^\s*tool\s*:\s*([A-Za-z0-9_.-]+)/i.exec(line);
+      if (m) {
+        fenceIsCall = true;
+        fenceTool = m[1];
+        continue;
+      }
+    }
+    if (inFence && fenceIsCall) {
+      if (isClosingBlock(fenceTool)) {
+        const inline = /^\s*(?:summary|question)\s*:\s*(\S.*)$/i.exec(line);
+        if (/^\s*(?:summary|question)\s*:\s*[|>]?\s*$/i.test(line)) {
+          inClosingBody = true;
+        } else if (inline && !/^[|>]$/.test(inline[1].trim())) {
+          closingBody.push(inline[1]);
+          inClosingBody = false;
+        } else if (inClosingBody && /^\s+\S/.test(line)) {
+          closingBody.push(line.replace(/^ {1,2}/, ""));
+        } else if (inClosingBody && !line.trim()) {
+          closingBody.push("");
+        } else {
+          // Another key, such as `options:`.
+          inClosingBody = false;
+        }
+      }
+      continue;
+    }
+    out.push(line);
+  }
+  if (inFence && fenceIsCall) flush(`▸ writing a ${fenceTool || "tool"} call…`);
+  return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().slice(-240);
+}
+
+/** `done` and `ask_user`, under every name the registry folds onto them. */
+function isClosingBlock(tool: string): boolean {
+  return /^(?:done|finish|final_answer|attempt_completion|complete|completed|submit|final|end_turn|ask_user|ask|ask_followup_question|ask_question|question|clarify)$/i.test(
+    tool.replace(/[-\s]/g, "_")
+  );
+}
+
+// ---------------------------------------------------------------------------
+// session locks — one live engine per session file
+// ---------------------------------------------------------------------------
+
+function sessionLockFile(id: string): string {
+  return path.join(configDir(), "sessions", `${id}.lock`);
+}
+
+function sessionFileExists(id: string): boolean {
+  return fs.existsSync(path.join(configDir(), "sessions", `${id}.json`));
+}
+
+/**
+ * Is another engine that is still running writing this session?
+ *
+ * The lock names a pid; a pid that no longer exists is a crash's leftover,
+ * does not count, and is removed so it cannot pile up. EPERM from the probe
+ * means the process exists but is not ours to signal, which for this
+ * purpose is "alive".
+ */
+export function sessionHeldElsewhere(id: string): boolean {
+  try {
+    const raw = JSON.parse(fs.readFileSync(sessionLockFile(id), "utf8")) as { pid?: number };
+    if (!raw.pid || raw.pid === process.pid) return false;
+    try {
+      process.kill(raw.pid, 0);
+      return true;
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code === "EPERM") return true;
+      fs.rmSync(sessionLockFile(id), { force: true });
+      return false;
+    }
+  } catch {
+    return false;
+  }
+}
+
+export function claimSessionLock(id: string): void {
+  try {
+    fs.mkdirSync(path.dirname(sessionLockFile(id)), { recursive: true });
+    fs.writeFileSync(sessionLockFile(id), JSON.stringify({ pid: process.pid, at: Date.now() }));
+  } catch {
+    /* a lock that cannot be written is a lock nobody else can read either */
+  }
+}
+
+export function releaseSessionLock(id: string): void {
+  try {
+    const raw = JSON.parse(fs.readFileSync(sessionLockFile(id), "utf8")) as { pid?: number };
+    if (raw.pid === process.pid) fs.rmSync(sessionLockFile(id), { force: true });
+  } catch {
+    /* already gone */
+  }
+}
 
 // ---------------------------------------------------------------------------
 // scratch chats — sessions with no project folder of their own

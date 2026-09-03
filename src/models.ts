@@ -35,49 +35,94 @@ export function isWorkOnlySlug(slug: string): boolean {
   return /-wm$/i.test(slug);
 }
 
+/**
+ * The list before the account has been asked. Slugs in the shape the account
+ * actually reports (`gpt-5-6-mini`, not a guessed `gpt-5.6-luna`), and only
+ * the tiers every plan has; the real list replaces this on first contact.
+ */
 const BUILTIN_MODELS: ModelInfo[] = [
-  { slug: "auto", label: "Auto", description: "let ChatGPT pick the model" },
-  { slug: "gpt-5.6-luna", label: "GPT-5.6 Luna", description: "fast and light — unlimited text chat on every plan" },
-  { slug: "gpt-5.6-terra", label: "GPT-5.6 Terra", description: "balanced mid-tier for everyday work" },
-  { slug: "gpt-5.6-sol", label: "GPT-5.6 Sol", description: "deepest reasoning, rate-limited on paid plans" },
-  { slug: "gpt-5", label: "GPT-5", description: "general purpose, fast" },
-  { slug: "gpt-5-thinking", label: "GPT-5 Thinking", description: "extended reasoning, best for hard tasks" },
-  { slug: "gpt-5-pro", label: "GPT-5 Pro", description: "highest capability, slowest" },
-  { slug: "gpt-4o", label: "GPT-4o", description: "previous generation, quick" },
-  { slug: "gpt-4-1", label: "GPT-4.1", description: "long context, strong at code" },
-  { slug: "o3", label: "o3", description: "reasoning model" },
-  { slug: "o4-mini", label: "o4-mini", description: "small reasoning model, cheap and quick" },
+  { slug: "gpt-5-6-mini", label: "GPT-5.6 Luna", description: "fast and light — unlimited text chat on every plan" },
+  { slug: "gpt-5-6", label: "GPT-5.6 Sol", description: "the full model; the thinking setting picks how hard it reasons" },
 ];
 
 /**
- * The list shown in help, completion and the picker.
- *
- * Discovered models replace the built-ins entirely when present: the account's
- * own list is both more accurate and more complete, and mixing the two would
- * offer slugs the account cannot actually use. `auto` is always kept because
- * it is a client-side concept, not a backend model.
+ * ChatGPT exposes each model family several times over: `-instant` and
+ * `-thinking` for the full tiers, `-t-mini` for the mini tier. They are the
+ * same model at different reasoning efforts, which is what the thinking
+ * setting is for — so the picker lists families, and `effectiveModel` turns
+ * a family plus a thinking level into the variant the chat is opened with.
  */
+const VARIANT_SUFFIX = /-(instant|thinking|t-mini)$/i;
+
+export function isVariantSlug(slug: string): boolean {
+  return VARIANT_SUFFIX.test(slug);
+}
+
+/** The family a slug belongs to: `gpt-5-6-thinking` and `gpt-5-6` are one. */
+export function modelFamily(slug: string): string {
+  return slug.replace(/-t-mini$/i, "-mini").replace(/-(instant|thinking)$/i, "");
+}
+
+/**
+ * Slugs the account lists that an agent should not run on. Deep Research
+ * and the o-series are not chat models; the Pro tier browses the web on its
+ * own initiative mid-task, which fights the agent's own tools, and its
+ * reasoning passes are the ones ChatGPT's front end times out on.
+ */
+function isExcludedSlug(slug: string): boolean {
+  return /^(research|o3|o4-mini)$/i.test(slug) || /-pro$/i.test(slug);
+}
+
 export function allModels(): ModelInfo[] {
   const cached = loadConfig().discoveredModels;
   if (!cached || cached.length === 0) return BUILTIN_MODELS;
 
-  const discovered: ModelInfo[] = cached.map((m) => {
-    const workOnly = isWorkOnlySlug(m.slug);
-    return {
-      slug: m.slug,
-      label: m.title || m.slug,
-      description: workOnly
-        ? `ChatGPT Work only — regular chat ignores this slug and runs the plan's default instead${
-            m.description ? `. ${m.description}` : ""
-          }`
-        : m.description || "",
-      discovered: true,
-      ...(workOnly ? { workOnly: true } : {}),
-    };
-  });
+  // Only what a chat can actually run: no Work-only slugs (regular chat
+  // ignores them), nothing excluded above, and one entry per family — the
+  // effort variants are reached through the thinking setting instead.
+  const usable = cached.filter(
+    (m) => !isWorkOnlySlug(m.slug) && !isExcludedSlug(m.slug) && !isVariantSlug(m.slug)
+  );
+  const titleCount = new Map<string, number>();
+  for (const m of usable) titleCount.set(m.title, (titleCount.get(m.title) ?? 0) + 1);
+  const discovered: ModelInfo[] = usable.map((m) => ({
+    slug: m.slug,
+    // Two families with one title are told apart by their slug.
+    label: (titleCount.get(m.title) ?? 0) > 1 ? `${m.title} (${m.slug})` : m.title || m.slug,
+    description: m.description || "",
+    discovered: true,
+  }));
 
-  const hasAuto = discovered.some((m) => m.slug === "auto");
-  return hasAuto ? discovered : [BUILTIN_MODELS[0], ...discovered];
+  // No Auto entry, on purpose. Auto is ChatGPT's router, and on a paid plan
+  // it sends an agent's turns into Pro thinking: thirty-second server errors
+  // and hand-offs to ChatGPT Work, measured on a Pro account. A model the
+  // account runs well is always a better start than a coin toss.
+  return discovered.length ? discovered.filter((m) => m.slug !== "auto") : BUILTIN_MODELS;
+}
+
+/**
+ * The slug a chat is opened with for a chosen model at a thinking level.
+ *
+ * The web app has no other handle on reasoning effort that a URL can reach,
+ * and the text directive alone is advisory. The variants are real: "off"
+ * opens the family's `-instant` slug, any explicit effort opens `-thinking`
+ * (`-t-mini` for the mini tier), and "default" leaves the model as picked.
+ * A variant the account does not list falls back to the model itself rather
+ * than to a slug ChatGPT would silently ignore.
+ */
+export function effectiveModel(model: string, thinking: string | undefined): string {
+  if (!model || model === "auto") return model;
+  const listed = new Set((loadConfig().discoveredModels ?? []).map((m) => m.slug));
+  const family = modelFamily(model);
+  const mini = /-mini$/i.test(family);
+  const first = (candidates: string[]) => candidates.find((s) => listed.has(s));
+  if (thinking === "off") {
+    return first([mini ? family : `${family}-instant`, family]) ?? model;
+  }
+  if (thinking === "low" || thinking === "medium" || thinking === "high") {
+    return first([mini ? family.replace(/-mini$/i, "-t-mini") : `${family}-thinking`, model]) ?? model;
+  }
+  return model;
 }
 
 export function modelSlugs(): string[] {
@@ -103,23 +148,19 @@ export function clearModelCache(): void {
   saveConfig({ discoveredModels: [], modelsRefreshedAt: undefined });
 }
 
-export const DEFAULT_MODEL = "auto";
+/** The fallback before the account's list is known: Luna, in the account's own slug shape. */
+export const DEFAULT_MODEL = "gpt-5-6-mini";
 
 /**
  * What a session runs on when the user has not chosen for themselves.
  *
- * `auto` almost everywhere. ChatGPT routes each request to the best model
- * the account is entitled to at that moment, and it knows what is left of
- * the allowance in a way a pinned slug never can.
- *
- * Free and Go are the exception, for the reason in `prefersLunaByDefault`:
- * on those two plans `auto` spends the allowance in the first minute of a
- * run. They start on Luna instead, and only on a slug regular chat can
- * actually serve. An earlier version preferred any slug containing "luna"
- * and landed on `gpt-5.6-luna-wm`, a ChatGPT Work variant: regular chat
- * ignored it and ran every turn on Sol, wearing the Luna name in the chip
- * the whole time. With no usable Luna the answer is `auto` again — honest
- * about letting ChatGPT choose.
+ * Luna, on every plan (see `prefersLunaByDefault` for why `auto` lost that
+ * job), and only a Luna slug regular chat can actually serve. An earlier
+ * version preferred any slug containing "luna" and landed on
+ * `gpt-5.6-luna-wm`, a ChatGPT Work variant: regular chat ignored it and
+ * ran every turn on Sol, wearing the Luna name in the chip the whole time.
+ * With no Luna in the account's list the answer is the fallback slug, which
+ * is Luna in the shape the accounts report it.
  */
 export function defaultModel(planId?: string): string {
   const cfg = loadConfig();
@@ -172,6 +213,9 @@ export function isThinkingLevel(value: string): value is ThinkingLevel {
 export function normalizeModel(value: string | undefined): string | undefined {
   const v = value?.trim().toLowerCase();
   if (!v) return undefined;
+  // "auto" is no longer a choice (see allModels); a stored or typed one
+  // lands on the model the account runs well.
+  if (v === "auto") return defaultModel();
 
   // A slug the account actually reports always wins, including when the user
   // typed a dotted spelling of it.

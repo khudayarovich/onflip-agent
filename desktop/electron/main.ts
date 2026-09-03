@@ -5,6 +5,7 @@ import {
   ipcMain,
   shell,
   nativeTheme,
+  screen,
   Tray,
   Menu,
   IpcMainInvokeEvent,
@@ -77,6 +78,80 @@ function frontWorkspace(): Workspace | null {
 interface DesktopState {
   lastCwd?: string;
   bounds?: { x?: number; y?: number; width: number; height: number };
+  maximized?: boolean;
+}
+
+/**
+ * Saved bounds are trusted only while they land on a display that is still
+ * attached. A window last closed on a monitor that has since been unplugged
+ * came back entirely off-screen — running, in the taskbar, and unreachable
+ * without deleting the state file by hand. Position is dropped and the size
+ * kept, so the window centres itself at the size the user chose.
+ */
+function onScreenBounds(bounds: DesktopState["bounds"]): DesktopState["bounds"] | undefined {
+  if (!bounds) return undefined;
+  const { x, y, width, height } = bounds;
+  if (x === undefined || y === undefined) return { width, height };
+  const grabbable = screen.getAllDisplays().some((d) => {
+    const a = d.workArea;
+    // Enough of the title bar inside the work area to take hold of.
+    return x + width - 80 > a.x && x + 80 < a.x + a.width && y + 40 > a.y && y + 40 < a.y + a.height;
+  });
+  return grabbable ? bounds : { width, height };
+}
+
+/**
+ * Where an engine may start.
+ *
+ * The saved "last project" can name a folder that has since been deleted or
+ * renamed, and Windows reports a missing working directory on spawn as
+ * ENOENT — the same error as a missing executable. That one error used to
+ * send `startEngine` round its own Node-then-Electron fallback forever, on
+ * every tick, and the window was never drawn: the app was running and could
+ * not be opened. So the folder is checked here, before anything is spawned,
+ * and a missing one falls back to home and says so.
+ */
+function engineCwd(requested?: string): { cwd: string; missing?: string } {
+  const wanted = requested || loadState().lastCwd;
+  if (wanted) {
+    try {
+      if (fs.statSync(wanted).isDirectory()) return { cwd: wanted };
+    } catch {
+      /* gone, or not a directory — fall through */
+    }
+  }
+  // The state file is a convenience copy of something the engine's own
+  // session files already record. When it is missing or unreadable, the
+  // folder the user last actually worked in is still the right place to
+  // start, not their home directory.
+  const remembered = latestSessionCwd();
+  if (remembered) return { cwd: remembered, missing: wanted && wanted !== remembered ? wanted : undefined };
+  const home = os.homedir();
+  return { cwd: home, missing: wanted && wanted !== home ? wanted : undefined };
+}
+
+/** The working directory of the most recently saved session that still exists. */
+function latestSessionCwd(): string | null {
+  try {
+    const dir = path.join(os.homedir(), ".onflip", "sessions");
+    const candidates = fs
+      .readdirSync(dir)
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => ({ file: path.join(dir, f), mtime: fs.statSync(path.join(dir, f)).mtimeMs }))
+      .sort((a, b) => b.mtime - a.mtime)
+      .slice(0, 10);
+    for (const { file } of candidates) {
+      try {
+        const cwd = (JSON.parse(fs.readFileSync(file, "utf8")) as { cwd?: string }).cwd;
+        if (cwd && fs.statSync(cwd).isDirectory()) return cwd;
+      } catch {
+        /* a corrupt or stale record; try the next */
+      }
+    }
+  } catch {
+    /* no sessions yet */
+  }
+  return null;
 }
 
 function stateFile(): string {
@@ -85,7 +160,11 @@ function stateFile(): string {
 
 function loadState(): DesktopState {
   try {
-    return JSON.parse(fs.readFileSync(stateFile(), "utf8")) as DesktopState;
+    // A byte-order mark is not JSON. PowerShell's `Set-Content -Encoding
+    // utf8` writes one, and a hand-edited state file read as empty lost the
+    // window bounds and the last project on the next save.
+    const raw = fs.readFileSync(stateFile(), "utf8").replace(/^﻿/, "");
+    return JSON.parse(raw) as DesktopState;
   } catch {
     return {};
   }
@@ -165,9 +244,12 @@ function sendTo(ws: Workspace, channel: string, payload: unknown): void {
 function engineStderrLog(pid: number | undefined): fs.WriteStream | null {
   try {
     const file = path.join(app.getPath("userData"), "engine-stderr.log");
-    // Fresh engine, bounded file: keep the previous run's tail, not a year's.
+    // Fresh engine, bounded file. Rotated rather than deleted: the renderer
+    // restarts a dead engine within a second, so deleting here would throw
+    // away the crash's own stderr on the restart that follows it — exactly
+    // the evidence this file exists to keep.
     try {
-      if (fs.statSync(file).size > 1_000_000) fs.rmSync(file, { force: true });
+      if (fs.statSync(file).size > 1_000_000) fs.renameSync(file, `${file}.1`);
     } catch {
       /* first run */
     }
@@ -179,17 +261,36 @@ function engineStderrLog(pid: number | undefined): fs.WriteStream | null {
   }
 }
 
-function startEngine(ws: Workspace, cwd: string): void {
+function startEngine(ws: Workspace, requested?: string): void {
+  const { cwd, missing } = engineCwd(requested);
   ws.engineExited = false;
   let child = spawnEngine(cwd);
   const stderrLog = engineStderrLog(child.pid);
+  // One fallback, then the failure is final. The retry used to key on
+  // `c === child` alone, which the fallback satisfied too, so a second
+  // ENOENT re-entered it from its own error handler on every tick.
+  let fellBack = false;
 
   const wire = new Peer((chunk) => {
-    child.stdin?.write(chunk);
+    // Writing after the pipe is gone raises `error` on stdin, and with nobody
+    // listening that is an uncaught exception in the main process — a stale
+    // approval answered after a restart was enough to bring the dialog up.
+    if (child.exitCode !== null || child.signalCode !== null || !child.stdin?.writable) return;
+    child.stdin.write(chunk);
   });
   ws.peer = wire;
 
+  const fail = (detail: string) => {
+    ws.engineExited = true;
+    wire.close(detail);
+    sendTo(ws, "engine-event", { event: "connect", data: { state: "error", detail } });
+    sendTo(ws, "engine-exit", { code: null });
+  };
+
   const attach = (c: ChildProcess) => {
+    c.stdin?.on("error", () => {
+      /* EPIPE after the engine died; the exit handler is what reports that */
+    });
     c.stdout?.on("data", (chunk: Buffer) => wire.feed(chunk));
     c.stderr?.on("data", (chunk: Buffer) => {
       try {
@@ -200,18 +301,20 @@ function startEngine(ws: Workspace, cwd: string): void {
       sendTo(ws, "engine-event", { event: "log", data: { line: chunk.toString("utf8") } });
     });
     c.on("error", (e: NodeJS.ErrnoException) => {
+      if (c !== child) return;
       // No system Node — retry once inside Electron's own Node.
-      if (e.code === "ENOENT" && c === child) {
+      if (e.code === "ENOENT" && !fellBack) {
+        fellBack = true;
         const fallback = spawnEngineViaElectron([engineEntry(), "--cwd", cwd], cwd);
         child = fallback;
         ws.engine = fallback;
         attach(fallback);
         return;
       }
-      sendTo(ws, "engine-event", {
-        event: "connect",
-        data: { state: "error", detail: `Engine failed to start: ${e.message}` },
-      });
+      // A spawn that fails emits `error` and never `exit`, so everything the
+      // exit handler would do has to happen here, or the renderer waits on
+      // an `init` that no process will ever answer.
+      fail(`Engine failed to start: ${e.message}`);
     });
     c.on("exit", (code) => {
       if (c !== child) return;
@@ -224,17 +327,38 @@ function startEngine(ws: Workspace, cwd: string): void {
       } catch {
         /* best-effort */
       }
-      wire.failAll(`The engine exited (code ${code ?? "unknown"}).`);
+      wire.close(`The engine exited (code ${code ?? "unknown"}).`);
       sendTo(ws, "engine-exit", { code });
     });
   };
   attach(child);
   ws.engine = child;
 
+  let explainedMissing = false;
   wire.onEvent = (event, data) => {
     if (event === "status") {
       const status = data as EngineStatus;
       if (status.cwd) saveState({ lastCwd: status.cwd });
+      // Told once, after the engine's first status: by then the renderer has
+      // its transcript, so the note lands on screen instead of under it.
+      if (missing && !explainedMissing) {
+        explainedMissing = true;
+        sendTo(ws, "engine-event", {
+          event: "item",
+          data: {
+            type: "notice",
+            id: `missing-project-${Date.now()}`,
+            text: `The last project folder, ${missing}, no longer exists — opened your home folder instead.`,
+          },
+        });
+      }
+    }
+    // The engine has stopped waiting for these; an answer arriving later
+    // must not be credited to a prompt that is no longer open.
+    if (event === "approval-cancelled") {
+      for (const [id, waiter] of approvalWaiters) {
+        if (waiter.ws === ws) approvalWaiters.delete(id);
+      }
     }
     sendTo(ws, "engine-event", { event, data });
   };
@@ -255,12 +379,17 @@ function startEngine(ws: Workspace, cwd: string): void {
 // Pending approval prompts, answered by the renderers. Ids are global so a
 // response cannot be credited to the wrong window's prompt.
 let nextApprovalId = 1;
-const approvalWaiters = new Map<number, (d: ApprovalDecisionDTO) => void>();
+interface ApprovalWaiter {
+  ws: Workspace;
+  request: unknown;
+  resolve: (d: ApprovalDecisionDTO) => void;
+}
+const approvalWaiters = new Map<number, ApprovalWaiter>();
 
 function askRendererForApproval(ws: Workspace, request: unknown): Promise<ApprovalDecisionDTO> {
   const id = nextApprovalId++;
   return new Promise<ApprovalDecisionDTO>((resolve) => {
-    approvalWaiters.set(id, resolve);
+    approvalWaiters.set(id, { ws, request, resolve });
     sendTo(ws, "approval-request", { id, request });
     if (!ws.win.isDestroyed()) {
       ws.win.show();
@@ -269,13 +398,34 @@ function askRendererForApproval(ws: Workspace, request: unknown): Promise<Approv
   });
 }
 
+/**
+ * Put the prompts a window still owes back on its screen.
+ *
+ * A reload forgets the modal but not the engine's question: the turn sat in
+ * `awaitingApproval`, which pauses the silence watchdog, so it waited for
+ * ever. Re-sent when the fresh renderer asks for `init`, which is the one
+ * moment it is certainly listening.
+ */
+function resendApprovals(ws: Workspace): void {
+  for (const [id, waiter] of approvalWaiters) {
+    if (waiter.ws === ws) sendTo(ws, "approval-request", { id, request: waiter.request });
+  }
+}
+
 async function stopEngine(ws: Workspace): Promise<void> {
   const child = ws.engine;
   if (!child) return;
   ws.engine = null;
   const wire = ws.peer;
   ws.peer = null;
-  wire?.failAll("The engine is restarting.");
+  wire?.close("The engine is restarting.");
+  for (const [id, waiter] of approvalWaiters) {
+    if (waiter.ws === ws) approvalWaiters.delete(id);
+  }
+  // Already dead, or never started (no pid) — after a crash the renderer's
+  // own restart used to sit through the full grace period waiting for an
+  // exit that had happened, or that a failed spawn would never send.
+  if (child.pid === undefined || child.exitCode !== null || child.signalCode !== null) return;
   try {
     child.stdin?.end();
   } catch {
@@ -303,6 +453,7 @@ async function stopEngine(ws: Workspace): Promise<void> {
 
 function createWindow(cwd?: string): Workspace {
   const state = loadState();
+  const bounds = onScreenBounds(state.bounds);
   nativeTheme.themeSource = "dark";
 
   // Later windows cascade off the saved bounds rather than stacking exactly
@@ -310,10 +461,10 @@ function createWindow(cwd?: string): Workspace {
   const offset = workspaces.size * 28;
 
   const win = new BrowserWindow({
-    width: state.bounds?.width ?? 1280,
-    height: state.bounds?.height ?? 840,
-    x: state.bounds?.x !== undefined ? state.bounds.x + offset : undefined,
-    y: state.bounds?.y !== undefined ? state.bounds.y + offset : undefined,
+    width: bounds?.width ?? 1280,
+    height: bounds?.height ?? 840,
+    x: bounds?.x !== undefined ? bounds.x + offset : undefined,
+    y: bounds?.y !== undefined ? bounds.y + offset : undefined,
     minWidth: 760,
     minHeight: 520,
     show: false,
@@ -343,8 +494,31 @@ function createWindow(cwd?: string): Workspace {
     lastActiveId = win.id;
   });
 
+  // Shown when the first frame is ready — or after five seconds regardless.
+  // `ready-to-show` never fires for a page that failed to load, and a window
+  // that is never shown is indistinguishable from an app that did not start.
+  // A blank window with the debug log is something a person can act on.
+  let shown = false;
+  const reveal = () => {
+    if (shown || win.isDestroyed()) return;
+    shown = true;
+    win.show();
+    if (state.maximized && workspaces.size === 1) win.maximize();
+  };
+  const revealAnyway = setTimeout(reveal, 5_000);
   win.once("ready-to-show", () => {
-    if (!win.isDestroyed()) win.show();
+    clearTimeout(revealAnyway);
+    reveal();
+  });
+  // The renderer is the app itself: the only navigation it makes is its own
+  // load. Anything else — a file dropped somewhere other than the composer,
+  // a link the page did not catch — would replace the app with that page,
+  // and the preload's bridge (a terminal, among other things) would be
+  // handed to it.
+  const devServer = process.env.VITE_DEV_SERVER_URL;
+  win.webContents.on("will-navigate", (e, url) => {
+    if (devServer && url.startsWith(devServer)) return;
+    e.preventDefault();
   });
   // The custom maximise button swaps its glyph with the real window state.
   win.on("maximize", () => sendTo(ws, "win-state", { maximized: true }));
@@ -380,7 +554,12 @@ function createWindow(cwd?: string): Workspace {
   // invisibly.
   win.on("close", (e) => {
     if (win.isDestroyed()) return;
-    saveState({ bounds: win.getBounds() });
+    // The normal bounds, not the current ones: a maximised window reports
+    // the whole screen, and a minimised one reports -32000,-32000 on
+    // Windows — saved as-is, either restores a window nobody can find.
+    if (!win.isMinimized()) {
+      saveState({ bounds: win.getNormalBounds(), maximized: win.isMaximized() });
+    }
     if (!quitting && workspaces.size <= 1) {
       e.preventDefault();
       win.hide();
@@ -399,11 +578,10 @@ function createWindow(cwd?: string): Workspace {
     return { action: "deny" };
   });
 
-  const devServer = process.env.VITE_DEV_SERVER_URL;
   if (devServer) void win.loadURL(devServer);
   else void win.loadFile(path.join(__dirname, "..", "..", "ui-dist", "index.html"));
 
-  startEngine(ws, cwd || loadState().lastCwd || os.homedir());
+  startEngine(ws, cwd);
   return ws;
 }
 
@@ -450,6 +628,8 @@ function registerIpc(): void {
   ipcMain.handle("engine-call", async (e, payload: { method: string; params?: unknown }) => {
     const ws = wsOf(e);
     if (!ws?.peer || ws.engineExited) throw new Error("The engine is not running.");
+    // A fresh renderer — first load or a reload — announces itself with init.
+    if (payload.method === "init") resendApprovals(ws);
     return await ws.peer.request(payload.method, payload.params ?? {});
   });
 
@@ -457,7 +637,7 @@ function registerIpc(): void {
     const waiter = approvalWaiters.get(payload.id);
     if (!waiter) return;
     approvalWaiters.delete(payload.id);
-    waiter(payload.decision);
+    waiter.resolve(payload.decision);
   });
 
   // Another window, another engine, another concurrent session.
@@ -570,9 +750,8 @@ function registerIpc(): void {
   ipcMain.handle("restart-engine", async (e, payload: { cwd?: string }) => {
     const ws = wsOf(e);
     if (!ws) return false;
-    const cwd = payload?.cwd || loadState().lastCwd || os.homedir();
     await stopEngine(ws);
-    startEngine(ws, cwd);
+    startEngine(ws, payload?.cwd);
     return true;
   });
 
@@ -882,6 +1061,12 @@ if (!singleInstance) {
   });
 
   void app.whenReady().then(() => {
+    // No menu bar on Windows and Linux: the window draws its own chrome, and
+    // the default menu's accelerators still fired underneath it — Ctrl+R
+    // reloaded the renderer mid-turn and orphaned whatever prompt was up.
+    // macOS keeps the default menu, which is where Copy and Paste live; a
+    // dev checkout keeps it everywhere for the DevTools shortcut.
+    if (process.platform !== "darwin" && app.isPackaged) Menu.setApplicationMenu(null);
     registerIpc();
     createWindow();
     // The tray icon is a Windows .ico; macOS keeps the app in the dock

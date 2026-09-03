@@ -42,12 +42,35 @@ export function replayItems(history: ChatMessage[]): ChatItem[] {
     if (message.role === "assistant") {
       pendingCalls = [];
       const parsed = parseTurn(message.content);
-      const calls = parsed.calls.map<ToolCallDTO>((c) => ({
-        id: randomUUID(),
-        tool: c.tool,
-        subject: subjectFor(c.tool, c.arguments),
-        args: c.arguments,
-      }));
+      // The closing blocks are the turn's answer or question, not tool
+      // cards — and, exactly as the loop treats them, they close nothing
+      // when they arrive beside real calls.
+      const closing = parsed.calls.find((c) => closingKind(c.tool) !== null) ?? null;
+      const calls = parsed.calls
+        .filter((c) => closingKind(c.tool) === null)
+        .map<ToolCallDTO>((c) => ({
+          id: randomUUID(),
+          tool: c.tool,
+          subject: subjectFor(c.tool, c.arguments),
+          args: c.arguments,
+        }));
+      if (closing && calls.length === 0) {
+        const kind = closingKind(closing.tool);
+        const options = argumentList(closing.arguments.options);
+        const body =
+          kind === "done"
+            ? argumentText(closing.arguments.summary)
+            : [argumentText(closing.arguments.question), ...options.map((o) => `- ${o}`)]
+                .filter(Boolean)
+                .join("\n");
+        const text = [parsed.text.trim(), body.trim()].filter(Boolean).join("\n\n");
+        items.push(
+          kind === "done"
+            ? { type: "assistant", id: randomUUID(), text: text || "Done." }
+            : { type: "question", id: randomUUID(), text, options }
+        );
+        continue;
+      }
       if (parsed.text.trim()) {
         items.push({
           type: calls.length > 0 ? "narration" : "assistant",
@@ -103,6 +126,42 @@ export function replayItems(history: ChatMessage[]): ChatItem[] {
   }
 
   return items;
+}
+
+/**
+ * Which closing block a call is, under every name the registry folds onto
+ * the two — kept in step with the alias table in the core's tool registry.
+ */
+function closingKind(tool: string): "done" | "ask_user" | null {
+  const name = tool.trim().toLowerCase().replace(/[-\s]/g, "_");
+  if (/^(?:done|finish|final_answer|attempt_completion|complete|completed|submit|final|end_turn)$/.test(name)) {
+    return "done";
+  }
+  if (/^(?:ask_user|ask|ask_followup_question|ask_question|question|clarify)$/.test(name)) {
+    return "ask_user";
+  }
+  return null;
+}
+
+function argumentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value === null || value === undefined) return "";
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value, null, 2);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function argumentList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => argumentText(v).trim()).filter(Boolean);
+  return argumentText(value)
+    .split("\n")
+    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim())
+    .filter(Boolean);
 }
 
 /**

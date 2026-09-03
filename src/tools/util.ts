@@ -135,8 +135,13 @@ export function clip(text: string, maxLines: number, maxChars = 12_000): string 
       ...tail,
     ].join("\n");
   }
+  // Head and tail here too: a build log's errors are at the end, and a cap
+  // that kept only the beginning threw away exactly the part the line
+  // budget above had just gone to the trouble of preserving.
   if (out.length > maxChars) {
-    out = `${out.slice(0, maxChars)}\n… output truncated at ${maxChars} characters`;
+    const head = out.slice(0, Math.floor(maxChars * 0.7));
+    const tail = out.slice(-Math.max(1, Math.floor(maxChars * 0.3)));
+    out = `${head}\n… ${out.length - head.length - tail.length} characters omitted …\n${tail}`;
   }
   return out;
 }

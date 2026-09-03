@@ -1,0 +1,64 @@
+name: Windows desktop release
+
+# Builds the OnFlip Desktop Windows installer when a desktop-v<version> tag
+# is pushed and publishes it as that tag's GitHub release — the release the
+# in-app update check reads (desktop/electron/updates.ts). The macOS workflow
+# attaches its artifacts to the same release afterwards.
+on:
+  push:
+    tags: ["desktop-v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to build and publish (e.g. desktop-v0.8.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    env:
+      ONFLIP_SKIP_BROWSER_DOWNLOAD: "1"
+      # No signing certificate in CI; build unsigned rather than fail.
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install core dependencies (builds dist/)
+        run: npm install --no-audit --no-fund
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm install --no-audit --no-fund
+
+      - name: Build the installer
+        working-directory: desktop
+        run: node scripts/release.js
+
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        shell: bash
+        run: |
+          ls -la desktop/release
+          version="${TAG#desktop-v}"
+          if ! gh release view "$TAG" >/dev/null 2>&1; then
+            if [ -f desktop/RELEASE_NOTES.md ]; then
+              gh release create "$TAG" --title "OnFlip Desktop $version" --notes-file desktop/RELEASE_NOTES.md
+            else
+              gh release create "$TAG" --title "OnFlip Desktop $version" --generate-notes
+            fi
+          fi
+          gh release upload "$TAG" \
+            desktop/release/OnFlip-Setup-*.exe \
+            desktop/release/OnFlip-Setup-*.exe.blockmap \
+            --clobber

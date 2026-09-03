@@ -1,4 +1,5 @@
 import { spawn, ChildProcess } from "node:child_process";
+import * as fs from "node:fs";
 import * as path from "node:path";
 import { ToolDefinition, ToolResult } from "../types";
 import { err, ok, denied, asNumber, asBool, clip } from "./util";
@@ -38,7 +39,12 @@ const WINDOWS_UTF8_PRELUDE =
   "chcp 65001 > $null; " +
   "[Console]::OutputEncoding=[Text.Encoding]::UTF8; " +
   "[Console]::InputEncoding=[Text.Encoding]::UTF8; " +
-  "$OutputEncoding=[Text.Encoding]::UTF8; ";
+  "$OutputEncoding=[Text.Encoding]::UTF8; " +
+  // `chcp` is a native program, so it leaves $LASTEXITCODE at 0 — which the
+  // exit-code probe below would read as "a program ran and succeeded" even
+  // when the command was a cmdlet that failed. Cleared, so only programs the
+  // command itself ran are counted.
+  "$global:LASTEXITCODE=$null; ";
 
 /**
  * Does this output look like UTF-8 that something decoded as a byte
@@ -74,7 +80,14 @@ export function shellHost(): ShellHost {
         // agent's own shell had been left behind.
         `${WINDOWS_UTF8_PRELUDE}${command}`,
       ],
-      cwdProbe: `; Write-Output ("${CWD_MARKER}:" + (Get-Location).Path)`,
+      // The probe runs after the command, so on its own it would make every
+      // command exit 0 — a failed build reported as success, and the model
+      // moving on. The status is captured first and re-raised at the end:
+      // `$?` before anything else can overwrite it (it is the cmdlet
+      // verdict), $LASTEXITCODE for a native program's own code.
+      cwdProbe:
+        "; $__ok = $?; $__rc = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($__ok) { 0 } else { 1 }" +
+        `; Write-Output ("${CWD_MARKER}:" + (Get-Location).Path); exit $__rc`,
     };
   }
   const file = process.env.SHELL && process.env.SHELL.includes("bash") ? process.env.SHELL : "/bin/sh";
@@ -82,7 +95,9 @@ export function shellHost(): ShellHost {
     name: path.basename(file),
     file,
     args: (command) => ["-c", command],
-    cwdProbe: `; printf '${CWD_MARKER}:%s\\n' "$PWD"`,
+    // Same shape as the PowerShell probe: keep the command's status, print
+    // the directory, then exit with what the command exited with.
+    cwdProbe: `; __rc=$?; printf '${CWD_MARKER}:%s\\n' "$PWD"; exit $__rc`,
   };
 }
 
@@ -102,6 +117,26 @@ export function setShellCwd(dir: string): void {
 
 export function resetShellCwd(): void {
   sessionCwd = null;
+}
+
+/**
+ * A directory a shell can actually be started in.
+ *
+ * `cd HKLM:\Software` reports a path just like a real one does, and so does
+ * a folder that a later command deletes. Once either is stored as the
+ * session's directory every spawn fails with ENOENT — including the `cd`
+ * that would fix it — so a path is only kept when it is a filesystem
+ * directory, and on Windows a drive-letter or UNC one.
+ */
+function isUsableDirectory(dir: string): boolean {
+  if (process.platform === "win32" && !/^[a-zA-Z]:[\\/]/.test(dir) && !/^(?:\\\\|\/\/)[^\\/]/.test(dir)) {
+    return false;
+  }
+  try {
+    return fs.statSync(dir).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -247,7 +282,11 @@ function execute(
         const idx = lines[i].indexOf(`${CWD_MARKER}:`);
         if (idx !== -1) {
           resolvedCwd = lines[i].slice(idx + CWD_MARKER.length + 1).trim();
-          lines.splice(i, 1);
+          // Output without a trailing newline shares the marker's line, so
+          // only the marker goes — dropping the whole line turned
+          // `Write-Host -NoNewline hello` into "(no output)".
+          if (idx > 0) lines[i] = lines[i].slice(0, idx);
+          else lines.splice(i, 1);
           break;
         }
       }
@@ -303,7 +342,17 @@ export const bashTool: ToolDefinition = {
       MAX_TIMEOUT,
       Math.max(1_000, asNumber(args.timeout_ms) ?? DEFAULT_TIMEOUT)
     );
-    const cwd = getShellCwd(ctx.cwd);
+    let cwd = getShellCwd(ctx.cwd);
+    // The stored directory can stop existing between calls — a build that
+    // removes its own output folder, say. Start over from the session root
+    // rather than failing every command from here on, and say so, since the
+    // model's relative paths were written against the old one.
+    let cwdNote = "";
+    if (cwd !== ctx.cwd && !isUsableDirectory(cwd)) {
+      cwdNote = `[OnFlip] The working directory ${cwd} no longer exists; running in ${ctx.cwd} instead.`;
+      resetShellCwd();
+      cwd = ctx.cwd;
+    }
     const danger = assessCommand(command);
 
     const decision = await ctx.requestPermission({
@@ -321,12 +370,13 @@ export const bashTool: ToolDefinition = {
     if (!decision.allow) return denied("Command", decision.reason);
 
     if (asBool(args.background)) {
-      return startBackground(command, cwd);
+      const started = startBackground(command, cwd);
+      return cwdNote ? { ...started, output: `${cwdNote}\n${started.output}` } : started;
     }
 
     const result = await execute(command, cwd, timeout, ctx.signal, ctx.onProgress);
 
-    if (result.cwd && result.cwd !== cwd) setShellCwd(result.cwd);
+    if (result.cwd && result.cwd !== cwd && isUsableDirectory(result.cwd)) setShellCwd(result.cwd);
 
     if (result.aborted) {
       return { output: "Command interrupted by the user.", error: true, denied: true };
@@ -345,6 +395,7 @@ export const bashTool: ToolDefinition = {
       );
     }
     if (parts.length === 0) parts.push("(no output)");
+    if (cwdNote) parts.unshift(cwdNote);
     parts.push(`[exit code ${result.code ?? "unknown"}]`);
 
     const failed = result.timedOut || (result.code !== 0 && result.code !== null);

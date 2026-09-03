@@ -316,9 +316,9 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
       });
     });
 
-    win.webContents.on("did-fail-load", (_e, code, description, url) => {
-      // Sub-resource failures are noise; only a failed main document matters.
-      if (url && url.startsWith("https://chatgpt.com") && code !== -3) {
+    win.webContents.on("did-fail-load", (_e, code, description, url, isMainFrame) => {
+      // Sub-frame failures are noise; only a failed main document matters.
+      if (isMainFrame && url && url.startsWith("https://chatgpt.com") && code !== -3) {
         finish({ ok: false, reason: `could not load ChatGPT (${description})` });
       }
     });

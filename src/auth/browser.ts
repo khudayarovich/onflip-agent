@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { findSafariCookieLocations } from "./safari";
 
 export interface BrowserCookieLocation {
   browser: string;
@@ -157,9 +158,15 @@ export function knownBrowserNames(): string[] {
     process.platform === "linux"
       ? ["Chrome", "Edge", "Brave", "Chromium", "Vivaldi"]
       : ["Chrome", "Edge", "Brave", "Chromium", "Vivaldi", "Arc"];
-  return [...chromium, "Firefox"];
+  return [...chromium, "Firefox", ...(process.platform === "darwin" ? ["Safari"] : [])];
 }
 
 export function allCookieLocations(): BrowserCookieLocation[] {
-  return [...findChromiumCookieLocations(), ...findFirefoxCookieLocations()];
+  // Firefox and Safari first: their stores are readable, so a session there
+  // is found without paying for the Chromium attempts that mostly fail.
+  return [
+    ...findFirefoxCookieLocations(),
+    ...findSafariCookieLocations(),
+    ...findChromiumCookieLocations(),
+  ];
 }

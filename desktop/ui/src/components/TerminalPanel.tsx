@@ -33,6 +33,11 @@ export function TerminalPanel({
   onClose: () => void;
 }): React.ReactElement {
   const t = useT();
+  // The IPC listeners below subscribe once and would otherwise keep the
+  // translator of the first render, leaving the exit-code line in the old
+  // language after a switch; the ref hands them the current one.
+  const tRef = useRef(t);
+  tRef.current = t;
   const [lines, setLines] = useState<TermLine[]>([]);
   const [input, setInput] = useState("");
   const [running, setRunning] = useState(false);
@@ -57,7 +62,7 @@ export function TerminalPanel({
     const offExit = window.onflip.onTermExit((d) => {
       setRunning(false);
       setTermCwd(d.cwd);
-      if (d.code !== 0) append("info", t("termExitCode", { n: d.code }));
+      if (d.code !== 0) append("info", tRef.current("termExitCode", { n: d.code }));
     });
     return () => {
       offData();

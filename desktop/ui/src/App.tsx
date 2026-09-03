@@ -41,7 +41,6 @@ type ModalName =
   | "diff"
   | "about"
   | "skills"
-  | "cookie"
   | "signin"
   | null;
 
@@ -254,6 +253,16 @@ export function App(): React.ReactElement {
   const sessionTitleRef = useRef<string>("");
   /** Last automatic engine revive, so a crash loop cannot churn restarts. */
   const lastEngineRevive = useRef(0);
+  /**
+   * The folder this window's engine was in, read at revive time. The exit
+   * listener is wired once and sees no later state; without this a crashed
+   * engine came back in the main process's default folder — with two
+   * windows open, that is the other window's project.
+   */
+  const statusCwdRef = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    statusCwdRef.current = status?.cwd;
+  }, [status?.cwd]);
 
   const pushLocal = useCallback((item: ChatItem) => {
     setItems((prev) => [...prev, item]);
@@ -423,6 +432,10 @@ export function App(): React.ReactElement {
           } else {
             setTurnActive(false);
             setStreaming(IDLE_STREAM);
+            // A prompt outliving its turn has nobody to answer to: the
+            // engine has already moved on, and a decision sent now would
+            // name a request id that no longer exists.
+            setApproval(null);
             // A turn that ran is worth a mark of how long it took — the
             // running clock disappears with the spinner otherwise.
             if (turnStartedAt.current) {
@@ -475,6 +488,12 @@ export function App(): React.ReactElement {
           setTodos((data as { items: TodoItemDTO[] }).items);
           break;
         }
+        case "approval-cancelled": {
+          // The engine withdrew the request (interrupt, crash) before it was
+          // answered; the modal must not stay up asking about it.
+          setApproval(null);
+          break;
+        }
         case "browser-frame": {
           const frame = data as BrowserFrameDTO;
           setBrowserFrame(frame);
@@ -499,6 +518,8 @@ export function App(): React.ReactElement {
       setConnect("error");
       setTurnActive(false);
       setStreaming(IDLE_STREAM);
+      // The process that asked is gone, so is the question.
+      setApproval(null);
       // An engine that dies unexpectedly is restarted the way the user would
       // do it — same path as the button below — because "The engine process
       // exited" over a dead session, with the fix one click away, helps
@@ -507,7 +528,7 @@ export function App(): React.ReactElement {
       if (Date.now() - lastEngineRevive.current > 60_000) {
         lastEngineRevive.current = Date.now();
         setConnectDetail("The engine stopped — restarting it…");
-        void api.restartEngine().then(() => boot());
+        void api.restartEngine(statusCwdRef.current).then(() => boot());
       } else {
         setConnectDetail("The engine process exited.");
       }
@@ -531,15 +552,21 @@ export function App(): React.ReactElement {
     [notifyError]
   );
 
+  /**
+   * Send a prompt. Returns whether it was taken: the composer clears itself
+   * only on a yes, so a message refused here is still there to send once
+   * the refusal is dealt with.
+   */
   const sendPrompt = useCallback(
-    (text: string, attachments?: string[]) => {
+    (text: string, attachments?: string[]): boolean => {
       // Nothing can be sent without a session, and the failure it produces
       // explains itself badly. Ask for the sign-in that would fix it.
       if (connect === "signed-out") {
         setModal("signin");
-        return;
+        return false;
       }
       guard(api.send(text, attachments?.length ? attachments : undefined));
+      return true;
     },
     [guard, connect]
   );
@@ -747,14 +774,13 @@ export function App(): React.ReactElement {
   // ---- render --------------------------------------------------------------
 
   const busy = turnActive || Boolean(status?.busy);
-  const homePath = status?.home ?? "";
   const shortCwd = status?.scratch
     ? // A scratch workspace's real path is an implementation detail; what the
       // user chose was a chat without a folder, so that is what the strip says.
       translate(lang, "newScratchChat")
-    : status && homePath && status.cwd.toLowerCase().startsWith(homePath.toLowerCase())
-      ? `~${status.cwd.slice(homePath.length)}`
-      : (status?.cwd ?? "");
+    : status
+      ? tildify(status.cwd, status.home ?? "")
+      : "";
 
   const t = useCallback(
     (key: StringKey, params?: Record<string, string | number>) => translate(lang, key, params),
@@ -899,20 +925,7 @@ export function App(): React.ReactElement {
             },
           })
         }
-        onSignInCookie={() => setModal("cookie")}
-        onSignIn={() => {
-          void window.onflip
-            .signIn()
-            .then((r) => {
-              if (r.ok) {
-                refreshStatus();
-                refreshLists();
-              } else if (r.reason && r.reason !== "cancelled") {
-                notifyError(`Sign-in did not complete: ${r.reason}`);
-              }
-            })
-            .catch((e: Error) => notifyError(e.message));
-        }}
+        onSignIn={() => setModal("signin")}
       />
 
       <main className="main">
@@ -1004,7 +1017,11 @@ export function App(): React.ReactElement {
             <button
               className="update-dismiss"
               onClick={() => {
-                localStorage.setItem("onflip.update.dismissed", update.latest);
+                try {
+                  localStorage.setItem("onflip.update.dismissed", update.latest);
+                } catch {
+                  /* cosmetic: the banner is dismissed for this launch regardless */
+                }
                 setUpdate(null);
               }}
             >
@@ -1050,6 +1067,7 @@ export function App(): React.ReactElement {
             else if ((status?.queued.length ?? 0) > 0) guard(api.clearQueue());
           }}
           onCommand={runCommand}
+          onNotice={notify}
           onSetModel={(slug) => guard(api.setModel(slug))}
           onSetThinking={(level) => guard(api.setThinking(level))}
           onSetApproval={(mode) => {
@@ -1160,42 +1178,6 @@ export function App(): React.ReactElement {
             refreshLists();
             boot();
           }}
-          onPasteToken={() => setModal("cookie")}
-          onSignInWindow={() => {
-            setModal(null);
-            void window.onflip
-              .signIn()
-              .then((r) => {
-                if (r.ok) {
-                  refreshStatus();
-                  refreshLists();
-                  boot();
-                } else if (r.reason && r.reason !== "cancelled") {
-                  notifyError(`Sign-in did not complete: ${r.reason}`);
-                }
-              })
-              .catch((err: Error) => notifyError(err.message));
-          }}
-        />
-      )}
-      {modal === "cookie" && (
-        <CookieSignInModal
-          onClose={() => setModal(null)}
-          onImported={() => {
-            refreshStatus();
-            refreshLists();
-          }}
-          onNotice={notify}
-          onSubmit={(token) => {
-            setModal(null);
-            void api
-              .signInWithToken(token)
-              .then(() => {
-                refreshStatus();
-                refreshLists();
-              })
-              .catch((e: Error) => notifyError(e.message));
-          }}
         />
       )}
 
@@ -1260,6 +1242,19 @@ export function App(): React.ReactElement {
 }
 
 /**
+ * A path under the home folder, written with a tilde. The home folder must
+ * end at a separator: a bare prefix match turned C:\Users\fashu2\proj into
+ * ~2\proj for the user whose home is C:\Users\fashu.
+ */
+function tildify(cwd: string, home: string): string {
+  const root = home.replace(/[\\/]+$/, "");
+  if (!root || !cwd.toLowerCase().startsWith(root.toLowerCase())) return cwd;
+  const next = cwd[root.length];
+  if (next !== undefined && next !== "\\" && next !== "/") return cwd;
+  return `~${cwd.slice(root.length)}`;
+}
+
+/**
  * The agent's plan, pinned above the composer the way Codex shows its task
  * list. Collapsed it keeps one line — progress plus the step in flight — and
  * it disappears entirely when no plan exists.
@@ -1306,109 +1301,3 @@ function TodoPanel({ items }: { items: TodoItemDTO[] }): React.ReactElement | nu
   );
 }
 
-/**
- * Signing in by pasting a session cookie.
- *
- * The escape hatch for a machine where the sign-in window will not do — the
- * same token `onflip login` stores, typed in by hand. It is masked while
- * typing, never logged, and goes straight to the engine, which writes it to
- * ~/.onflip like any other sign-in.
- */
-function CookieSignInModal({
-  onClose,
-  onSubmit,
-  onImported,
-  onNotice,
-}: {
-  onClose: () => void;
-  onSubmit: (token: string) => void;
-  onImported: () => void;
-  onNotice: (text: string) => void;
-}): React.ReactElement {
-  const t = useT();
-  const [token, setToken] = useState("");
-  // Detection runs first: pasting a cookie by hand is the fallback for when
-  // no browser here has a session OnFlip can read, not the starting point.
-  const [detecting, setDetecting] = useState(true);
-  const [reason, setReason] = useState<string | null>(null);
-  const ready = token.trim().length >= 20;
-
-  useEffect(() => {
-    let live = true;
-    void api
-      .importBrowserSession()
-      .then((r) => {
-        if (!live) return;
-        if (r.ok) {
-          onNotice(t("cookieFound", { browser: r.source ?? "your browser" }));
-          onImported();
-          onClose();
-          return;
-        }
-        setReason(r.reason ?? null);
-        setDetecting(false);
-      })
-      .catch((e: Error) => {
-        if (!live) return;
-        setReason(e.message);
-        setDetecting(false);
-      });
-    return () => {
-      live = false;
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-  return (
-    <Modal
-      title={t("cookieTitle")}
-      onClose={onClose}
-      footer={
-        <>
-          <button className="btn" onClick={onClose}>
-            {t("cancel")}
-          </button>
-          {!detecting && (
-            <button
-              className="btn primary"
-              disabled={!ready}
-              onClick={() => onSubmit(token.trim())}
-            >
-              {t("cookieAction")}
-            </button>
-          )}
-        </>
-      }
-    >
-      {detecting ? (
-        <div className="content-loading" style={{ padding: "26px 0" }}>
-          <span className="spinner big" />
-          <span>{t("cookieDetecting")}</span>
-        </div>
-      ) : (
-        <>
-          {reason && (
-            <div className="modal-note" style={{ color: "var(--yellow)" }}>
-              {reason}
-            </div>
-          )}
-          <div className="modal-note" style={{ marginTop: reason ? 10 : 0 }}>
-            {t("cookieFallback")} {t("cookieHelp")}
-          </div>
-          <input
-        className="skill-input"
-        style={{ width: "100%", marginTop: 12 }}
-        type="password"
-        autoFocus
-        spellCheck={false}
-        placeholder={t("cookiePlaceholder")}
-        value={token}
-            onChange={(e) => setToken(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && ready) onSubmit(token.trim());
-            }}
-          />
-        </>
-      )}
-    </Modal>
-  );
-}

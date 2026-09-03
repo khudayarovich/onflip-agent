@@ -64,11 +64,11 @@ Download the latest build from the [releases page](https://github.com/khudayarov
 | macOS (Apple Silicon) | `OnFlip-<version>-mac-arm64.dmg` | Drag to Applications. First launch needs **right-click → Open → Open**. |
 | macOS (Intel) | `OnFlip-<version>-mac-x64.dmg` | Same as above. |
 
-On first launch OnFlip asks you to sign in to ChatGPT. If you are already signed in in a browser whose cookies it can read — Firefox, and Chromium browsers that have not moved to app-bound encryption — it picks that session up and you never see a login form.
+On first launch OnFlip asks you to sign in to ChatGPT. **Open Chrome to sign in** starts your real Chrome (or Edge, or the bundled browser when neither is installed) on a private profile that belongs to OnFlip — no automation, no flags, exactly the browser you use every day, so Google, Apple, Microsoft and email sign-ins all work. Sign in there, close the window when the chat page appears, and OnFlip drives that same profile from then on. Nothing is decrypted or copied out of your own browser, and your everyday browser profile is never touched.
 
-For Chrome and Edge, which encrypt their cookies so no other program can read them, **Use my browser** opens your real browser and asks it for the session instead. That needs the small connector extension in [`extension/`](extension/), which ships inside the app — OnFlip shows you the folder and opens it for you. Load it once via *Developer mode → Load unpacked* and every sign-in after that is one click. It reads `chatgpt.com` cookies and posts them to OnFlip on `127.0.0.1`; there is no remote endpoint in it.
+Already signed in to ChatGPT in Firefox, or in Safari on a Mac? **Use my Firefox or Safari session** imports it directly (Safari needs OnFlip to be granted Full Disk Access). Chrome and Edge encrypt their cookies with a key bound to the browser, so those sessions cannot be read by anything else — that is the browser's protection, and OnFlip does not go around it; the sign-in above is the way in for them. A machine with neither Chrome nor Edge gets OnFlip's own bundled browser, downloaded once (about 150 MB) the first time it is needed.
 
-Failing both, the app has its own sign-in window, which is an ordinary browser window and remembers the session afterwards.
+The session lives in `~/.onflip/browser-profile`, together with the browser it was made with, and survives restarts. **Sign out** in the account menu clears it.
 
 ## What it can do
 
@@ -151,7 +151,7 @@ There is no OnFlip server. Nothing is sent anywhere except to ChatGPT, by your o
 
 **Does this break ChatGPT's terms?** OnFlip drives a real browser session as a logged-in user, with no automation flags and no bypassing of any check — Cloudflare challenges are completed by you, in a real window. You are responsible for using your account within OpenAI's terms.
 
-**Why can't it just read my Chrome session?** Chrome and Edge encrypt their cookies with a key bound to the browser itself, and recent Chrome refuses to be driven with its own profile. Both are deliberate anti-theft protections, and the ways around them are the ways malware gets in — so OnFlip does not go around them. It asks the browser instead: **Use my browser** opens your real Chrome and the connector extension in [`extension/`](extension/) hands the session over on loopback. Firefox needs none of this, and the app's own sign-in window works everywhere.
+**Why can't it just read my Chrome session?** Chrome and Edge encrypt their cookies with a key bound to the browser itself, and recent Chrome refuses to be driven with its own profile. Both are deliberate anti-theft protections, and the ways around them are the ways malware gets in — so OnFlip does not go around them. Instead it signs in inside the real browser on a profile of its own, and drives that profile afterwards with the same browser, which can read its own cookies. Firefox sessions can still be imported directly.
 
 **Which model does it use?** Whatever your account offers, chosen from the model chip. Free and Go accounts default to GPT-5.6 Luna, the plan with unlimited text chats; Plus and Pro run GPT-5.6 Sol in regular chat. Reasoning effort is a separate control, and OnFlip sizes its context budget from whichever model you are on.
 

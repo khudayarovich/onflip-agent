@@ -38,7 +38,21 @@ export const todoWriteTool: ToolDefinition = {
 
     const items: TodoItem[] = [];
     for (const [i, raw] of (args.todos as unknown[]).entries()) {
-      const t = raw as Record<string, unknown>;
+      // A bare string is a clear enough shorthand to honour. Anything else
+      // that is not an object gets told the shape — a `null` here used to
+      // crash the tool instead of answering.
+      const t: Record<string, unknown> | null =
+        typeof raw === "string"
+          ? { content: raw }
+          : raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>)
+            : null;
+      if (!t) {
+        const what = raw === null ? "null" : Array.isArray(raw) ? "an array" : `a ${typeof raw}`;
+        return err(
+          `todos[${i}] is ${what}, not a task. Each item must be an object like {"content": "...", "status": "pending"}; resend the whole list.`
+        );
+      }
       const content = String(t.content ?? "").trim();
       if (!content) return err(`todos[${i}]: \`content\` must be non-empty`);
       const status = String(t.status ?? "pending") as TodoStatus;

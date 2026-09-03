@@ -12,7 +12,7 @@ import { logger } from "../log";
 function looksLikeSessionToken(value: string | undefined): value is string {
   return typeof value === "string" && value.trim().length >= 20;
 }
-import { fetchAccessToken, SessionCookie } from "./access";
+import { fetchAccessToken, pickSessionCookie, SessionCookie, SESSION_COOKIE } from "./access";
 
 export interface ResolvedAuth {
   accessToken: string;
@@ -38,6 +38,10 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
   // Always extract cookies from browser (needed for Playwright client)
   let cookies: SessionCookie[] | null = null;
   let deviceId: string | undefined;
+  // The cookie that *is* the session, when one is known. Not `cookies[0]`:
+  // a jar read out of a browser is ordered by host, so its first entry was
+  // usually cf_clearance, and that is what got stored as the session token.
+  let primary: SessionCookie | null = null;
 
   const manualToken = envToken();
   if (config.signedOut && !manualToken) {
@@ -55,24 +59,26 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
     };
   }
   if (manualToken) {
-    cookies = [{ name: "__Secure-next-auth.session-token", value: manualToken }];
+    primary = { name: SESSION_COOKIE, value: manualToken };
+    cookies = [primary];
   } else {
     const extracted = spawnExtractToken();
     if (extracted) {
       cookies = extracted.cookies;
       deviceId = extracted.deviceId;
+      primary = extracted.primary;
     } else if (config.sessionCookies?.length) {
       // A jar OnFlip stored itself: complete, including a chunked token that
       // a single stored cookie could never carry.
       cookies = config.sessionCookies.filter((c) => looksLikeSessionToken(c.value));
       deviceId = config.sessionDeviceId;
+      primary = pickSessionCookie(cookies);
     } else if (looksLikeSessionToken(config.sessionToken)) {
-      cookies = [
-        {
-          name: config.sessionCookieName || "__Secure-next-auth.session-token",
-          value: config.sessionToken as string,
-        },
-      ];
+      primary = {
+        name: config.sessionCookieName || SESSION_COOKIE,
+        value: config.sessionToken as string,
+      };
+      cookies = [primary];
       deviceId = config.sessionDeviceId;
     }
   }
@@ -92,9 +98,8 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
     const session = await fetchAccessToken(cookies);
     accessToken = session.accessToken;
     const expiry = session.expires ? Date.parse(session.expires) : undefined;
-    // There may be no cookie at all now that a failed extraction is
+    // There may be no session token at all now that a failed extraction is
     // survivable, so nothing here may assume one.
-    const primary = cookies[0];
     saveConfig({
       sessionToken: primary?.value,
       sessionCookieName: primary?.name,
@@ -109,7 +114,6 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
     // Access token fetch failed — browser client will handle it
   }
 
-  const primary = cookies[0];
   return {
     accessToken,
     model,
@@ -117,6 +121,7 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
     maxIterations,
     cookies,
     deviceId,
+    // No session token known is "", never whichever cookie the jar began with.
     sessionToken: primary?.value ?? "",
   };
 }

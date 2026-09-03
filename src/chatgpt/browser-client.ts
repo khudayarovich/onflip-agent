@@ -1,9 +1,13 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
-import { chromium, Browser, BrowserContext, Page } from "playwright";
+import { spawn, ChildProcess } from "node:child_process";
+import { StringDecoder } from "node:string_decoder";
+import { chromium, Browser, BrowserContext, Locator, Page } from "playwright";
+import type { ReplyMeta } from "./transport";
 import { SessionCookie } from "../auth/access";
 import { normalizeModel, thinkingDirective } from "../models";
-import { configDir } from "../config";
+import { configDir, loadConfig } from "../config";
 import { logger, shapeOf } from "../log";
 
 /**
@@ -40,9 +44,14 @@ const ASSISTANT_SELECTORS = [
 ];
 const STOP_SELECTORS = [
   "button[data-testid='stop-button']",
+  // The newer composer folds send and stop into one control and tells them
+  // apart by label.
+  "#composer-submit-button[aria-label='Stop streaming']",
   "button[aria-label*='Stop']",
   "button[aria-label*='stop']",
 ];
+/** ChatGPT's own "Continue generating" is clicked this often before the model is asked to resend. */
+const MAX_CONTINUATIONS = 2;
 const SEND_SELECTORS = [
   "button[data-testid='send-button']",
   "button[data-testid='composer-send-button']",
@@ -105,6 +114,461 @@ export function takeReplyImages(): ReplyImage[] {
   return images;
 }
 
+/** What the last send learned about its reply beyond the text; cleared on read. */
+let lastReplyMeta: ReplyMeta | null = null;
+
+export function takeReplyMeta(): ReplyMeta | undefined {
+  const meta = lastReplyMeta;
+  lastReplyMeta = null;
+  return meta ?? undefined;
+}
+
+function currentReplyMeta(): ReplyMeta | null {
+  return lastReplyMeta;
+}
+
+// ---------------------------------------------------------------------------
+// the reply stream
+// ---------------------------------------------------------------------------
+
+/**
+ * ChatGPT's own account of the reply, read off the wire.
+ *
+ * The page fetches its reply as a server-sent event stream from
+ * `/backend-api/f/conversation`, and that stream says in so many words what
+ * the DOM only implies: which message is the user-visible one (`recipient:
+ * "all"`, `content_type: "text"`), whether it is still `in_progress` or
+ * `finished_successfully`, and why it stopped — `finish_details.type` is
+ * `stop` normally, `max_tokens` when the reply hit the length limit, and
+ * `interrupted` when generation was stopped. Chrome hands the chunks over
+ * through CDP's `Network.streamResourceContent`, which reads a copy: the
+ * page consumes its own stream untouched, and no code of ours runs on it.
+ *
+ * A wrapper around the page's `fetch`, installed as an init script, was
+ * tried first and saw nothing — the page keeps its own reference to the
+ * real function — which is one reason this lives on the Node side. The
+ * other is the rule in AGENTS.md: completion is decided by the text, and
+ * this is an accelerator. When the stream says the visible message has
+ * finished, the wait ends at once instead of after the quiet window; when
+ * the stream is absent, or Chrome cannot expose it (an old build,
+ * `ONFLIP_STREAM_HOOK=0`), nothing about the wait changes.
+ *
+ * Measured on the delta-encoded stream ("v1"): a message arrives whole as
+ * `{p:"", o:"add", v:{message}}` or bare `{v:{message}}`; text grows through
+ * `{p:"/message/content/parts/0", o:"append", v}` and then bare `{v:"…"}`
+ * frames that continue the last path; the end comes as one `patch` op
+ * replacing `/message/status`, `/message/end_turn` and appending
+ * `finish_details` to `/message/metadata`, followed by `message_stream_complete`
+ * and `[DONE]`.
+ */
+const CONVERSATION_STREAM = /\/backend-api\/(?:f\/)?conversation(?:\?|$)/;
+
+interface StreamMessage {
+  id: string;
+  role: string;
+  recipient: string;
+  contentType: string;
+  hidden: boolean;
+  status: string;
+  endTurn: boolean | null;
+  finishType: string | null;
+  textLen: number;
+}
+
+interface StreamTurn {
+  seq: number;
+  state: "streaming" | "done" | "error";
+  messages: Map<string, StreamMessage>;
+  /** The message the bare-`v` appends land on: the last one added. */
+  current: StreamMessage | null;
+  /** JSON pointer of the last explicit op, which a bare `v` continues. */
+  lastPath: string;
+  error: string | null;
+  startedAt: number;
+  lastFrameAt: number;
+  endedAt: number | null;
+  decoder: StringDecoder;
+  buffer: string;
+}
+
+export interface StreamView {
+  seq: number;
+  state: StreamTurn["state"];
+  visible: StreamMessage | null;
+  truncated: boolean;
+  interrupted: boolean;
+  error: string | null;
+  lastFrameAt: number;
+  endedAt: number | null;
+}
+
+let streamSeqCounter = 0;
+let latestStream: StreamTurn | null = null;
+/** The last HTTP 429 the page received from ChatGPT's API, while the watcher is on. */
+let lastThrottle: { at: number; url: string } | null = null;
+/** The last conversation request the server refused, while the watcher is on. */
+let lastRequestFailure: { at: number; url: string; status: number } | null = null;
+/**
+ * Set when the server refused a request with 401/403: the next send puts
+ * the session back into the profile before anything else, since the page's
+ * copy of it is what the server just rejected.
+ */
+let sessionSuspect = false;
+/** The requests a send depends on; a refusal of any of them is a send that will never answer. */
+const CONVERSATION_REQUEST =
+  /\/backend-api\/(?:f\/)?conversation(?:\/prepare|\/init)?(?:\?|$)|\/backend-api\/sentinel\/(?:chat-requirements|req)\b/;
+
+function requestFailureSince(at: number): { url: string; status: number } | null {
+  return lastRequestFailure && lastRequestFailure.at >= at ? lastRequestFailure : null;
+}
+/** Set once Chrome refused to stream a body, so the refusal is not repeated per reply. */
+let streamingUnsupported = false;
+
+/** How many reply streams have started since the browser was launched. */
+function streamSeq(): number {
+  return streamSeqCounter;
+}
+
+/** The newest reply stream that started after `after`, summarised, or null. */
+function streamView(after: number): StreamView | null {
+  const turn = latestStream;
+  if (!turn || turn.seq <= after) return null;
+  const visible = visibleMessage(turn);
+  return {
+    seq: turn.seq,
+    state: turn.state,
+    visible,
+    truncated: visible?.finishType === "max_tokens",
+    interrupted: visible?.finishType === "interrupted",
+    error: turn.error,
+    lastFrameAt: turn.lastFrameAt,
+    endedAt: turn.endedAt,
+  };
+}
+
+/**
+ * The message the user sees: the newest assistant message addressed to
+ * `all` whose content is text. Thinking models stream `thoughts` and
+ * `reasoning_recap` messages to `all` first, and tool calls go to other
+ * recipients; none of those is the reply.
+ */
+function visibleMessage(turn: StreamTurn): StreamMessage | null {
+  let found: StreamMessage | null = null;
+  for (const m of turn.messages.values()) {
+    if (m.role === "assistant" && m.recipient === "all" && m.contentType === "text" && !m.hidden) {
+      found = m;
+    }
+  }
+  return found;
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+function asString(value: unknown, fallback = ""): string {
+  return typeof value === "string" ? value : fallback;
+}
+
+async function attachStreamWatch(p: Page, ctx: BrowserContext): Promise<void> {
+  if (process.env.ONFLIP_STREAM_HOOK === "0") return;
+  try {
+    const cdp = await ctx.newCDPSession(p);
+    // Bounded: an enabled Network domain keeps response bodies around for
+    // `getResponseBody`, which nothing here ever calls.
+    await cdp.send("Network.enable", { maxTotalBufferSize: 4_000_000, maxResourceBufferSize: 2_000_000 });
+    // Not in every Playwright build's protocol typings, so sent untyped.
+    const raw = cdp as unknown as {
+      send(method: string, params?: Record<string, unknown>): Promise<unknown>;
+    };
+    const turns = new Map<string, StreamTurn>();
+
+    cdp.on("Network.responseReceived", (e) => {
+      // The throttle, as the server states it. The page's notice for it is
+      // a toast in the page's own language that is gone in seconds; the
+      // status code is neither.
+      if (e.response.status === 429 && /\/backend-api\//.test(e.response.url)) {
+        lastThrottle = { at: Date.now(), url: e.response.url.replace(/^https?:\/\/[^/]+/, "") };
+        logger.warn("browser", "chatgpt answered HTTP 429", { url: lastThrottle.url });
+      }
+      // A send whose request the server refused shows nothing but a spinner
+      // — the page's optimistic UI has no failure state the DOM rules can
+      // see. Recorded here, and read by `waitForReply` instead of waiting
+      // out a silence budget. Measured: 105s and 241s of "thinking" on two
+      // sends whose requests had failed within the first second.
+      if (e.response.status >= 400 && CONVERSATION_REQUEST.test(e.response.url)) {
+        lastRequestFailure = {
+          at: Date.now(),
+          url: e.response.url.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, ""),
+          status: e.response.status,
+        };
+        logger.warn("browser", "chatgpt refused a conversation request", lastRequestFailure);
+      }
+      if (streamingUnsupported) return;
+      if (!CONVERSATION_STREAM.test(e.response.url)) return;
+      if (!/event-stream/i.test(e.response.mimeType ?? "")) return;
+      const turn: StreamTurn = {
+        seq: ++streamSeqCounter,
+        state: "streaming",
+        messages: new Map(),
+        current: null,
+        lastPath: "",
+        error: null,
+        startedAt: Date.now(),
+        lastFrameAt: Date.now(),
+        endedAt: null,
+        decoder: new StringDecoder("utf8"),
+        buffer: "",
+      };
+      turns.set(e.requestId, turn);
+      latestStream = turn;
+      logger.info("browser", "reply stream started", { seq: turn.seq, status: e.response.status });
+      raw
+        .send("Network.streamResourceContent", { requestId: e.requestId })
+        .then((result) => {
+          // Whatever arrived before streaming was switched on comes back here.
+          const buffered = asString(asRecord(result)?.bufferedData);
+          if (buffered) feedStream(turn, buffered);
+        })
+        .catch((err: unknown) => {
+          streamingUnsupported = true;
+          turns.delete(e.requestId);
+          if (latestStream === turn) latestStream = null;
+          logger.warn("browser", "reply stream not observable; completion falls back to the page", {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+    });
+    cdp.on("Network.dataReceived", (e) => {
+      const turn = turns.get(e.requestId);
+      if (turn && e.data) feedStream(turn, e.data);
+    });
+    cdp.on("Network.loadingFinished", (e) => {
+      const turn = turns.get(e.requestId);
+      if (!turn) return;
+      turns.delete(e.requestId);
+      endStream(turn, turn.error ? "error" : "done");
+    });
+    cdp.on("Network.loadingFailed", (e) => {
+      const turn = turns.get(e.requestId);
+      if (!turn) return;
+      turns.delete(e.requestId);
+      turn.error = turn.error ?? (e.canceled ? "cancelled" : e.errorText || "load failed");
+      endStream(turn, "error");
+    });
+  } catch (e) {
+    logger.warn("browser", "could not watch the reply stream; completion falls back to the page", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/** Base64 chunk in, SSE frames out; each complete frame is applied at once. */
+function feedStream(turn: StreamTurn, base64: string): void {
+  try {
+    turn.buffer += turn.decoder.write(Buffer.from(base64, "base64"));
+  } catch {
+    return;
+  }
+  turn.lastFrameAt = Date.now();
+  let idx: number;
+  while ((idx = turn.buffer.indexOf("\n\n")) >= 0) {
+    const frame = turn.buffer.slice(0, idx);
+    turn.buffer = turn.buffer.slice(idx + 2);
+    for (const line of frame.split("\n")) {
+      if (!line.startsWith("data:")) continue;
+      const data = line.slice(5).trim();
+      if (!data) continue;
+      if (data === "[DONE]") {
+        endStream(turn, turn.error ? "error" : "done");
+        continue;
+      }
+      let value: unknown;
+      try {
+        value = JSON.parse(data);
+      } catch {
+        continue;
+      }
+      applyStreamFrame(turn, value);
+    }
+  }
+}
+
+function applyStreamFrame(turn: StreamTurn, value: unknown): void {
+  const frame = asRecord(value);
+  if (!frame) return;
+  // Control frames carry a `type`; the only ones that matter here are the
+  // end of the stream and an error.
+  const type = asString(frame.type);
+  if (type) {
+    if (type === "message_stream_complete") endStream(turn, turn.error ? "error" : "done");
+    else if (type === "error") turn.error = asString(frame.message, asString(frame.error, "error"));
+    return;
+  }
+  // The legacy whole-message frame: {message, conversation_id, error}.
+  const message = asRecord(frame.message);
+  if (message) {
+    registerMessage(turn, message);
+    if (frame.error) turn.error = String(frame.error);
+    return;
+  }
+  applyStreamOp(turn, frame);
+}
+
+function applyStreamOp(turn: StreamTurn, op: Record<string, unknown>): void {
+  const o = asString(op.o);
+  const p = typeof op.p === "string" ? op.p : undefined;
+  const v = op.v;
+  if (o === "patch" && Array.isArray(v)) {
+    for (const inner of v) {
+      const rec = asRecord(inner);
+      if (rec) applyStreamOp(turn, rec);
+    }
+    return;
+  }
+  // A whole message envelope, at the root: a new message starts.
+  const envelope = asRecord(v);
+  const enclosed = envelope ? asRecord(envelope.message) : null;
+  if (enclosed && (p === undefined || p === "")) {
+    registerMessage(turn, enclosed);
+    if (envelope?.error) turn.error = String(envelope.error);
+    turn.lastPath = "";
+    return;
+  }
+  const path = p ?? turn.lastPath;
+  if (p !== undefined) turn.lastPath = p;
+  const m = turn.current;
+  if (!m) return;
+
+  if (/^\/message\/content\/parts\/\d+$/.test(path)) {
+    if (typeof v === "string") m.textLen = o === "replace" ? v.length : m.textLen + v.length;
+    return;
+  }
+  if (path === "/message/content" && envelope) {
+    const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
+    m.textLen = parts.filter((x): x is string => typeof x === "string").join("").length;
+    const contentType = asString(envelope.content_type);
+    if (contentType) m.contentType = contentType;
+    return;
+  }
+  if (path === "/message/status") {
+    if (typeof v === "string") m.status = v;
+    return;
+  }
+  if (path === "/message/end_turn") {
+    if (typeof v === "boolean") m.endTurn = v;
+    return;
+  }
+  if (path === "/message/recipient") {
+    if (typeof v === "string") m.recipient = v;
+    return;
+  }
+  if (path === "/message/metadata" && envelope) {
+    const finish = asRecord(envelope.finish_details);
+    const finishType = finish ? asString(finish.type) : "";
+    if (finishType) m.finishType = finishType;
+    if (typeof envelope.is_visually_hidden_from_conversation === "boolean") {
+      m.hidden = envelope.is_visually_hidden_from_conversation;
+    }
+    return;
+  }
+  if (path === "/message/metadata/finish_details" && envelope) {
+    const finishType = asString(envelope.type);
+    if (finishType) m.finishType = finishType;
+    return;
+  }
+  if (path === "/message/metadata/finish_details/type" && typeof v === "string") {
+    m.finishType = v;
+    return;
+  }
+  if (path === "/message" && envelope) registerMessage(turn, envelope);
+}
+
+function registerMessage(turn: StreamTurn, message: Record<string, unknown>): void {
+  const id = asString(message.id, `anonymous-${turn.messages.size}`);
+  const author = asRecord(message.author);
+  const content = asRecord(message.content) ?? {};
+  const parts = Array.isArray(content.parts) ? content.parts : [];
+  const metadata = asRecord(message.metadata) ?? {};
+  const finish = asRecord(metadata.finish_details);
+  const m: StreamMessage = {
+    id,
+    role: asString(author?.role),
+    recipient: asString(message.recipient, "all"),
+    contentType: asString(content.content_type, "text"),
+    hidden: metadata.is_visually_hidden_from_conversation === true,
+    status: asString(message.status, "in_progress"),
+    endTurn: typeof message.end_turn === "boolean" ? message.end_turn : null,
+    finishType: finish ? asString(finish.type) || null : null,
+    textLen: parts.filter((x): x is string => typeof x === "string").join("").length,
+  };
+  turn.messages.set(id, m);
+  turn.current = m;
+}
+
+function endStream(turn: StreamTurn, state: "done" | "error"): void {
+  if (turn.state !== "streaming") return;
+  turn.state = state;
+  turn.endedAt = Date.now();
+  const visible = visibleMessage(turn);
+  logger.info("browser", "reply stream ended", {
+    seq: turn.seq,
+    state,
+    ms: turn.endedAt - turn.startedAt,
+    messages: turn.messages.size,
+    visibleStatus: visible?.status ?? null,
+    finish: visible?.finishType ?? null,
+    textLen: visible?.textLen ?? 0,
+    error: turn.error,
+  });
+}
+
+/**
+ * ChatGPT's own "Continue generating" control, shown when a reply stopped
+ * at the length limit. It has no stable test id: it is found by its label,
+ * and failing that by the icon chatgpt.js keys on. Best-effort — false
+ * means the model is asked to resend instead.
+ */
+async function clickContinueGenerating(p: Page): Promise<boolean> {
+  const candidates = [
+    p.locator("main button, form button").filter({ hasText: /continue generating/i }).first(),
+    p.locator("button:has(svg polygon[points='11 19 2 12 11 5 11 19'])").first(),
+  ];
+  for (const button of candidates) {
+    try {
+      if (await button.isVisible({ timeout: 1_000 })) {
+        await button.click({ timeout: 2_000 });
+        return true;
+      }
+    } catch {
+      /* not that one */
+    }
+  }
+  return false;
+}
+
+/**
+ * A continuation either grows the same message node — in which case the
+ * re-read text starts with what was already there — or renders as a turn
+ * of its own, in which case it is the tail and the pieces are joined.
+ */
+function joinContinuation(head: string, tail: string): string {
+  const probe = head.slice(0, Math.min(200, head.length));
+  if (probe && tail.startsWith(probe)) return tail;
+  return head + tail;
+}
+
+/** A fence opened and not yet closed: the reply is mid-block, whatever the page chrome says. */
+function openFenceAtEnd(text: string): boolean {
+  let fences = 0;
+  for (const line of text.split("\n")) {
+    if (/^\s*(`{3,}|~{3,})/.test(line)) fences++;
+  }
+  return fences % 2 === 1;
+}
+
 export function configureBrowser(opts: BrowserOptions): void {
   browserOptions = { ...browserOptions, ...opts };
 }
@@ -147,6 +611,16 @@ async function injectCookies(
 ): Promise<void> {
   const prepared = toPlaywrightCookies(cookies);
   if (prepared.length === 0) return;
+  // Whatever the profile still holds of the session family goes first. To
+  // the browser a cookie set by the server without a Domain attribute
+  // (host-only, which is how ChatGPT sets its session) and an injected copy
+  // on `.chatgpt.com` are two different cookies, and both get sent; the
+  // server reads one of them, and when it is the stale one the page comes
+  // up logged out and the stale copy gets expired — which is why every
+  // launch logged "page came up logged out; re-injecting the session" and
+  // the re-injection then worked. One copy, set the way the server sets
+  // it, is one a rotation by the server replaces rather than duplicates.
+  await clearSessionCookies(context);
   try {
     await context.addCookies(prepared);
     return;
@@ -170,6 +644,23 @@ async function injectCookies(
     accepted,
     rejected: [...new Set(rejected)],
   });
+}
+
+/** ChatGPT's own session-state cookies: the token, its chunks, and the `oai-*` client state around it. */
+const SESSION_COOKIE_FAMILY_NAMES =
+  /^(?:__Secure-next-auth\.|__Host-next-auth\.|oai-|unified_session_manifest$|_account$)/i;
+
+async function clearSessionCookies(context: BrowserContext): Promise<void> {
+  try {
+    await context.clearCookies({
+      domain: /(?:^|\.)(?:chatgpt\.com|openai\.com)$/,
+      name: SESSION_COOKIE_FAMILY_NAMES,
+    });
+  } catch (e) {
+    logger.debug("browser", "could not clear the profile's session cookies", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
 }
 
 function toPlaywrightCookies(cookies: SessionCookie[]) {
@@ -204,17 +695,28 @@ function toPlaywrightCookies(cookies: SessionCookie[]) {
       }
       continue;
     }
-    for (const domain of [".chatgpt.com", ".openai.com"]) {
-      out.push({
-        name: c.name,
-        value: c.value,
-        domain,
-        path: "/",
-        httpOnly: c.name.startsWith("__Secure-"),
-        secure: true,
-        sameSite: "Lax",
-      });
-    }
+    // Host-only on chatgpt.com — given as a url, like the `__Host-` case —
+    // because that is the identity the server's own Set-Cookie for the
+    // rotated token has, so the rotation replaces this copy instead of
+    // sitting beside it (see `injectCookies`). The openai.com copy keeps
+    // its domain form: the auth pages there are reached by subdomain.
+    out.push({
+      name: c.name,
+      value: c.value,
+      url: "https://chatgpt.com/",
+      httpOnly: c.name.startsWith("__Secure-"),
+      secure: true,
+      sameSite: "Lax",
+    });
+    out.push({
+      name: c.name,
+      value: c.value,
+      domain: ".openai.com",
+      path: "/",
+      httpOnly: c.name.startsWith("__Secure-"),
+      secure: true,
+      sameSite: "Lax",
+    });
   }
   return out;
 }
@@ -240,7 +742,10 @@ function isProfileInUse(e: unknown): boolean {
 async function launchWithFallback<T>(
   launch: (channel?: string) => Promise<T>
 ): Promise<T> {
-  const preferred = process.env.ONFLIP_BROWSER_CHANNEL ?? "chrome";
+  // The browser the user signed in with is the one that can read the profile
+  // it wrote: Chrome's cookies are encrypted with a key bound to Chrome, so
+  // a profile made by Chrome is unreadable to Edge or the bundled build.
+  const preferred = process.env.ONFLIP_BROWSER_CHANNEL ?? loadConfig().browserChannel ?? "chrome";
   if (preferred !== "chromium") {
     try {
       const result = await launch(preferred);
@@ -266,6 +771,15 @@ async function launchWithFallback<T>(
     if (isProfileInUse(e)) {
       throw new ChatGPTBrowserError(
         "OnFlip's browser profile is already open — another OnFlip is running, or one did not shut down cleanly. Close it, or end any leftover browser using ~/.onflip/browser-profile, then try again."
+      );
+    }
+    // No Chrome, no Edge, and no bundled build yet: fetch it once and retry.
+    if (/Executable doesn'?t exist|browserType\.launch.*not found|Please run.*playwright install/i.test(
+      e instanceof Error ? e.message : String(e)
+    )) {
+      if (await ensureBundledBrowser()) return await launch(undefined);
+      throw new ChatGPTBrowserError(
+        "OnFlip has no browser to drive: Chrome and Edge are not installed, and the bundled browser could not be downloaded. Install Google Chrome or Microsoft Edge, or check the network, then try again."
       );
     }
     throw e;
@@ -298,7 +812,17 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
     // A persistent profile keeps Cloudflare clearance and the login between
     // runs, which materially reduces how often a session goes stale.
     context = await launchWithFallback((channel) =>
-      chromium.launchPersistentContext(profileDir(), { headless, channel, ...shared })
+      chromium.launchPersistentContext(profileDir(), {
+        headless,
+        channel,
+        ...shared,
+        // Playwright launches Chromium with a mock keychain on macOS, which
+        // encrypts the profile's cookies with a key of its own. The sign-in
+        // window is the same browser started by hand, on the real keychain
+        // — so a session signed in there was unreadable here, and one
+        // written here unreadable there. Both sides use the real one now.
+        ignoreDefaultArgs: ["--use-mock-keychain"],
+      })
     );
     browser = null;
   } else {
@@ -321,6 +845,7 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
 
   page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(30_000);
+  await attachStreamWatch(page, context);
   inConversation = false;
   return page;
 }
@@ -446,9 +971,7 @@ async function openNewChat(p: Page, model?: string): Promise<void> {
   }
   await p.waitForTimeout(600);
   await verifyPageModel(p, model);
-  priorTurnCount = 0;
-  filedConversation = null;
-  projectWarningShown = false;
+  forgetChat();
   // Taken while the chat is still empty, so whatever the account gains from
   // here is this chat. Only worth a request when there is a project to file
   // into.
@@ -466,6 +989,18 @@ const MODEL_SWITCHER_SELECTORS = [
 /** The distinctive word of a slug: "gpt-5.6-luna-wm" → "luna". */
 export function modelToken(slug?: string): string | null {
   if (!slug || slug === "auto") return null;
+  // The chip shows the account's *title* for the slug — "GPT-5.6 Luna" for
+  // `gpt-5-6-mini` — so the title's distinctive word is what to look for.
+  // Judged by the slug alone, every chat on Luna was reported as opened
+  // on the wrong model because "mini" appears nowhere on the page.
+  const title = (loadConfig().discoveredModels ?? []).find((m) => m.slug === slug)?.title ?? "";
+  const distinctive = (s: string) =>
+    s
+      .toLowerCase()
+      .split(/[-.\s]/)
+      .filter((w) => /^[a-z]{3,}$/.test(w) && !/^(gpt|chatgpt|mini|instant|thinking|pro)$/.test(w));
+  const fromTitle = distinctive(title);
+  if (fromTitle.length) return fromTitle[0];
   const words = slug
     .toLowerCase()
     .split(/[-.]/)
@@ -661,6 +1196,24 @@ async function resolveConversationId(p: Page): Promise<string | null> {
 let filedConversation: string | null = null;
 
 /**
+ * Forget everything that belonged to the chat this page was on.
+ *
+ * Every way of landing on a different conversation — a new chat, an attach,
+ * a recovery, a close — has to run this, and each used to carry its own
+ * partial copy. `openConversation`'s copy left `filedConversation` holding
+ * the previous chat's id, so attaching chat B after chat A had been filed
+ * reported B as already filed and never moved it. One block, called from
+ * all of them.
+ */
+function forgetChat(): void {
+  priorTurnCount = 0;
+  filedConversation = null;
+  conversationsBeforeChat = null;
+  lastConversationId = null;
+  projectWarningShown = false;
+}
+
+/**
  * Move a conversation into a project.
  *
  * This is how the sidebar grouping actually happens: the chat is created on
@@ -838,16 +1391,41 @@ export function __resetFiledForTest(): void {
  * serialises and calls, while the body stays a string — so this file still
  * compiles without the DOM lib.
  */
-const PASTE_INTO = new Function(
+/** A synthetic paste, with the caret first moved to the end of what is there. */
+const PASTE_AT_END = new Function(
   "el",
   "text",
   `el.focus();
+   const sel = window.getSelection();
+   if (sel) { sel.selectAllChildren(el); sel.collapseToEnd(); }
    const data = new DataTransfer();
    data.setData("text/plain", text);
    const ev = new ClipboardEvent("paste", { clipboardData: data, bubbles: true, cancelable: true });
    el.dispatchEvent(ev);
    return true;`
 ) as (el: unknown, text: string) => boolean;
+
+/** Per-chunk ceilings, under the size at which a paste becomes an attachment. */
+const PASTE_CHUNK_LINES = 60;
+const PASTE_CHUNK_CHARS = 6_000;
+
+/** Split on line boundaries so no line is ever cut between two pastes. */
+export function chunkByLines(text: string, maxLines: number, maxChars: number): string[] {
+  const chunks: string[] = [];
+  let current: string[] = [];
+  let length = 0;
+  for (const line of text.split("\n")) {
+    if (current.length && (current.length >= maxLines || length + line.length + 1 > maxChars)) {
+      chunks.push(current.join("\n"));
+      current = [];
+      length = 0;
+    }
+    current.push(line);
+    length += line.length + 1;
+  }
+  if (current.length) chunks.push(current.join("\n"));
+  return chunks;
+}
 
 /**
  * Did the composer receive what we meant to send?
@@ -1003,9 +1581,28 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
     ]);
 
   const insertText = { name: "insertText", run: () => p.keyboard.insertText(text) };
+  /**
+   * Pasted in pieces small enough to stay in the box.
+   *
+   * ChatGPT turns a single paste above roughly nine thousand characters
+   * (or a hundred-odd lines) into a "pasted text" attachment — the box
+   * stays empty and the chip would ride along with the message. Chunks
+   * under sixty lines and six thousand characters each land inline, one
+   * after another at the end of the text already there, and the joins fall
+   * on line boundaries so nothing is glued together. Measured on the live
+   * composer: 12,000 characters in 350ms, 40,000 in 640ms, every line and
+   * character intact, where insertText took two and twelve seconds.
+   */
   const paste = {
     name: "paste",
-    run: () => capped(composer.evaluate(PASTE_INTO, text), 6_000, "paste"),
+    run: async () => {
+      const chunks = chunkByLines(text, PASTE_CHUNK_LINES, PASTE_CHUNK_CHARS);
+      for (let i = 0; i < chunks.length; i++) {
+        const part = chunks[i] + (i < chunks.length - 1 ? "\n" : "");
+        await capped(composer.evaluate(PASTE_AT_END, part), 6_000, "paste");
+        if (chunks.length > 1) await p.waitForTimeout(40);
+      }
+    },
   };
   const fill = { name: "fill", run: () => composer.fill(text, { timeout: 8_000 }) };
 
@@ -1034,11 +1631,21 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
    * been answering false since it was written, which is what left `fill`
    * doing every send.
    */
-  const strategies: { name: string; run: () => Promise<unknown> }[] = [
-    insertText,
-    paste,
-    fill,
-  ];
+  /**
+   * Paste first for anything a paste can carry — and never for anything it
+   * cannot.
+   *
+   * Measured against the live composer (September 2026): a synthetic paste
+   * lands 3,000 characters intact in 220ms and 8,000 in 220ms, where
+   * insertText spends a millisecond per character — three to five seconds
+   * on an ordinary turn, six in the median of one long session, which was
+   * a quarter of every turn. Above roughly nine thousand characters (or a
+   * hundred-odd lines) ChatGPT turns a paste into a "pasted text"
+   * attachment instead: the box stays empty, and the chip would ride along
+   * with whatever was typed next. So paste is only offered under a margin
+   * of that, and a large payload goes straight to insertText.
+   */
+  const strategies: { name: string; run: () => Promise<unknown> }[] = [paste, insertText, fill];
 
 
   // Keep the best attempt rather than failing on the first imperfect one.
@@ -1147,7 +1754,7 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
   );
 }
 
-/** See PASTE_INTO for why this is a Function object and not a string. */
+/** See PASTE_AT_END for why this is a Function object and not a string. */
 const IS_COMPOSER_FOCUSED = new Function(
   "selectors",
   `const active = document.activeElement;
@@ -1168,6 +1775,62 @@ async function userTurnCount(p: Page): Promise<number> {
   } catch {
     return 0;
   }
+}
+
+/**
+ * Reload the page, and make sure the conversation came back with it.
+ *
+ * A reload of `/c/<id>` is not guaranteed to return to `/c/<id>`: after a
+ * page's first navigation the loaded app takes over routing and lands on `/`
+ * a moment later (see `openConversation`). A reload that bounced went
+ * unnoticed, and the next message was typed into the empty chat it left
+ * behind — a thread that had never seen the system prompt, answering like
+ * the web app. So the thread is measured before and after: the user turns
+ * are counted, and the reload is trusted once the count is back or, failing
+ * that, once the settled page still names the conversation in its URL. The
+ * URL is only believed late because it reads `/c/<id>` for a second or so
+ * before a bounce. Otherwise the chat is forgotten and the turn fails as a
+ * retry, which makes the transport replay into a fresh chat rather than
+ * continue into a wrong one. Outside a conversation, or on a page with no
+ * turns yet, there is nothing to lose and nothing to check.
+ */
+async function reloadKeepingConversation(p: Page): Promise<void> {
+  const wasInConversation = inConversation;
+  const idBefore = conversationIdFromUrl(p.url());
+  const turnsBefore = wasInConversation ? await userTurnCount(p) : 0;
+  await p.reload({ waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
+  await p.waitForTimeout(1_200);
+  if (!wasInConversation) return;
+
+  // The thread mounts progressively after domcontentloaded, so the count is
+  // polled until it is back or has stopped moving.
+  const deadline = Date.now() + 15_000;
+  let seen = -1;
+  let stableSince = Date.now();
+  for (;;) {
+    const turns = await userTurnCount(p);
+    if (turns >= turnsBefore) return;
+    const now = Date.now();
+    if (turns !== seen) {
+      seen = turns;
+      stableSince = now;
+    }
+    if (now - stableSince >= 3_000 || now > deadline) break;
+    await p.waitForTimeout(300);
+  }
+  if (idBefore && conversationIdFromUrl(p.url()) === idBefore) return;
+
+  logger.warn("browser", "the reload did not come back to the conversation", {
+    url: p.url(),
+    conversation: idBefore,
+    turnsBefore,
+    turnsAfter: Math.max(0, seen),
+  });
+  inConversation = false;
+  forgetChat();
+  throw new ChatGPTBrowserError(
+    "The ChatGPT page was reloaded and came back on a different chat, so the conversation on it is gone. Resending the transcript into a fresh chat."
+  );
 }
 
 /** Is the caret actually in the message box? */
@@ -1207,9 +1870,17 @@ async function readComposer(p: Page): Promise<string> {
  * So the message is walked and re-serialised: code blocks are taken verbatim
  * from their `<code>` element, and the delimiters the renderer swallowed are
  * put back around emphasis and inline code.
+ *
+ * A Function object, not a string — see PASTE_AT_END. As a string this was
+ * evaluated as an expression, which yields the function and never calls it:
+ * `evaluate` answered undefined for every node, the innerText fallback in
+ * `readMessage` quietly answered instead, and the re-serialisation this
+ * exists for never ran. Measured on Playwright 1.62:
+ * `locator.evaluate("(el) => el.tagName")` is undefined.
  */
-export const EXTRACT_MESSAGE = `(el) => {
-  const walk = (node) => {
+export const EXTRACT_MESSAGE = new Function(
+  "el",
+  `const walk = (node) => {
     if (node.nodeType === 3) return node.textContent || "";
     if (node.nodeType !== 1) return "";
     const tag = node.tagName.toLowerCase();
@@ -1218,8 +1889,29 @@ export const EXTRACT_MESSAGE = `(el) => {
       const code = node.querySelector("code");
       const cls = (code && code.className) || "";
       const m = /language-([\\w+#.-]+)/.exec(cls);
+      let lang = m ? m[1] : "";
+      // ChatGPT shows the fence's language as a label in the block's header
+      // rather than as a class on the code element. Without it an
+      // \`\`\`onflip block came back as a plain fence, which the parser
+      // rightly reads as prose — and a reply full of correct tool calls ran
+      // nothing. The label is the first short word in the header, outside
+      // the code element and outside its buttons.
+      if (!lang) {
+        const w = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+        let t;
+        while ((t = w.nextNode())) {
+          if (code && code.contains(t)) break;
+          if (t.parentElement && t.parentElement.closest("button")) continue;
+          const s = (t.textContent || "").trim();
+          if (/^[\\w+#.-]{1,24}$/.test(s) && !/^(copy|code|edit)$/i.test(s)) { lang = s; break; }
+        }
+      }
       const body = ((code || node).textContent || "").replace(/\\n+$/, "");
-      return "\\n\`\`\`" + (m ? m[1] : "") + "\\n" + body + "\\n\`\`\`\\n";
+      // A block with nothing in it is a container still waiting for its
+      // contents (or a card's decoration), not a code block: emitting the
+      // fence made an empty reply look like a finished one.
+      if (!body.trim()) return "";
+      return "\\n\`\`\`" + lang + "\\n" + body + "\\n\`\`\`\\n";
     }
     if (tag === "br") return "\\n";
     if (tag === "script" || tag === "style" || tag === "svg" || tag === "button") return "";
@@ -1234,35 +1926,68 @@ export const EXTRACT_MESSAGE = `(el) => {
     if (tag === "li") return "- " + inner + "\\n";
     if (tag === "blockquote") return "> " + inner + "\\n";
     if (/^h[1-6]$/.test(tag)) return "\\n" + "#".repeat(Number(tag[1])) + " " + inner + "\\n";
-    if (tag === "p" || tag === "div" || tag === "tr" || tag === "ul" || tag === "ol") {
+    // Cells ran together ("ab" out of a | b); the pipes keep a row a row.
+    if (tag === "td" || tag === "th") return " " + inner.trim() + " |";
+    if (tag === "tr") return "|" + inner + "\\n";
+    if (tag === "table") return "\\n" + inner + "\\n";
+    if (tag === "p" || tag === "div" || tag === "ul" || tag === "ol") {
       return inner + "\\n";
     }
     return inner;
   };
-  return walk(el).replace(/\\n{3,}/g, "\\n\\n").trim();
-}`;
+  return walk(el).replace(/\\n{3,}/g, "\\n\\n").trim();`
+) as (el: unknown) => string;
 
-async function assistantTurns(p: Page): Promise<string[]> {
+/** Said once per process: a non-string from the walk is the reader broken. */
+let warnedUnreadableMessage = false;
+
+/**
+ * One message node as Markdown, with innerText as the fallback.
+ *
+ * The fallback is for a node that changes under the walk mid-stream. It is
+ * not for the walk answering nothing — that is what a string handed to
+ * `evaluate` did (see EXTRACT_MESSAGE), and it went unnoticed for as long as
+ * it did because innerText covered for it silently. A non-string result is
+ * therefore logged, once, as the reader being broken rather than the page
+ * being busy.
+ */
+async function readMessage(node: Locator): Promise<string> {
+  let text: unknown;
+  let threw = false;
+  try {
+    text = await node.evaluate(EXTRACT_MESSAGE);
+  } catch {
+    threw = true;
+  }
+  if (typeof text === "string" && text) return text;
+  if (!threw && typeof text !== "string" && !warnedUnreadableMessage) {
+    warnedUnreadableMessage = true;
+    logger.warn("browser", "message extraction returned a non-string; using innerText", {
+      type: text === null ? "null" : typeof text,
+    });
+  }
+  return (await node.innerText().catch(() => "")) ?? "";
+}
+
+/**
+ * How many assistant turns the page shows, and the newest one's text.
+ *
+ * Only the newest is extracted. The reply loop asks every 400 ms and has
+ * only ever used the count and the last turn, so walking every turn of a
+ * long thread on each poll was cost with nothing to show for it.
+ */
+async function assistantTurns(p: Page): Promise<{ count: number; last: string }> {
   for (const sel of ASSISTANT_SELECTORS) {
     try {
-      const nodes = await p.locator(sel).all();
-      if (nodes.length === 0) continue;
-      const texts: string[] = [];
-      for (const n of nodes) {
-        const text = await n.evaluate(EXTRACT_MESSAGE).catch(() => null);
-        // innerText is still the fallback when evaluation fails mid-stream.
-        texts.push(
-          typeof text === "string" && text
-            ? text
-            : ((await n.innerText().catch(() => "")) ?? "")
-        );
-      }
-      return texts;
+      const nodes = p.locator(sel);
+      const count = await nodes.count();
+      if (count === 0) continue;
+      return { count, last: await readMessage(nodes.last()) };
     } catch {
       /* try the next selector */
     }
   }
-  return [];
+  return { count: 0, last: "" };
 }
 
 export interface BrowserSendOptions {
@@ -1294,6 +2019,11 @@ export interface BrowserSendOptions {
    * that in fact landed fine.
    */
   userTurnsBefore?: number;
+  /**
+   * Reply-stream sequence taken before the message was sent, so only a
+   * stream that started for *this* message counts as evidence about it.
+   */
+  streamSeqBefore?: number;
 }
 
 /**
@@ -1317,17 +2047,49 @@ async function submitMessage(
   // running, the composer never cleared, and the turn was reported as ChatGPT
   // refusing the message. So when files ride along, wait for the button to
   // actually come enabled before trying to press it.
-  if (ctx?.attached) {
-    const deadline = Date.now() + 30_000;
+  // Every send, not only the ones with files: while the previous reply is
+  // still being generated the send control is the stop control, and a
+  // message pressed into that window is refused. Live, three times in one
+  // session: a short reply accepted on text stillness while the page was
+  // still working, the next send refused for eleven seconds, and the
+  // "leave and come back" reload that follows landing on a new chat with
+  // the conversation gone. Waiting for the control to come enabled is what
+  // a person does without noticing; the ceiling keeps a dead page honest.
+  {
+    const waitStart = Date.now();
+    const deadline = waitStart + (ctx?.attached ? 45_000 : 30_000);
+    let nudged = false;
     for (;;) {
       throwIfAborted(signal);
       const button = await firstVisible(p, SEND_SELECTORS, 1_000);
       if (button && (await button.isEnabled().catch(() => false))) break;
       if (Date.now() > deadline) {
-        logger.debug("browser", "send button never enabled after the upload; trying anyway");
+        logger.info("browser", "send button never enabled; trying anyway", {
+          attached: Boolean(ctx?.attached),
+          generating: await anyVisible(p, STOP_SELECTORS).catch(() => false),
+          composerChars: (await readComposer(p).catch(() => "")).trim().length,
+        });
         break;
       }
+      // Text in the box, no stop control, and still no send control: the
+      // editor has the text but the page's own state has not noticed it —
+      // a synthetic paste can land in the editor without the input event
+      // the page keys the send control on. A real keystroke pair is what
+      // makes it look, and it is done once, only when nothing is generating.
+      if (!nudged && Date.now() - waitStart > 2_000) {
+        const generating = await anyVisible(p, STOP_SELECTORS).catch(() => false);
+        if (!generating) {
+          nudged = true;
+          logger.info("browser", "send control missing after typing; nudging the editor");
+          await p.keyboard.type(" ").catch(() => {});
+          await p.keyboard.press("Backspace").catch(() => {});
+        }
+      }
       await p.waitForTimeout(400);
+    }
+    const waited = Date.now() - waitStart;
+    if (waited > 2_000) {
+      logger.info("browser", "waited for the send control to come enabled", { ms: waited });
     }
   }
 
@@ -1348,14 +2110,34 @@ async function submitMessage(
     { name: "meta-enter", run: () => p.keyboard.press("ControlOrMeta+Enter") },
   ];
 
+  // A send the page refused with a throttle notice is not a composer
+  // stumble, and the next methods, the reload and the fresh chat that
+  // follow a stumble are each another request against a limit that counts
+  // requests. Measured: one throttled send became four new chats and a
+  // dozen reloads in three minutes, and the account was told to wait.
+  const refuseIfThrottled = async (): Promise<void> => {
+    const throttle = await throttleNotice(p);
+    if (!throttle) return;
+    logger.warn("browser", "chatgpt is throttling this account", { notice: throttle });
+    throw new ChatGPTBrowserError(
+      `ChatGPT is throttling this account — the page says "${throttle}" (too many requests, retry-after 180). ` +
+        "Waiting before sending again; retrying now would extend the block."
+    );
+  };
+
   for (const method of methods) {
     throwIfAborted(signal);
     try {
       await method.run();
     } catch (e) {
-      logger.debug("browser", `submit via ${method.name} failed`, {
-        error: e instanceof Error ? e.message : String(e),
+      // At info, with the page's state: a refused send used to leave only
+      // "would not accept it" behind, which says nothing about why.
+      logger.info("browser", `submit via ${method.name} failed`, {
+        error: e instanceof Error ? e.message.slice(0, 120) : String(e),
+        generating: await anyVisible(p, STOP_SELECTORS).catch(() => false),
+        composerChars: (await readComposer(p).catch(() => "")).trim().length,
       });
+      await refuseIfThrottled();
       continue;
     }
 
@@ -1370,7 +2152,12 @@ async function submitMessage(
         return;
       }
     }
-    logger.debug("browser", `submit via ${method.name} left the composer full`);
+    logger.info("browser", `submit via ${method.name} left the composer full`, {
+      generating: await anyVisible(p, STOP_SELECTORS).catch(() => false),
+      sendButton: Boolean(await firstVisible(p, SEND_SELECTORS, 300)),
+      composerChars: (await readComposer(p).catch(() => "")).trim().length,
+    });
+    await refuseIfThrottled();
   }
 
   // Worded without "rate-limited" on purpose: classifyFailure reads error
@@ -1379,6 +2166,42 @@ async function submitMessage(
   throw new ChatGPTBrowserError(
     "The message was typed but ChatGPT would not accept it — neither the send button nor Enter cleared the composer. ChatGPT may be throttling this account, or the send control has moved. Turn on \"Show the ChatGPT browser window\" in Settings to watch."
   );
+}
+
+/**
+ * The throttle notice ChatGPT shows when an account has made too many
+ * requests in a short window — "You're sending messages too quickly",
+ * or in the page's own language ("Вы отправляете запросы слишком часто…
+ * Подождите несколько минут"). It is a per-account limit on requests, not
+ * on any model's messages, so it appears on an "unlimited" model too; and
+ * it is the one send failure that a retry makes worse. Read from the alert
+ * region first, then the visible page, and returned trimmed for the log.
+ */
+const THROTTLE_NOTICE =
+  /too many requests|sending (?:messages|requests) too (?:quickly|fast|often)|slow down|rate.?limit|слишком (?:часто|много запросов)|подождите несколько минут|временно ограничен|juda (?:tez|ko'p so'rov)|bir necha daqiqa kutib/i;
+
+async function throttleNotice(p: Page): Promise<string | null> {
+  if (lastThrottle && Date.now() - lastThrottle.at < 90_000) {
+    return `HTTP 429 from ${lastThrottle.url}`;
+  }
+  const text = (await p
+    .evaluate(
+      `(() => {
+        const alerts = [...document.querySelectorAll("[role='alert'], [role='status'], [data-sonner-toast], .toast")]
+          .map((el) => (el.innerText || "").trim())
+          .filter(Boolean);
+        const body = ((document.body && document.body.innerText) || "").slice(0, 6000);
+        return alerts.join("\\n") + "\\n" + body;
+      })()`
+    )
+    .catch(() => "")) as string;
+  const match = THROTTLE_NOTICE.exec(text);
+  if (!match) return null;
+  const at = Math.max(0, (match.index ?? 0) - 80);
+  return text
+    .slice(at, at + 220)
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 /** The composer's hidden file input, across the spellings ChatGPT has used. */
@@ -1538,7 +2361,8 @@ async function looksAnonymous(p: Page): Promise<boolean> {
 async function recoverAnonymousPage(
   p: Page,
   cookies: SessionCookie[],
-  model?: string
+  model: string | undefined,
+  midConversation: boolean
 ): Promise<void> {
   if (cookies.length === 0 || !context) return;
   if (!(await looksAnonymous(p).catch(() => false))) return;
@@ -1572,6 +2396,22 @@ async function recoverAnonymousPage(
       "ChatGPT opened in anonymous mode and the session could not be restored to the page, so nothing was sent. This often heals on a retry; if it keeps happening, sign out and back in from the account menu."
     );
   }
+  // A recovery that worked mid-conversation has still cost the conversation:
+  // the reload above went to the new-chat URL, so the thread the transport
+  // believes it is appending to is no longer in front of us. Left as it was,
+  // the next send typed only the newest message into an empty chat that had
+  // never seen the system prompt — the failed-recovery outcome above, minus
+  // the error that made it visible. So the chat is forgotten and the turn
+  // fails as a retry, which makes the transport replay the transcript into
+  // the chat this page is actually on. A chat that had only just been opened
+  // has nothing to replay, so it carries on.
+  if (midConversation) {
+    inConversation = false;
+    forgetChat();
+    throw new ChatGPTBrowserError(
+      "The ChatGPT page had lost its session mid-conversation. The session was restored, but the conversation on the page was not, so the transcript is being resent into a fresh chat."
+    );
+  }
 }
 
 export async function sendViaBrowser(
@@ -1581,6 +2421,18 @@ export async function sendViaBrowser(
 ): Promise<string> {
   const p = await ensurePage(cookies);
 
+  // Whether there is a thread on this page worth losing. Taken before the
+  // new-chat branch, which would otherwise make every send look like one.
+  const midConversation = inConversation;
+  // A request the server refused with 401/403 means the session the page
+  // holds is not one the server accepts any more. The stored one goes back
+  // in before the chat is opened, so the recovery below has something to
+  // work with rather than the same rejected copy.
+  if (sessionSuspect && context && cookies.length > 0) {
+    sessionSuspect = false;
+    logger.warn("browser", "putting the session back after a refused request");
+    await injectCookies(context, cookies);
+  }
   if (!inConversation) {
     await openNewChat(p, normalizeModel(opts?.model));
     inConversation = true;
@@ -1589,7 +2441,7 @@ export async function sendViaBrowser(
   // Checked before typing, not after the send has already disappeared into a
   // logged-out page and cost the turn.
   throwIfAborted(opts?.signal);
-  await recoverAnonymousPage(p, cookies, normalizeModel(opts?.model));
+  await recoverAnonymousPage(p, cookies, normalizeModel(opts?.model), midConversation);
   throwIfAborted(opts?.signal);
 
   return sendOn(p, message, opts);
@@ -1607,13 +2459,18 @@ async function sendOn(
   logger.info("browser", "sending", shapeOf(payload));
   logger.debug("browser", "outgoing payload", { payload });
 
-  priorTurnCount = (await assistantTurns(p)).length;
+  lastReplyMeta = null;
+  priorTurnCount = (await assistantTurns(p)).count;
   const userTurnsBefore = await userTurnCount(p).catch(() => 0);
+  const streamSeqBefore = streamSeq();
 
   // Attachments ride with this one message and no other. The transport resends
   // them on no retry, so consume the queue up front: a re-typed payload after a
-  // composer stumble must not upload the files a second time.
-  const attachments = opts?.attachments?.length ? opts.attachments : pendingAttachments;
+  // composer stumble must not upload the files a second time. The transport's
+  // own file (a turn handed over as a document) and the user's queued files
+  // go together — preferring one over the other dropped the user's files, and
+  // emptied the queue, on every turn large enough to be uploaded.
+  const attachments = [...(opts?.attachments ?? []), ...pendingAttachments];
   pendingAttachments = [];
   if (attachments.length > 0) {
     await attachFiles(p, attachments);
@@ -1640,8 +2497,7 @@ async function sendOn(
     logger.warn("browser", "composer refused the send; reloading the page and retrying", {
       url: p.url(),
     });
-    await p.reload({ waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
-    await p.waitForTimeout(1_200);
+    await reloadKeepingConversation(p);
     throwIfAborted(opts?.signal);
     if (attachments.length > 0) await attachFiles(p, attachments);
     await typeMessage(p, payload, opts?.signal);
@@ -1669,6 +2525,7 @@ async function sendOn(
       ...opts,
       sent: payload,
       userTurnsBefore,
+      streamSeqBefore,
     });
   } catch (e) {
     // A page that swallowed a message cannot be trusted with the retry:
@@ -1682,14 +2539,57 @@ async function sendOn(
     // a *successful* reply, so every stalled or abandoned send orphaned a
     // chat in the user's main list — the exact chats they kept finding
     // outside the project. The reply is lost either way; where the chat
-    // lives is still worth getting right.
-    const orphan = await groupInProject(p).catch(() => null);
-    if (orphan) {
-      lastConversationId = orphan;
-      logger.info("browser", "filed the chat a failed send left behind", { conversation: orphan });
+    // lives is still worth getting right — except after a stop the user
+    // asked for: the filing is several seconds of requests and can raise a
+    // project warning, all of it landing on someone who has just pressed
+    // stop, and the sweep on a later turn files the chat regardless.
+    if (!opts?.signal?.aborted) {
+      const orphan = await groupInProject(p).catch(() => null);
+      if (orphan) {
+        lastConversationId = orphan;
+        logger.info("browser", "filed the chat a failed send left behind", { conversation: orphan });
+      }
     }
     throw e;
   }
+
+  // A reply ChatGPT cut off at its length limit. Its own control continues
+  // it in place, so that is tried first — a bounded number of times — and
+  // the pieces are joined when the continuation renders as a turn of its
+  // own. If the control cannot be found the reply goes up flagged, and the
+  // agent loop asks the model to resend rather than run a half-written call.
+  let continued = 0;
+  let view = streamView(streamSeqBefore);
+  while (view?.truncated && continued < MAX_CONTINUATIONS && !opts?.signal?.aborted) {
+    const seqBefore = streamSeq();
+    if (!(await clickContinueGenerating(p))) {
+      logger.warn("browser", "reply hit the length limit and no continue control was found", {
+        chars: reply.length,
+      });
+      break;
+    }
+    continued++;
+    logger.info("browser", "reply hit the length limit; continuing it", { continued });
+    const more = await waitForReply(p, priorTurnCount, {
+      ...opts,
+      sent: payload,
+      userTurnsBefore,
+      streamSeqBefore: seqBefore,
+    });
+    reply = joinContinuation(reply, more);
+    view = streamView(seqBefore);
+  }
+  // Read back through a function: the assignment at the top of this one
+  // narrows the module variable to null for the rest of the body, and
+  // `waitForReply` has set it since.
+  const accepted = currentReplyMeta();
+  const meta: ReplyMeta = {
+    ...(accepted ?? {}),
+    hookSeen: Boolean(accepted?.hookSeen || view),
+    truncated: Boolean(view?.truncated),
+    continued,
+  };
+  lastReplyMeta = meta;
 
   // Pick up anything the model drew, before the next send overwrites the turn.
   lastReplyImages = await collectReplyImages(p).catch((e) => {
@@ -1713,6 +2613,12 @@ async function sendOn(
     typedMs,
     submitMs,
     replyMs: Date.now() - sentAt,
+    // How the reply was judged complete, and what ChatGPT's own stream said
+    // about it — "it stopped early" and "it was cut off" need different fixes.
+    acceptedVia: meta.acceptedVia ?? null,
+    stream: Boolean(meta.hookSeen),
+    truncated: Boolean(meta.truncated),
+    continued,
     // Which conversation this landed in, and whether it was grouped. `filed`
     // has to mean the move happened: an unknown id compares equal to an
     // unfiled chat, so every skipped filing used to be logged as a success.
@@ -1752,9 +2658,12 @@ export function isEcho(candidate: string, sent: string | undefined): boolean {
 function looksLikePlaceholder(text: string): boolean {
   const t = text.trim();
   if (t.length > 60) return false;
+  // Nothing but fence markers is a code block whose contents have not
+  // arrived — live, an empty "```\n\n```" was accepted as the whole reply.
+  if (/^(`{3,}\s*)+$/.test(t)) return true;
   // The optional prefix is the model badge the UI puts in front of its status
   // on some plans — "Pro thinking" is the label, not the answer.
-  return /^(pro |auto |instant |[\w.-]*gpt[\w.-]* )?(working|thinking|analy[sz]ing|searching|reading|browsing|reasoning|planning|thought for [\w\s.]+|done thinking)[.…]*$/i.test(t);
+  return /^(pro |auto |instant |[\w.-]*gpt[\w.-]* )?(working|thinking|analy[sz]ing|searching|reading|browsing|reasoning|planning|continuing|thought for [\w\s.]+|done thinking)[.…]*$/i.test(t);
 }
 
 export async function waitForReply(
@@ -1817,10 +2726,28 @@ export async function waitForReply(
   // message, so with it the landing can never be observed.
   const userTurnsBefore = opts?.userTurnsBefore ?? (await userTurnCount(p).catch(() => 0));
   let loggedPlaceholder = "";
+  let loggedStreamError = false;
   let notedLongThink = false;
   let brokeOnSilence = false;
   /** Consecutive polls with no stop indicator — a streak, not one sighting. */
   let notGeneratingPolls = 0;
+  // The reply stream, when Chrome can show it. A fresh sample when the
+  // caller has none (tests call this directly): only a stream that starts
+  // after this point is about the reply being waited for.
+  const streamSeqBefore = opts?.streamSeqBefore ?? streamSeq();
+  let hookSeen = false;
+  /** Record how the reply was judged complete, then hand it back. */
+  const accept = (via: NonNullable<ReplyMeta["acceptedVia"]>, generatingNow: boolean): string => {
+    const view = streamView(streamSeqBefore);
+    lastReplyMeta = {
+      acceptedVia: via,
+      generatingAtAccept: generatingNow,
+      hookSeen: hookSeen || Boolean(view),
+      truncated: Boolean(view?.truncated),
+      continued: 0,
+    };
+    return text.trim();
+  };
 
   while (Date.now() < deadline) {
     if (opts?.signal?.aborted) {
@@ -1852,7 +2779,7 @@ export async function waitForReply(
       notGeneratingPolls++;
     }
 
-    let turns: string[];
+    let turns: { count: number; last: string };
     try {
       turns = await assistantTurns(p);
     } catch {
@@ -1860,11 +2787,11 @@ export async function waitForReply(
     }
 
     let candidate = text;
-    if (turns.length > before) {
-      candidate = turns[turns.length - 1] ?? "";
-    } else if (turns.length === before && before > 0 && sawGeneration) {
+    if (turns.count > before) {
+      candidate = turns.last;
+    } else if (turns.count === before && before > 0 && sawGeneration) {
       // Some layouts reuse the last node rather than appending one.
-      candidate = turns[turns.length - 1] ?? "";
+      candidate = turns.last;
     }
 
     // The page showing us our own message is not the model answering it.
@@ -1891,9 +2818,12 @@ export async function waitForReply(
 
     const quietFor = now - lastChangeAt;
 
-    // A placeholder while generating is not an answer; keep waiting for the
-    // real text rather than returning "Working" as the model's reply.
-    const placeholder = generating && looksLikePlaceholder(text);
+    // A placeholder is not an answer, whether or not the stop control was
+    // seen. Gated on `generating`, a stop selector that missed turned
+    // "Thinking…" into the reply after two and a half seconds of stillness;
+    // the overall deadline and the stall guard are the backstops for a
+    // placeholder that never becomes text.
+    const placeholder = looksLikePlaceholder(text);
     if (placeholder && text !== loggedPlaceholder) {
       loggedPlaceholder = text;
       logger.debug("browser", "waiting through placeholder", { text: text.trim() });
@@ -1909,7 +2839,46 @@ export async function waitForReply(
       // and a very short reply needs longer stillness before it is believed,
       // because almost-nothing is what a mid-thought pause looks like.
       const shortReply = text.trim().length < 200;
-      if (!generating) {
+      const stream = streamView(streamSeqBefore);
+      if (stream) hookSeen = true;
+      // Frames still arriving is generation still under way, whatever the
+      // page chrome shows. A stream that has gone quiet without ending is
+      // not trusted to say so — it stops counting after a few seconds, or
+      // a connection that never closes would hold every reply to the
+      // thirty-second backstop.
+      const streaming = stream?.state === "streaming" && now - stream.lastFrameAt < 5_000;
+      const midBlock = openFenceAtEnd(text);
+      if (stream?.state === "error" && stream.error && !loggedStreamError) {
+        loggedStreamError = true;
+        logger.warn("browser", "reply stream reported an error", { error: stream.error });
+      }
+      /**
+       * Accelerator: ChatGPT itself said the visible message finished, the
+       * text has held still for a poll since — the DOM renders a beat
+       * behind the wire — and the stop control is gone. That last part is
+       * about the *next* send, not this reply: measured, returning the
+       * moment the stream closed put the next message into a composer the
+       * page had not yet re-enabled, and it was refused. Nothing here is a
+       * precondition for the rules below.
+       */
+      if (
+        stream?.state === "done" &&
+        stream.visible?.status === "finished_successfully" &&
+        stream.endedAt !== null &&
+        now - stream.endedAt >= 600 &&
+        quietFor >= pollMs &&
+        !generating &&
+        !midBlock
+      ) {
+        logger.debug("browser", "reply complete (stream finished)", {
+          quietFor,
+          chars: text.length,
+          finish: stream.visible.finishType,
+          stillGenerating: generating,
+        });
+        return accept("stream", generating);
+      }
+      if (!generating && !streaming) {
         /**
          * Fast path: the page is idle and the text has settled.
          *
@@ -1920,10 +2889,12 @@ export async function waitForReply(
          * signal that actually tracks generation ending; required over
          * several consecutive polls it is stronger evidence than one
          * sighting of a button, because a momentary flicker between thinking
-         * and writing cannot survive the streak.
+         * and writing cannot survive the streak. An unclosed fence at the
+         * end of the text is the one thing that overrules the chrome here:
+         * the reply is mid-block, and a block cut in half is not an answer.
          */
         const sendBack = await anyVisible(p, SEND_SELECTORS).catch(() => false);
-        const settled = sendBack || notGeneratingPolls >= 3;
+        const settled = (sendBack || notGeneratingPolls >= 3) && !midBlock;
         const idleNeed = shortReply ? Math.max(IDLE_QUIET_MS, 2_500) : IDLE_QUIET_MS;
         if (settled && quietFor >= idleNeed) {
           logger.debug("browser", "reply complete (page idle)", {
@@ -1932,28 +2903,39 @@ export async function waitForReply(
             via: sendBack ? "send-button" : "stop-gone",
             notGeneratingPolls,
           });
-          return text.trim();
+          return accept(sendBack ? "send-button" : "stop-gone", false);
         }
       }
       // Backstop: the text simply stopped growing. This is what guarantees the
       // loop terminates no matter what the page chrome is doing.
-      const quietNeed = generating
-        ? Math.max(QUIET_MS, 30_000)
-        : shortReply
-          ? Math.max(QUIET_MS, 12_000)
-          : QUIET_MS;
+      const quietNeed =
+        generating || streaming
+          ? Math.max(QUIET_MS, 30_000)
+          : shortReply
+            ? Math.max(QUIET_MS, 12_000)
+            : QUIET_MS;
       if (quietFor >= quietNeed) {
         logger.debug("browser", "reply complete (text settled)", {
           quietFor,
           chars: text.length,
           stillGenerating: generating,
+          streaming,
         });
-        return text.trim();
+        return accept("text-settled", generating);
       }
       continue;
     }
 
     // ---- nothing has arrived yet -------------------------------------------
+    // The server said no to a request the send depended on. Waiting further
+    // can only end at the silence budget; failing now says why, and the
+    // retry does the right thing for the reason — re-injecting a refused
+    // session, waiting out a throttle, or moving a server error to a fresh
+    // chat.
+    const refused = requestFailureSince(started);
+    if (refused) {
+      throw refusedRequestError(refused);
+    }
     if (!sawGeneration && !warnedNeverSent && now - started > 20_000) {
       warnedNeverSent = true;
       const composerContent = await readComposer(p).catch(() => "");
@@ -2021,7 +3003,7 @@ export async function waitForReply(
 
   // Falling out of the loop with only a placeholder means generation stalled.
   // Returning "Working" as the model's answer would be worse than failing.
-  if (text.trim() && !looksLikePlaceholder(text)) return text.trim();
+  if (text.trim() && !looksLikePlaceholder(text)) return accept("deadline", false);
   if (text.trim()) {
     logger.warn("browser", "gave up on placeholder text", { text: text.trim() });
   }
@@ -2070,6 +3052,33 @@ export async function waitForReply(
   );
 }
 
+/**
+ * The error for a send whose request the server refused, worded so that
+ * `classifyFailure` does the right thing with it: a 401/403 retries (with
+ * the session re-injected first, and in a fresh chat), a 429 cools down for
+ * the stated interval, and anything else — a server error — retries, and
+ * moves to a fresh chat on the second attempt via "reached the model".
+ */
+function refusedRequestError(refused: { url: string; status: number }): ChatGPTBrowserError {
+  const { url, status } = refused;
+  if (status === 401 || status === 403) {
+    sessionSuspect = true;
+    inConversation = false;
+    return new ChatGPTBrowserError(
+      `ChatGPT rejected the message (status ${status} on ${url}) — the page's copy of the session was refused. Putting the session back and retrying in a fresh chat.`
+    );
+  }
+  if (status === 429) {
+    return new ChatGPTBrowserError(
+      `ChatGPT is throttling this account (too many requests: status 429 on ${url}, retry-after 180). Waiting before sending again; retrying now would extend the block.`
+    );
+  }
+  inConversation = false;
+  return new ChatGPTBrowserError(
+    `ChatGPT's server answered status ${status} on ${url}, so the message never reached the model. Retrying.`
+  );
+}
+
 async function stopGeneration(p: Page): Promise<void> {
   for (const sel of STOP_SELECTORS) {
     try {
@@ -2087,11 +3096,7 @@ async function stopGeneration(p: Page): Promise<void> {
 /** Forget the current chat so the next message opens a fresh conversation. */
 export function resetBrowserChat(): void {
   inConversation = false;
-  priorTurnCount = 0;
-  filedConversation = null;
-  conversationsBeforeChat = null;
-  lastConversationId = null;
-  projectWarningShown = false;
+  forgetChat();
 }
 
 /** True while a live ChatGPT conversation is open and being appended to. */
@@ -2410,9 +3415,7 @@ export async function openConversation(
     try {
       const role = await node.getAttribute("data-message-author-role");
       if (role !== "user" && role !== "assistant") continue;
-      const text = await node.evaluate(EXTRACT_MESSAGE).catch(() => null);
-      const content =
-        typeof text === "string" && text ? text : ((await node.innerText().catch(() => "")) ?? "");
+      const content = await readMessage(node);
       if (content.trim()) messages.push({ role, content: content.trim() });
     } catch {
       // A turn we cannot read is skipped rather than failing the attach; the
@@ -2420,9 +3423,12 @@ export async function openConversation(
     }
   }
 
+  // The previous chat's bookkeeping must not carry over: with its
+  // `filedConversation` still set, this one was reported filed and never was.
+  forgetChat();
   inConversation = true;
   lastConversationId = id;
-  priorTurnCount = (await assistantTurns(p)).length;
+  priorTurnCount = (await assistantTurns(p)).count;
   logger.info("browser", "attached to conversation", {
     id,
     messages: messages.length,
@@ -2469,7 +3475,25 @@ export function getActiveProject(): RemoteProject | null {
  * Exported for tests: the retry is the whole fix, and it only shows itself
  * against a page that answers empty before it answers properly.
  */
+/**
+ * The last access token the page produced, and when.
+ *
+ * It is a bearer token good for an hour or more, and it was being asked for
+ * afresh by every backend call — filing, the sweep, the account lookup —
+ * each paying the wait-and-retry dance above, which on a cold page ran to
+ * six seconds. Measured on one session: sixteen "never produced a token"
+ * warnings, most of them for a token the same page had handed over minutes
+ * earlier. Cleared whenever the browser or the session changes.
+ */
+let cachedToken: { value: string; at: number } | null = null;
+const TOKEN_CACHE_MS = 15 * 60_000;
+
+export function forgetAccessToken(): void {
+  cachedToken = null;
+}
+
 export async function pageAccessToken(p: Page, attempts = 5): Promise<string> {
+  if (cachedToken && Date.now() - cachedToken.at < TOKEN_CACHE_MS) return cachedToken.value;
   let detail = "";
   for (let attempt = 1; attempt <= attempts; attempt++) {
     const result = (await p.evaluate(async () => {
@@ -2485,6 +3509,7 @@ export async function pageAccessToken(p: Page, attempts = 5): Promise<string> {
 
     if (result.token) {
       if (attempt > 1) logger.debug("browser", "access token arrived late", { attempt });
+      cachedToken = { value: result.token, at: Date.now() };
       return result.token;
     }
     detail = result.detail;
@@ -2495,7 +3520,18 @@ export async function pageAccessToken(p: Page, attempts = 5): Promise<string> {
     // the wait above, a page that loaded before its cookies were in place
     // wants a reload. Do one of each rather than guessing which it is.
     if (attempt === 2) {
-      await p.reload({ waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
+      // Never by reloading a conversation page. A reloaded `/c/<id>` lands on
+      // the root (see openConversation), which threw the live chat away and
+      // resent the whole transcript into a fresh one — on every turn the
+      // filing step ran, since that is where this reader is called after a
+      // reply. A scratch page in the same context shares the cookies and
+      // can ask for the token without touching the chat at all.
+      if (inConversation || /\/c\//.test(p.url())) {
+        const viaScratch = await tokenViaScratchPage();
+        if (viaScratch) return viaScratch;
+        continue;
+      }
+      await reloadKeepingConversation(p);
       await assertLoggedIn(p).catch(() => {});
     }
   }
@@ -2512,6 +3548,41 @@ export async function pageAccessToken(p: Page, attempts = 5): Promise<string> {
  * shares the cookies and warms the same session, leaving the real page
  * pristine for the conversation itself.
  */
+/** The access token, fetched on a throwaway page so the live chat is untouched. */
+async function tokenViaScratchPage(): Promise<string> {
+  if (!context) return "";
+  const scratch = await context.newPage().catch(() => null);
+  if (!scratch) return "";
+  try {
+    await scratch.goto(`${CHAT_URL}/`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const token = await scratch.evaluate(async () => {
+        try {
+          const res = await fetch("/api/auth/session", { credentials: "include" });
+          if (!res.ok) return "";
+          const json = (await res.json()) as { accessToken?: string };
+          return json.accessToken ?? "";
+        } catch {
+          return "";
+        }
+      });
+      if (token) {
+        cachedToken = { value: token, at: Date.now() };
+        return token;
+      }
+      await scratch.waitForTimeout(600 * attempt);
+    }
+    return "";
+  } catch (e) {
+    logger.debug("browser", "scratch page could not fetch the token", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return "";
+  } finally {
+    await scratch.close().catch(() => {});
+  }
+}
+
 async function warmSession(): Promise<boolean> {
   if (!context) return false;
   const scratch = await context.newPage().catch(() => null);
@@ -2603,11 +3674,7 @@ export function parseProject(raw: unknown): RemoteProject | null {
 
 /** The account's projects, newest-used first, as the sidebar orders them. */
 export async function listProjects(cookies: SessionCookie[]): Promise<RemoteProject[]> {
-  const p = await ensurePage(cookies);
-  if (!/chatgpt.com/.test(p.url())) {
-    await p.goto(`${CHAT_URL}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-  }
-  await assertLoggedIn(p);
+  const p = await pageOnChatGpt(cookies);
 
   const json = (await backendApi(
     p,
@@ -2627,11 +3694,7 @@ export async function createProject(
   cookies: SessionCookie[],
   name: string
 ): Promise<RemoteProject> {
-  const p = await ensurePage(cookies);
-  if (!/chatgpt.com/.test(p.url())) {
-    await p.goto(`${CHAT_URL}/`, { waitUntil: 'domcontentloaded', timeout: 45_000 });
-  }
-  await assertLoggedIn(p);
+  const p = await pageOnChatGpt(cookies);
 
   const json = (await backendApi(p, '/backend-api/projects', {
     method: 'POST',
@@ -2656,11 +3719,7 @@ export async function createProject(
  * having to grow a guess-shaped API for every one of them.
  */
 export async function debugOpenRoot(cookies: SessionCookie[]): Promise<Page> {
-  const p = await ensurePage(cookies);
-  if (!/chatgpt.com/.test(p.url())) {
-    await p.goto(`${CHAT_URL}/`, { waitUntil: "domcontentloaded", timeout: 45_000 });
-  }
-  await assertLoggedIn(p);
+  const p = await pageOnChatGpt(cookies);
   await p.waitForTimeout(1_500);
   return p;
 }
@@ -2758,6 +3817,365 @@ export async function checkSignedIn(
   }
 }
 
+// ---------------------------------------------------------------------------
+// signing in with a real browser
+// ---------------------------------------------------------------------------
+
+/**
+ * Signing in happens in a real browser, started by hand, on OnFlip's own
+ * profile.
+ *
+ * Every other way in had a wall at the end of it. Reading cookies out of
+ * Chrome or Edge is refused by design — the key is bound to the browser. An
+ * embedded window, however honest its user agent, is recognised by Google as
+ * an embedded window and turned away as insecure. A browser driven over the
+ * automation protocol is turned away by Google too, and challenged by
+ * Cloudflare besides. And an extension that has to be loaded unpacked in
+ * developer mode is a setup step, not a sign-in.
+ *
+ * So the browser that signs in is Chrome itself (or Edge, or the bundled
+ * build), launched exactly as a person would launch it — no automation, no
+ * debugging port, no flags — only pointed at the profile directory the
+ * transport drives afterwards. Google sees a real browser and accepts it;
+ * the session lands in the profile; and the transport opens that same
+ * profile with that same browser, which can read its own cookies without
+ * anything being decrypted or handed across. The user's everyday browser
+ * profile is never touched.
+ */
+
+/** Browsers the sign-in can open, in order of preference. */
+export type BrowserChannel = "chrome" | "msedge" | "chromium";
+
+const LOGIN_URL = `${CHAT_URL}/auth/login`;
+/** Long enough for a slow login plus a security check; not forever. */
+const SIGN_IN_DEADLINE_MS = 15 * 60_000;
+
+export interface SignInBrowser {
+  channel: BrowserChannel;
+  /** For the button and the message: "Google Chrome", "Microsoft Edge". */
+  name: string;
+  executable: string;
+}
+
+/** Where a browser usually is, per platform, without launching it to ask. */
+function candidatePaths(channel: "chrome" | "msedge"): string[] {
+  const home = os.homedir();
+  if (process.platform === "win32") {
+    const pf = process.env.ProgramFiles ?? "C:\\Program Files";
+    const pf86 = process.env["ProgramFiles(x86)"] ?? "C:\\Program Files (x86)";
+    const local = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local");
+    return channel === "chrome"
+      ? [
+          path.join(pf, "Google", "Chrome", "Application", "chrome.exe"),
+          path.join(pf86, "Google", "Chrome", "Application", "chrome.exe"),
+          path.join(local, "Google", "Chrome", "Application", "chrome.exe"),
+        ]
+      : [
+          path.join(pf86, "Microsoft", "Edge", "Application", "msedge.exe"),
+          path.join(pf, "Microsoft", "Edge", "Application", "msedge.exe"),
+        ];
+  }
+  if (process.platform === "darwin") {
+    const app =
+      channel === "chrome"
+        ? "Google Chrome.app/Contents/MacOS/Google Chrome"
+        : "Microsoft Edge.app/Contents/MacOS/Microsoft Edge";
+    return [path.join("/Applications", app), path.join(home, "Applications", app)];
+  }
+  return channel === "chrome"
+    ? ["/usr/bin/google-chrome", "/usr/bin/google-chrome-stable", "/opt/google/chrome/chrome"]
+    : ["/usr/bin/microsoft-edge", "/usr/bin/microsoft-edge-stable", "/opt/microsoft/msedge/msedge"];
+}
+
+/**
+ * The browser a sign-in will open — and, for the same reason, the one the
+ * transport will drive afterwards.
+ *
+ * A channel already recorded in config wins even when a "better" browser has
+ * since been installed: the profile on disk was written by that browser and
+ * only that browser can read it. Otherwise Chrome, then Edge, then the
+ * bundled build, which is a real browser too when started by hand, only one
+ * Cloudflare is warier of.
+ */
+export function pickSignInBrowser(): SignInBrowser | null {
+  const recorded = process.env.ONFLIP_BROWSER_CHANNEL ?? loadConfig().browserChannel;
+  const order = new Set<string>([...(recorded ? [recorded] : []), "chrome", "msedge", "chromium"]);
+  for (const channel of order) {
+    if (channel === "chromium") {
+      try {
+        const exe = chromium.executablePath();
+        if (exe && fs.existsSync(exe)) {
+          return { channel, name: "the bundled browser", executable: exe };
+        }
+      } catch {
+        /* no bundled build installed */
+      }
+      continue;
+    }
+    if (channel !== "chrome" && channel !== "msedge") continue;
+    const exe = candidatePaths(channel).find((p) => fs.existsSync(p));
+    if (exe) {
+      return { channel, name: channel === "chrome" ? "Google Chrome" : "Microsoft Edge", executable: exe };
+    }
+  }
+  return null;
+}
+
+function waitMs(ms: number): Promise<false> {
+  return new Promise((resolve) => setTimeout(() => resolve(false), ms));
+}
+
+/**
+ * Has a ChatGPT session cookie reached the profile on disk?
+ *
+ * Only the *name* is looked for, as bytes, in a copy of the cookie database
+ * — nothing is decrypted, and no SQLite driver is needed in this process.
+ * It is an accelerator, not the proof: the browser flushes cookies on its own
+ * schedule and holds the file exclusively on Windows, so a negative here
+ * means nothing, and the sign-in is only believed once the profile has been
+ * opened and asked.
+ */
+function cookieDbMentionsSession(dir: string): boolean {
+  for (const rel of [["Default", "Network", "Cookies"], ["Default", "Cookies"]]) {
+    const file = path.join(dir, ...rel);
+    if (!fs.existsSync(file)) continue;
+    const tmp = path.join(os.tmpdir(), `onflip-signin-${process.pid}-${Date.now()}`);
+    try {
+      fs.copyFileSync(file, tmp);
+      return fs.readFileSync(tmp).includes("__Secure-next-auth.session-token");
+    } catch {
+      /* locked by the running browser; the window closing is the signal then */
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
+  }
+  return false;
+}
+
+/** Ask the browser to close the way its own Quit does, so the profile is flushed. */
+async function closeGracefully(child: ChildProcess, exited: Promise<true>): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) return;
+  try {
+    if (process.platform === "win32" && child.pid) {
+      // Without /F this is a WM_CLOSE: windows close, the profile is written
+      // out, the process ends. A hard kill can leave the last cookies
+      // unflushed — which is the one thing this window existed to write.
+      spawn("taskkill", ["/PID", String(child.pid)], { windowsHide: true, stdio: "ignore" });
+    } else {
+      child.kill("SIGTERM");
+    }
+  } catch {
+    /* already gone */
+  }
+  const closed = await Promise.race([exited, waitMs(10_000)]);
+  if (!closed) {
+    try {
+      child.kill("SIGKILL");
+    } catch {
+      /* already gone */
+    }
+    await Promise.race([exited, waitMs(3_000)]);
+  }
+}
+
+let signInChild: ChildProcess | null = null;
+let signInOutcome: "finish" | "cancel" | null = null;
+
+export interface RealBrowserSignInResult {
+  ok: boolean;
+  reason?: string;
+  browser?: SignInBrowser;
+}
+
+/** The user says they are done: close the window and check. */
+export function finishRealBrowserSignIn(): boolean {
+  if (!signInChild) return false;
+  signInOutcome = "finish";
+  return true;
+}
+
+/** The user gave up: close the window and report nothing. */
+export function cancelRealBrowserSignIn(): boolean {
+  if (!signInChild) return false;
+  signInOutcome = "cancel";
+  return true;
+}
+
+/**
+ * Open the real browser on OnFlip's profile and wait for a session.
+ *
+ * Resolves when the window closes, when the user says they are done, when a
+ * session cookie shows up in the profile, or after the deadline. Whatever
+ * ended the wait, the answer comes from opening the profile and asking
+ * ChatGPT — the only signal that means the account is actually signed in.
+ */
+export type SignInProgress = "waiting" | "verifying" | "downloading";
+
+/**
+ * Make sure the bundled browser exists, downloading it when it does not.
+ *
+ * The desktop installer ships no browser of its own; a machine with Chrome
+ * or Edge never needs one, and a Mac with only Safari otherwise has nothing
+ * OnFlip can drive at all. Playwright's own installer does the download,
+ * into the same place its `executablePath()` looks afterwards.
+ */
+export async function ensureBundledBrowser(onOutput?: (line: string) => void): Promise<boolean> {
+  try {
+    const exe = chromium.executablePath();
+    if (exe && fs.existsSync(exe)) return true;
+  } catch {
+    /* not installed */
+  }
+  let cli: string;
+  try {
+    // Not an exported subpath, so found beside the package's main entry.
+    cli = path.join(path.dirname(require.resolve("playwright")), "cli.js");
+    if (!fs.existsSync(cli)) return false;
+  } catch {
+    return false;
+  }
+  logger.info("browser", "downloading the bundled browser");
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [cli, "install", "chromium"], {
+      // Harmless under plain Node; under Electron-as-Node it is what makes
+      // the binary behave as Node for this child too.
+      env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+      stdio: ["ignore", "pipe", "pipe"],
+      windowsHide: true,
+    });
+    const forward = (chunk: Buffer) => {
+      const line = chunk.toString("utf8").trim();
+      if (!line) return;
+      onOutput?.(line);
+      logger.debug("browser", "browser install", { line: line.slice(0, 160) });
+    };
+    child.stdout?.on("data", forward);
+    child.stderr?.on("data", forward);
+    child.on("error", (e) => {
+      logger.warn("browser", "browser install could not start", { error: e.message });
+      resolve(false);
+    });
+    child.on("exit", (code) => {
+      let ok = false;
+      try {
+        ok = code === 0 && fs.existsSync(chromium.executablePath());
+      } catch {
+        ok = false;
+      }
+      logger.info("browser", "browser install finished", { code, ok });
+      resolve(ok);
+    });
+  });
+}
+
+export async function signInWithRealBrowser(
+  onProgress?: (state: SignInProgress) => void
+): Promise<RealBrowserSignInResult> {
+  if (signInChild) return { ok: false, reason: "A sign-in window is already open." };
+  let pick = pickSignInBrowser();
+  if (!pick) {
+    // Nothing to sign in with, and nothing to drive afterwards either — the
+    // bundled browser is fetched now rather than at the first send.
+    onProgress?.("downloading");
+    if (await ensureBundledBrowser()) pick = pickSignInBrowser();
+  }
+  if (!pick) {
+    return {
+      ok: false,
+      reason:
+        "No browser to sign in with was found, and the bundled one could not be downloaded. Install Google Chrome or Microsoft Edge and try again.",
+    };
+  }
+
+  // The profile directory is held while the automation browser runs; a
+  // second browser on it would refuse to start.
+  await closeBrowser();
+  configureBrowser({ persistProfile: true });
+  const dir = profileDir();
+  // A profile that once held a session may still mention the cookie's name
+  // in freed database pages; the accelerator is only trusted on a clean one.
+  const accelerate = !cookieDbMentionsSession(dir);
+
+  const args = [
+    `--user-data-dir=${dir}`,
+    "--no-first-run",
+    "--no-default-browser-check",
+    "--new-window",
+    // Matches the transport's launch on Linux, where the keyring would
+    // otherwise be one more thing the two launches disagree about.
+    ...(process.platform === "linux" ? ["--password-store=basic"] : []),
+    LOGIN_URL,
+  ];
+  let child: ChildProcess;
+  try {
+    child = spawn(pick.executable, args, { stdio: "ignore", windowsHide: false });
+  } catch (e) {
+    return { ok: false, reason: `Could not start ${pick.name}: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  let spawnError: string | null = null;
+  const exited = new Promise<true>((resolve) => {
+    child.once("exit", () => resolve(true));
+    child.once("error", (e) => {
+      spawnError = e.message;
+      resolve(true);
+    });
+  });
+  signInChild = child;
+  signInOutcome = null;
+  logger.info("browser", "sign-in window opened", { channel: pick.channel, executable: pick.executable });
+  onProgress?.("waiting");
+
+  const deadline = Date.now() + SIGN_IN_DEADLINE_MS;
+  try {
+    for (;;) {
+      if (await Promise.race([exited, waitMs(2_000)])) break;
+      if (signInOutcome) {
+        await closeGracefully(child, exited);
+        break;
+      }
+      if (Date.now() > deadline) {
+        signInOutcome = "cancel";
+        await closeGracefully(child, exited);
+        return {
+          ok: false,
+          reason: "The sign-in window was open for fifteen minutes without a session. Try again when you are ready.",
+        };
+      }
+      if (accelerate && cookieDbMentionsSession(dir)) {
+        logger.info("browser", "session cookie reached the profile; closing the sign-in window");
+        await closeGracefully(child, exited);
+        break;
+      }
+    }
+  } finally {
+    signInChild = null;
+  }
+  if (spawnError) return { ok: false, reason: `Could not start ${pick.name}: ${spawnError}` };
+  if (signInOutcome === "cancel") return { ok: false, reason: "cancelled" };
+
+  onProgress?.("verifying");
+  // Bounded: a launch that never reports ready would otherwise leave the
+  // dialog on "checking" for good, with nothing the user can do about it.
+  const state = await Promise.race([checkSignedIn([]), waitMs(90_000).then(() => null)]);
+  if (!state) {
+    logger.warn("browser", "verifying the sign-in timed out");
+    await closeBrowser().catch(() => {});
+    return {
+      ok: false,
+      reason: "ChatGPT could not be checked within a minute and a half. Try again; if it keeps happening, restart OnFlip first.",
+    };
+  }
+  if (!state.signedIn) {
+    logger.warn("browser", "sign-in window closed without a session", { detail: state.detail });
+    return {
+      ok: false,
+      reason: `${pick.name} closed without a ChatGPT session${state.detail ? ` (${state.detail})` : ""}. Open it again, sign in to chatgpt.com there, and close the window once the chat page appears.`,
+    };
+  }
+  logger.info("browser", "signed in through a real browser", { channel: pick.channel });
+  return { ok: true, browser: pick };
+}
+
 /** Open a headed window and park on ChatGPT so the user can sign in. */
 export async function openLoginWindow(cookies: SessionCookie[]): Promise<void> {
   configureBrowser({ headed: true, persistProfile: true });
@@ -2799,9 +4217,7 @@ export async function closeBrowser(): Promise<void> {
     context = null;
     browser = null;
     inConversation = false;
-    priorTurnCount = 0;
-    filedConversation = null;
-    conversationsBeforeChat = null;
-    projectWarningShown = false;
+    cachedToken = null;
+    forgetChat();
   }
 }

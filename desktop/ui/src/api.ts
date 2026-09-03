@@ -39,11 +39,13 @@ export const api = {
   /** Try Chrome, Edge and Firefox for a session already signed in. */
   importBrowserSession: () =>
     call<{ ok: boolean; source?: string; reason?: string; report?: { browser: string; outcome: string; detail?: string }[] }>("importBrowserSession"),
-  /** Sign in with a session cookie the user pasted; same path as the window. */
-  signInWithToken: (token: string) =>
-    call<{ ok: boolean }>("applySignIn", {
-      cookies: [{ name: "__Secure-next-auth.session-token", value: token }],
-    }),
+  /** The real browser a sign-in would open, for the button that offers it. */
+  signInBrowserInfo: () => call<{ name: string; channel: string } | null>("signInBrowserInfo"),
+  /** Open that browser on OnFlip's own profile and wait for a ChatGPT session. */
+  signInWithBrowser: () =>
+    call<{ ok: boolean; reason?: string; browser?: string }>("signInWithBrowser"),
+  finishBrowserSignIn: () => call<boolean>("finishBrowserSignIn"),
+  cancelBrowserSignIn: () => call<boolean>("cancelBrowserSignIn"),
 
 
   recentProjects: () => call<RecentProjectDTO[]>("recentProjects"),

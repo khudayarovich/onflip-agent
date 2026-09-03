@@ -124,7 +124,12 @@ export function SettingsModal({
           </div>
           <Toggle
             on={status?.shellEnabled ?? true}
-            onChange={(on) => void api.setShell(on).then(onStatusChange)}
+            onChange={(on) =>
+              void api
+                .setShell(on)
+                .then(onStatusChange)
+                .catch((e: Error) => notify(e.message))
+            }
           />
         </div>
         <div className="setting-row">
@@ -134,7 +139,12 @@ export function SettingsModal({
           </div>
           <Toggle
             on={status?.networkEnabled ?? true}
-            onChange={(on) => void api.setNetwork(on).then(onStatusChange)}
+            onChange={(on) =>
+              void api
+                .setNetwork(on)
+                .then(onStatusChange)
+                .catch((e: Error) => notify(e.message))
+            }
           />
         </div>
         {numberField("maxIterations", t("setStepBudget"), t("setStepBudgetDesc"))}

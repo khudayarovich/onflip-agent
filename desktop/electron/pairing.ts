@@ -198,17 +198,21 @@ export function pairWithBrowser(): Promise<PairResult> {
     const server = http.createServer((req, res) => {
       const url = (req.url ?? "/").split("?")[0];
 
-      // Permissive headers are safe here because the token is what actually
-      // authorises, and only a page this server served carries one.
-      res.setHeader("Access-Control-Allow-Origin", "*");
-      res.setHeader("Access-Control-Allow-Headers", "content-type, x-onflip-pairing");
+      // No CORS grant, deliberately. The page polls /status from its own
+      // origin and the extension's service worker holds host permission for
+      // this one, so neither needs a grant — and `Allow-Origin: *` on the
+      // page that carries the token let any site open in another tab fetch
+      // /pair, read the token out of it, and post a session of its own.
       res.setHeader("Cache-Control", "no-store");
-      if (req.method === "OPTIONS") {
-        res.writeHead(204).end();
-        return;
-      }
 
       if (req.method === "GET" && (url === "/pair" || url === "/")) {
+        // The token page is for a navigation from the app, or a reload of
+        // itself. A cross-site fetch or frame is exactly the read to refuse.
+        const site = String(req.headers["sec-fetch-site"] ?? "");
+        if (site === "cross-site") {
+          res.writeHead(403).end();
+          return;
+        }
         res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
         res.end(page(token, extensionDir(), app.getVersion()));
         return;
@@ -222,6 +226,14 @@ export function pairWithBrowser(): Promise<PairResult> {
 
       if (req.method === "POST" && url === "/session") {
         if (req.headers["x-onflip-pairing"] !== token) {
+          res.writeHead(403).end();
+          return;
+        }
+        // Only an extension may hand over a session. A browser stamps a
+        // cross-origin POST with its sender, and an extension's sender is
+        // its own scheme — a web page cannot forge that.
+        const origin = String(req.headers.origin ?? "");
+        if (!/^(chrome|moz|safari-web)-extension:\/\//.test(origin)) {
           res.writeHead(403).end();
           return;
         }

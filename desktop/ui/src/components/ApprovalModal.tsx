@@ -31,10 +31,19 @@ export function ApprovalModal({
       else if (e.key === "a" || e.key === "A") {
         if (request.rememberLabel) onDecision({ allow: true, remember: true });
       } else if (e.key === "n" || e.key === "N") onDecision({ allow: false });
-      else if (e.key === "Escape") onDecision({ allow: false, abort: true });
+      else if (e.key === "Escape") {
+        // The approval sits above whatever dialog was open, so Escape is its
+        // alone: marked handled, and the generic Modal (common.tsx) leaves a
+        // handled Escape be. Otherwise one key closed the settings *and*
+        // aborted the turn.
+        e.preventDefault();
+        onDecision({ allow: false, abort: true });
+      }
     };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    // Capture phase, so this runs before every bubble-phase listener no
+    // matter which dialog mounted first; the ordering above depends on it.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
   }, [request, onDecision]);
 
   return (

@@ -53,6 +53,8 @@ export class Peer {
   >();
   private buffer = "";
   private decoder = new StringDecoder("utf8");
+  /** Set once the other side is gone; nothing is written after that. */
+  private closed: string | null = null;
 
   onRequest: RequestHandler = async (method) => {
     throw new Error(`No handler for ${method}`);
@@ -64,18 +66,19 @@ export class Peer {
   constructor(private write: (chunk: string) => void) {}
 
   request<T = unknown>(method: string, params: unknown): Promise<T> {
+    if (this.closed) return Promise.reject(new Error(this.closed));
     const id = this.nextId++;
     return new Promise<T>((resolve, reject) => {
       this.pending.set(id, {
         resolve: resolve as (v: unknown) => void,
         reject,
       });
-      this.write(frame({ type: "req", id, method, params }));
+      this.send(frame({ type: "req", id, method, params }));
     });
   }
 
   emit(event: string, data: unknown): void {
-    this.write(frame({ type: "event", event, data }));
+    this.send(frame({ type: "event", event, data }));
   }
 
   /** Feed raw bytes from the other side. */
@@ -87,15 +90,21 @@ export class Peer {
       const line = this.buffer.slice(0, nl).replace(/\r$/, "");
       this.buffer = this.buffer.slice(nl + 1);
       if (!line) continue;
-      if (!line.startsWith(RS)) {
+      // A frame is found by its separator, not by the start of the line: a
+      // print without a trailing newline just before it would otherwise
+      // turn the whole frame into noise, and the request it carried would
+      // simply never be answered.
+      const at = line.indexOf(RS);
+      if (at < 0) {
         this.onNoise(line);
         continue;
       }
+      if (at > 0) this.onNoise(line.slice(0, at));
       let msg: WireMessage;
       try {
-        msg = JSON.parse(line.slice(1)) as WireMessage;
+        msg = JSON.parse(line.slice(at + 1)) as WireMessage;
       } catch {
-        this.onNoise(line);
+        this.onNoise(line.slice(at + 1));
         continue;
       }
       this.dispatch(msg);
@@ -106,6 +115,21 @@ export class Peer {
   failAll(reason: string): void {
     for (const { reject } of this.pending.values()) reject(new Error(reason));
     this.pending.clear();
+  }
+
+  /**
+   * The other side is gone for good. Outstanding requests fail, new ones are
+   * refused, and a response that a handler produces later is dropped rather
+   * than written into a pipe that no longer has a reader.
+   */
+  close(reason: string): void {
+    this.closed = reason;
+    this.failAll(reason);
+  }
+
+  private send(text: string): void {
+    if (this.closed) return;
+    this.write(text);
   }
 
   private dispatch(msg: WireMessage): void {
@@ -124,10 +148,10 @@ export class Peer {
     // req
     void this.onRequest(msg.method, msg.params)
       .then((result) => {
-        this.write(frame({ type: "res", id: msg.id, result: result ?? null }));
+        this.send(frame({ type: "res", id: msg.id, result: result ?? null }));
       })
       .catch((e: unknown) => {
-        this.write(
+        this.send(
           frame({
             type: "res",
             id: msg.id,

@@ -8,9 +8,8 @@ import {
   BrowserCookieLocation,
 } from "./browser";
 import { decryptChromiumCookieValue, getCookieKey, CryptoError } from "./crypto";
-import { SessionCookie } from "./access";
-
-const SESSION_COOKIE = "__Secure-next-auth.session-token";
+import { SessionCookie, pickSessionCookie } from "./access";
+import { chatGptCookiesFromBinaryCookies, SAFARI_ACCESS_HINT } from "./safari";
 
 /**
  * Open a cookie database under whatever runtime this process happens to be.
@@ -88,12 +87,32 @@ function readWithCopy(dbPath: string): { file: string; cleanup: () => void } {
   };
 }
 
-function pickPrimary(cookies: SessionCookie[]): SessionCookie {
-  const order = (n: string) =>
-    n === SESSION_COOKIE ? 0 : n.endsWith(".0") ? 1 : n.endsWith(".1") ? 2 : 3;
-  return [...cookies].sort(
-    (a, b) => order(a.name) - order(b.name) || b.value.length - a.value.length
-  )[0];
+/**
+ * A jar with no session token is not a session.
+ *
+ * A browser that has visited chatgpt.com without signing in still has
+ * cookies for it — a device id, Cloudflare's — and those used to come back
+ * as a "session" with the longest of them standing in as the token. The
+ * search then stopped at that browser, and the stand-in got stored. Null
+ * here reads as "no session in this browser", and the search moves on.
+ */
+function asSession(
+  cookies: SessionCookie[],
+  deviceId: string | undefined,
+  source: string
+): ExtractedToken | null {
+  const primary = pickSessionCookie(cookies);
+  if (!primary) return null;
+  return { cookies, primary, deviceId, source };
+}
+
+/** Closing must never be what keeps the temporary copy from being removed. */
+function closeQuietly(db: Database.Database | null): void {
+  try {
+    db?.close();
+  } catch {
+    /* already closed, or never fully opened */
+  }
 }
 
 function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
@@ -101,8 +120,12 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
   // a Windows key can never be handed to the macOS cipher.
   const cookieKey = getCookieKey(loc.localStatePath, loc.browser);
   const { file, cleanup } = readWithCopy(loc.cookieDbPath);
+  // Declared out here so the handle is closed whatever the query does. A
+  // prepare or read that threw used to leave it open, and an open handle on
+  // the temporary copy is exactly what stops Windows deleting that copy.
+  let db: Database.Database | null = null;
   try {
-    const db = openCookieDb(file);
+    db = openCookieDb(file);
 
     const allRows = db
       .prepare(
@@ -111,8 +134,6 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
          ORDER BY host_key`
       )
       .all() as { name: string; encrypted_value: Buffer }[];
-
-    db.close();
 
     const cookies: SessionCookie[] = [];
     let deviceId: string | undefined;
@@ -129,16 +150,18 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
     }
 
     if (!cookies.length) return null;
-    return { cookies, primary: pickPrimary(cookies), deviceId, source: loc.browser };
+    return asSession(cookies, deviceId, loc.browser);
   } finally {
+    closeQuietly(db);
     cleanup();
   }
 }
 
 function extractFirefox(loc: BrowserCookieLocation): ExtractedToken | null {
   const { file, cleanup } = readWithCopy(loc.cookieDbPath);
+  let db: Database.Database | null = null;
   try {
-    const db = openCookieDb(file);
+    db = openCookieDb(file);
 
     const allRows = db
       .prepare(
@@ -148,15 +171,14 @@ function extractFirefox(loc: BrowserCookieLocation): ExtractedToken | null {
       )
       .all() as { name: string; value: string }[];
 
-    db.close();
-
     if (!allRows.length) return null;
 
     const cookies: SessionCookie[] = allRows.map((r) => ({ name: r.name, value: r.value }));
     const deviceId = cookies.find((c) => c.name === "oai-did")?.value;
 
-    return { cookies, primary: pickPrimary(cookies), deviceId, source: loc.browser };
+    return asSession(cookies, deviceId, loc.browser);
   } finally {
+    closeQuietly(db);
     cleanup();
   }
 }
@@ -175,12 +197,31 @@ function extractFirefox(loc: BrowserCookieLocation): ExtractedToken | null {
 export type CookieReader = (loc: BrowserCookieLocation) => ExtractedToken | null;
 
 const defaultReader: CookieReader = (loc) =>
-  loc.browser === "Firefox" ? extractFirefox(loc) : extractChromium(loc);
+  loc.browser === "Firefox"
+    ? extractFirefox(loc)
+    : loc.browser === "Safari"
+      ? extractSafari(loc)
+      : extractChromium(loc);
+
+/** Safari: a plain file, read whole; macOS decides whether that is allowed. */
+function extractSafari(loc: BrowserCookieLocation): ExtractedToken | null {
+  const cookies = chatGptCookiesFromBinaryCookies(fs.readFileSync(loc.cookieDbPath));
+  if (!cookies.length) return null;
+  const deviceId = cookies.find((c) => c.name === "oai-did")?.value;
+  return asSession(cookies, deviceId, loc.browser);
+}
 
 /** What each installed browser had to say, for the message and the log. */
 export interface BrowserReport {
   browser: string;
-  outcome: "session" | "no-session" | "app-bound" | "locked" | "error" | "not-installed";
+  outcome:
+    | "session"
+    | "no-session"
+    | "app-bound"
+    | "locked"
+    | "needs-access"
+    | "error"
+    | "not-installed";
   detail?: string;
 }
 
@@ -219,6 +260,10 @@ export function extractSessionTokenFromBrowser(
       if (e instanceof CryptoError && message.includes("v20")) {
         appBound = appBound ?? e;
         note(loc.browser, "app-bound");
+      } else if (loc.browser === "Safari" && /EPERM|EACCES|not permitted|ENOENT/i.test(message)) {
+        // macOS refusing the read, not Safari being busy: the fix is a
+        // setting, and saying so is the whole value of this row.
+        note(loc.browser, "needs-access", SAFARI_ACCESS_HINT);
       } else if (/EBUSY|EPERM|locked/i.test(message)) {
         note(loc.browser, "locked", "close the browser and try again");
       } else {
@@ -241,8 +286,7 @@ export function extractSessionTokenFromBrowser(
     throw new CryptoError(
       `No ChatGPT session could be read from any browser (tried ${tried.join(", ")}). ` +
         `Chrome-family cookies use app-bound encryption, which cannot be decrypted. ` +
-        `Use "Use my browser", which asks Chrome for the session instead of reading it, ` +
-        `or sign in through the app's own window.`
+        `Sign in with the browser button instead: it opens Chrome or Edge on OnFlip's own profile.`
     );
   }
   return null;
