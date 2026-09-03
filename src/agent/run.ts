@@ -365,6 +365,55 @@ export async function runTurn(
     if (terminal) {
       const name = terminalName(terminal)!;
       const open = openTodoCount(opts.session.todos);
+      const closingText =
+        name === "done"
+          ? stringArgument(terminal.arguments.summary)
+          : stringArgument(terminal.arguments.question);
+      // A closing block that is really a refusal. Live: seven tool calls
+      // ran, then an `ask_user` whose question was "the OnFlip execution
+      // tool is not exposed in this turn — please reconnect it", and the
+      // turn ended on it with three items open. "Expose the tools" is not a
+      // question the user can answer and "I cannot proceed without them" is
+      // not an answer, so the same nudges apply as to a reply with no block.
+      const disguised = pickRefusal(
+        classifySlip(text, executedCalls, deniedCalls),
+        classifySlip(closingText, executedCalls, deniedCalls)
+      );
+      if (disguised && protocolCorrections < MAX_NO_BLOCK_NUDGES && totalNudges < MAX_NUDGES_PER_TURN) {
+        protocolCorrections++;
+        totalNudges++;
+        pendingProse = composeFinal(pendingProse, text);
+        lastNoCallText = squash(`${text}\n${closingText}`);
+        const what =
+          disguised === "denial"
+            ? "ChatGPT replied that it could not use its tools"
+            : disguised === "permission"
+              ? "ChatGPT asked for permission instead of acting"
+              : "ChatGPT tried to hand the task to its own ChatGPT Work agent, which cannot see this computer";
+        logger.info("protocol", "closing block carried a refusal; nudging", {
+          block: name,
+          attempt: protocolCorrections,
+          variant: disguised,
+          openTodos: open,
+        });
+        events.onNotice?.(
+          `${what} — asking it to continue (${protocolCorrections} of ${MAX_NO_BLOCK_NUDGES}).`
+        );
+        history.push(
+          newMessage(
+            "user",
+            noBlockNudge({
+              tools: opts.tools.list.map((t) => t.name),
+              attempt: protocolCorrections,
+              variant: disguised,
+              openTodos,
+              openCount: open,
+              closing: name,
+            })
+          )
+        );
+        continue;
+      }
       if (name === "done") {
         // Done with items still open on its own list is the one shape of
         // stopping short the protocol can see without reading a word. Said
@@ -942,6 +991,19 @@ export function classifySlip(
   if (deniedCalls === 0 && detectPermissionRequest(text)) return "permission";
   if (executedCalls === 0 && detectFabrication(text)) return "fabrication";
   if (looksCutOff(text)) return "cut";
+  return null;
+}
+
+/**
+ * The refusals a closing block can smuggle: a denial of the tools, a
+ * request for permission, a hand-off. "Cut" and "fabrication" are left
+ * out — a question may legitimately mention running things, and a summary
+ * legitimately reports what ran.
+ */
+function pickRefusal(...variants: Array<SlipVariant | null>): SlipVariant | null {
+  for (const v of variants) {
+    if (v === "denial" || v === "permission" || v === "handoff") return v;
+  }
   return null;
 }
 

@@ -173,7 +173,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "  - the local SQLite copy",
       "```",
       "",
-      "`ask_user` ends the turn with a question only the user can answer — a real choice about what to do, with `options` when there are obvious ones. Never use it to ask permission to run a tool: OnFlip approves tool calls itself, so emit the call instead.",
+      "`ask_user` ends the turn with a question only the user can answer — a real choice about what to do, with `options` when there are obvious ones. Never use it to ask permission to run a tool: OnFlip approves tool calls itself, so emit the call instead. Never use it to ask for the tools to be enabled, exposed, reconnected or granted: they are attached to every turn, this one included, and a reply that says otherwise is sent back to you. If you believe a tool is missing, call it and read the result.",
       "",
       "Prose before a block is fine, in the user's language. Prose alone ends nothing: a reply with no block is an error, and OnFlip sends it straight back to you. \"I'll verify the build now\" with no block is a lost turn — the bash block belongs in that same reply.",
     ].join("\n")
@@ -424,6 +424,8 @@ export interface NudgeContext {
   /** The open task-list items, one line each. */
   openTodos: string[];
   openCount: number;
+  /** Set when the reply did end with a closing block, but its text was a refusal. */
+  closing?: "done" | "ask_user";
 }
 
 const AUTOMATED = "[OnFlip protocol error — automated message; do not answer it conversationally]";
@@ -446,13 +448,13 @@ const THREE_WAYS = [
  * the middle answers whichever misunderstanding the words suggested.
  */
 export function noBlockNudge(ctx: NudgeContext): string {
-  const lines = [
-    AUTOMATED,
-    "Your last reply had no onflip block, so nothing ran and the turn would have ended there with the work unfinished.",
-    "",
-    ...THREE_WAYS,
-    "",
-  ];
+  const opening =
+    ctx.closing === "ask_user"
+      ? "Your last reply ended the turn with an `ask_user` block, but what it asked is not a question the user can answer: the tools are OnFlip's to run and they are attached to this conversation on every turn, this one included. `ask_user` is for a real choice about the work — never for tool access, permission or a go-ahead."
+      : ctx.closing === "done"
+        ? "Your last reply ended the turn with a `done` block whose summary says the work could not be done for want of the tools. `done` means the request is finished; a turn that could not act is not finished, and the tools are attached on every turn, this one included."
+        : "Your last reply had no onflip block, so nothing ran and the turn would have ended there with the work unfinished.";
+  const lines = [AUTOMATED, opening, "", ...THREE_WAYS, ""];
 
   switch (ctx.variant) {
     case "denial":
