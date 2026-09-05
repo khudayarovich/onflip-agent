@@ -16,6 +16,14 @@ import {
   SEND_SELECTORS,
   MODEL_SWITCHER_SELECTORS,
   FILE_INPUT_SELECTORS,
+  COMPOSER_QUERY,
+  ASSISTANT_QUERY,
+  USER_TURN_QUERY,
+  STOP_QUERY,
+  SEND_QUERY,
+  FILE_INPUT_QUERY,
+  ANY_MESSAGE_QUERY,
+  TOAST_QUERY,
   joined,
 } from "./selectors";
 import { paceNewChat } from "./backoff";
@@ -1041,6 +1049,93 @@ async function anyVisible(p: Page, selectors: readonly string[]): Promise<boolea
   }
 }
 
+export interface PageState {
+  url: string;
+  /** How many elements each selector group matches right now. */
+  matches: Record<string, number>;
+  composerChars: number;
+  bodyChars: number;
+  /** A short sample, for the checks that genuinely need words. */
+  text: string;
+}
+
+/**
+ * What the page was showing when something went wrong.
+ *
+ * The two places this replaces each captured a slice of `body.innerText` and
+ * nothing else, and "the layout may have changed" was then diagnosed blind
+ * three sessions running — a dialog over the composer, a throttle notice and
+ * a real layout change all wore the same error and left the same evidence.
+ *
+ * The census is what tells those apart. A composer count of 0 is drift; a
+ * composer present with no send control is a page mid-render or a disabled
+ * control; assistants at 0 on a thread that had replies is a virtualised or
+ * replaced DOM. None of that is visible in a text sample, and all of it is
+ * one cheap query now that the selectors live in one module.
+ *
+ * The text sample stays because two callers need words — the login wall says
+ * "Log in … Sign up", and a throttle notice is prose — but it is short, and
+ * the census is what gets read first.
+ */
+/**
+ * A `Function` object, not a string: this file's convention, because the
+ * tsconfig has no DOM lib and because Playwright only reliably *calls* a real
+ * function object.
+ */
+export const PAGE_CENSUS = new Function(
+  "q",
+  `const visible = (el) => {
+     const style = getComputedStyle(el);
+     return el.isConnected && style.display !== "none" && style.visibility !== "hidden" && style.opacity !== "0";
+   };
+   const matches = {};
+   for (const name of Object.keys(q)) {
+     try { matches[name] = [...document.querySelectorAll(q[name])].filter(visible).length; }
+     catch (e) { matches[name] = -1; }
+   }
+   const composer = document.querySelector(q.composer);
+   const body = document.body;
+   return {
+     url: location.href,
+     matches,
+     composerChars: ((composer && composer.innerText) || "").trim().length,
+     // textContent, not innerText: innerText forces a synchronous layout, and
+     // this runs on a page that is already misbehaving.
+     bodyChars: (body && body.textContent ? body.textContent.length : 0),
+     text: ((body && body.innerText) || "").replace(/\s+/g, " ").slice(0, 700),
+   };`
+) as (q: Record<string, string>) => PageState;
+
+async function capturePageState(p: Page): Promise<PageState | null> {
+  const groups = {
+    composer: COMPOSER_QUERY,
+    assistant: ASSISTANT_QUERY,
+    userTurn: USER_TURN_QUERY,
+    stop: STOP_QUERY,
+    send: SEND_QUERY,
+    fileInput: FILE_INPUT_QUERY,
+    message: ANY_MESSAGE_QUERY,
+    toast: TOAST_QUERY,
+  };
+  try {
+    return (await p.evaluate(PAGE_CENSUS, groups)) as PageState;
+  } catch {
+    return null;
+  }
+}
+
+/** The census, without the page's own words, for a log line. */
+export function shapeOfPage(state: PageState | null): Record<string, unknown> {
+  if (!state) return { unreadable: true };
+  return {
+    url: state.url,
+    matches: state.matches,
+    composerChars: state.composerChars,
+    bodyChars: state.bodyChars,
+    text: state.text.slice(0, 200),
+  };
+}
+
 /**
  * A transport failure that knows what it is.
  *
@@ -1984,12 +2079,8 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
   // Record what the page was showing. "The layout may have changed" was
   // diagnosed blind three sessions running; a dialog over the composer, a
   // throttle notice and a genuine layout change all wore this same error.
-  const pageState = (await p
-    .evaluate(
-      `({ url: location.href, text: ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").slice(0, 500) })`
-    )
-    .catch(() => null)) as { url: string; text: string } | null;
-  logger.warn("browser", "composer refused the message — page state", pageState ?? { unreadable: true });
+  const pageState = await capturePageState(p);
+  logger.warn("browser", "composer refused the message — page state", shapeOfPage(pageState));
 
   throw new ChatGPTBrowserError(
     `The message could not be entered into the ChatGPT composer (${best?.check.gotLines ?? 0} of ${best?.check.wantLines ?? 0} lines arrived). The page layout may have changed — turn on "Show the ChatGPT browser window" in Settings to watch what happens.`,
@@ -3299,12 +3390,8 @@ export async function waitForReply(
   if (brokeOnSilence) {
     // Blind guessing about why a page swallowed a message wasted three
     // rounds of fixes; record what it was actually showing.
-    const pageState = (await p
-      .evaluate(
-        `({ url: location.href, text: ((document.body && document.body.innerText) || "").replace(/\\s+/g, " ").slice(0, 700) })`
-      )
-      .catch(() => null)) as { url: string; text: string } | null;
-    logger.warn("browser", "send never appeared — page state", pageState ?? { unreadable: true });
+    const pageState = await capturePageState(p);
+    logger.warn("browser", "send never appeared — page state", shapeOfPage(pageState));
     // The diagnosis this capture was built for, live on its first outing:
     // a signed-out profile still shows a composer (anonymous mode), accepts
     // the message into a /uc/ chat, and answers nothing our reader can see.
