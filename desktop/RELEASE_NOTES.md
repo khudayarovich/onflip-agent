@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.8.7
+# OnFlip Desktop 0.8.8
 
-**OnFlip now updates itself.** Previous versions could tell you a new one existed and then hand you a download page. This one checks quietly in the background, offers the update when there is one, and installs it — download, quit, install, reopen — without you visiting GitHub.
+**A quieter, better-behaved window.** Icons that are drawn rather than typed, the plumbing chatter folded away, sessions that remember what they were about and how long each turn took — and the reload keys can no longer throw your work off the screen.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,28 +8,22 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.8.7.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.7/OnFlip-Setup-0.8.7.exe) | ~84 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.8.7-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.7/OnFlip-0.8.7-mac-arm64.dmg) | ~101 MB |
-| **macOS** · Intel | [OnFlip-0.8.7-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.7/OnFlip-0.8.7-mac-x64.dmg) | ~108 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.8.8.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.8/OnFlip-Setup-0.8.8.exe) | ~84 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.8.8-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.8/OnFlip-0.8.8-mac-arm64.dmg) | ~101 MB |
+| **macOS** · Intel | [OnFlip-0.8.8-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.8/OnFlip-0.8.8-mac-x64.dmg) | ~108 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
 
-This is the first release that can install the next one. Updating *to* 0.8.7 is still a manual download; from here on it is a button.
+**On 0.8.7 already?** You should not need this page. 0.8.7 was the first build that can install the next one, so it will offer this update by itself.
 
-## New: updates install themselves
+## What changed
 
-- **It checks on its own.** Ninety seconds after launch, then every six hours. Nothing to click, and no check happens while you are mid-turn.
-- **It tells you once.** A new version announces itself with an **Update** button and then stays quiet — the same version is never announced at you twice.
-- **It shows you the download.** Clicking Update opens a progress screen rather than a spinner, so a slow connection looks slow instead of broken.
-- **It finishes the job.** The app closes itself and the installer runs. On Windows that is the normal installer in silent mode; on macOS the app bundle is swapped in place, and the old one is put back if the swap fails.
-
-The build is unsigned, so this is exactly what you would have done by hand — fetch the file this release publishes and run it — with one thing added: the download's length is checked against what GitHub said it would be. A half-downloaded installer is worse than none, because it runs and fails halfway. Nothing is touched while the app is alive.
-
-## Fixed
-
-- **Every bulleted list came back broken.** Replies are read back out of the rendered page, and the page indents its own HTML. That indentation was being read as content, so a bullet arrived with its marker alone on one line and its text on the next, and numbered lists lost their numbers entirely. Worse, the same stray indentation put four spaces in front of the second paragraph of a reply — which Markdown reads as a code block, so ordinary prose was displayed as code. This also fed straight back into the agent: when a long session is summarised, the summary is what the agent reads next.
-- **A background server that had died still looked alive.** The message saying a server started stayed in the conversation looking true forever. In one session the agent checked a web page against a server that had exited some time earlier, failed, guessed wrong about why, and failed again the same way — two turns spent on a port nobody was listening to. The agent is now told which of its background jobs are still running and which are gone.
-- **Long sessions could change language mid-answer.** When a session grows too long, OnFlip summarises it and continues from the summary. The summary was the only surviving copy of the request — so an English session on a Russian-language Windows install compacted, and every reply after that point came back in Russian, imitating the only text left in view. Your request is now carried through the summary word for word.
+- **The icons are drawn now.** Every arrow, folder, tick and cross was a text character before, which meant they looked different on every machine and none of them could move. The one that mattered: a tool card is a dropdown, and nothing on it said so — the Run Command card's own icon was a "▸" that read as a collapsed arrow and never opened. There is now a real arrow at the end of every card, and it turns when the card does.
+- **The plumbing chatter is folded away.** Lines like "ChatGPT could not read the attached turn file, retrying" are OnFlip talking about its own recovery — each one describes something it then handled by itself. Printed between your messages they were the loudest thing on screen during a turn that was going perfectly well. They are now a single quiet line you can click to open, rather than being shouted at you.
+- **Sessions are named after what you asked.** The sidebar took its title from the first message in the session, which after a long turn was OnFlip's own handover note — so compacted sessions sat in the list all called "[Context carried over from the ea…". Sessions whose request had been archived showed "(empty session)", and one whose conversation ChatGPT had named after an internal marker read "[attachment unreadable]". All three now show the request. Sessions already in your list fix themselves.
+- **How long each turn took is kept.** "Worked for 4m" was shown when a turn finished and then lost the moment the session was reopened. It is now recovered from the session itself, which means it appears for turns you ran weeks ago as well as new ones.
+- **Ctrl+F5 no longer throws the window away.** It reloaded the renderer — the transcript, and any approval prompt waiting on an answer — while the engine carried on working for a window that no longer existed. F5, Ctrl+R and Ctrl+Shift+R are all held now.
+- **The account row loses its avatar disc.** An initial in a coloured circle was decoration, and the only thing in the sidebar competing for attention with your sessions.
 
 ## Requirements
 
@@ -42,4 +36,4 @@ Windows 10/11, or macOS 13+. A ChatGPT account — the free plan is enough.
 
 ## Under the hood
 
-173 automated tests run on every push, up from 144. The new ones pin the page reader against markup shaped the way the real page is shaped — indentation included, because a test built from tidy HTML passes against the broken reader and proves nothing.
+202 automated tests run on every push, up from 173. The Windows job had also been failing at random — on commits that changed nothing but Markdown — because a test was asserting against a timing budget tuned on a warm machine, and a cold CI runner could not meet it. Red builds nobody can explain are worse than none, so that is fixed too.
