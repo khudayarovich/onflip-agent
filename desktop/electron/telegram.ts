@@ -314,6 +314,55 @@ async function broadcast(html: string, keyboard?: Keyboard): Promise<void> {
   await broadcastTargets(html, keyboard);
 }
 
+/**
+ * A picture, as a picture.
+ *
+ * The agent produces screenshots — of a page it is looking at, of an image
+ * it made — and they were being dropped, which on a phone is the worst thing
+ * to drop: Telegram renders a photo better than any desktop panel, and
+ * "here is what it looks like" is most of what a screenshot is for.
+ *
+ * Uploaded rather than linked. A data URL is not something Telegram can
+ * fetch, and the file itself lives on somebody's desktop where Telegram
+ * cannot reach it either.
+ */
+async function sendPhotoEverywhere(dataUrl: string, caption: string): Promise<boolean> {
+  const match = /^data:(image\/[a-z+]+);base64,(.+)$/i.exec(dataUrl.trim());
+  if (!match) return false;
+  const bytes = Buffer.from(match[2], "base64");
+  // Telegram refuses a photo over 10MB. Past that it goes as a document,
+  // which keeps the full resolution and still shows inline.
+  const asDocument = bytes.length > 9_500_000;
+  const extension = match[1].split("/")[1].replace("jpeg", "jpg").replace("+xml", "");
+  let sentAny = false;
+
+  for (const chatId of targetChats()) {
+    try {
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      if (caption) {
+        form.append("caption", caption.slice(0, 1000));
+        form.append("parse_mode", "HTML");
+      }
+      form.append(
+        asDocument ? "document" : "photo",
+        new Blob([new Uint8Array(bytes)], { type: match[1] }),
+        `onflip.${extension}`
+      );
+      const response = await fetch(
+        `${API}${settings.token}/${asDocument ? "sendDocument" : "sendPhoto"}`,
+        { method: "POST", body: form }
+      );
+      const json = (await response.json()) as { ok: boolean; description?: string };
+      if (json.ok) sentAny = true;
+      else console.error("[telegram] photo failed:", json.description);
+    } catch (e) {
+      console.error("[telegram] photo failed:", e instanceof Error ? e.message : String(e));
+    }
+  }
+  return sentAny;
+}
+
 // ---------------------------------------------------------------------------
 // the pickers
 // ---------------------------------------------------------------------------
@@ -545,6 +594,18 @@ async function handleCallback(
     return;
   }
 
+  // Answering a question the agent asked is just sending that option as the
+  // next prompt — the same path a typed reply takes.
+  if (decoded.action === "answer") {
+    await answer(oneLine(decoded.value, 40));
+    try {
+      await host!.call("send", { text: decoded.value });
+    } catch (e) {
+      await say(chatId, `\u26A0\uFE0F ${escapeHtml(e instanceof Error ? e.message : String(e))}`);
+    }
+    return;
+  }
+
   try {
     switch (decoded.action) {
       case "open":
@@ -759,11 +820,33 @@ export async function telegramOnEvent(event: string, data: unknown): Promise<voi
     await pushActivity(toolLine(item.call.tool, item.call.subject, Boolean(item.result?.error)));
     return;
   }
+  if (item.type === "image" && typeof (item as { dataUrl?: string }).dataUrl === "string") {
+    const name = (item as { name?: string }).name;
+    const sent = await sendPhotoEverywhere(
+      (item as { dataUrl: string }).dataUrl,
+      name ? `\u{1F5BC} <b>${escapeHtml(oneLine(name, 80))}</b>` : "\u{1F5BC}"
+    );
+    if (!sent) await broadcast("\u{1F5BC} <i>An image was produced, but it could not be sent.</i>");
+    return;
+  }
   if (item.type === "assistant" || item.type === "question") {
-    const prefix = item.type === "question" ? "❓ <b>OnFlip is asking</b>\n\n" : "";
+    const prefix = item.type === "question" ? "\u2753 <b>OnFlip is asking</b>\n\n" : "";
     const parts = answerMessages(item.text ?? "");
+    // The options belong on the *last* message, under the question, and as
+    // buttons: OnFlip already supplies them, and making somebody retype an
+    // answer that was offered to them is the sort of thing that makes a
+    // remote feel like a worse version of the app.
+    const options = item.type === "question" ? ((item as { options?: string[] }).options ?? []) : [];
+    const keyboard: Keyboard | undefined = options.length
+      ? {
+          inline_keyboard: options.slice(0, 8).map((option) => [
+            { text: oneLine(option, 60), callback_data: tickets.put("answer", option) },
+          ]),
+        }
+      : undefined;
     for (const [i, part] of parts.entries()) {
-      await broadcast(i === 0 ? prefix + part : part);
+      const last = i === parts.length - 1;
+      await broadcast(i === 0 ? prefix + part : part, last ? keyboard : undefined);
     }
     return;
   }
