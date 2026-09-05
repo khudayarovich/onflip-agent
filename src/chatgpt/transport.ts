@@ -167,6 +167,46 @@ function clampPayload(text: string): string {
 const UPLOAD_ABOVE_CHARS = Number(process.env.ONFLIP_UPLOAD_ABOVE ?? 45_000);
 
 /**
+ * Rejected attachments a session tolerates before it stops attaching at all.
+ *
+ * Three, not one: a single rejection is usually ChatGPT failing to process one
+ * file, and giving up the upload path on that would push every large turn back
+ * through the composer for the rest of the session. Three in a row is not bad
+ * luck — it is an account that cannot read attachments, and continuing to try
+ * only buys a wasted round trip per turn.
+ */
+const MAX_ATTACHMENT_REJECTIONS = 3;
+
+/**
+ * Does this turn go up as a file, or into the composer?
+ *
+ * Pulled out of `send` because the four inputs pull against each other and
+ * two of them are one-shot overrides pointing in opposite directions — a
+ * rejected attachment types the next turn, a refused composer uploads it.
+ * That is not a condition worth re-deriving from the call site.
+ */
+export function shouldAttachTurn(state: {
+  uploadsAvailable: boolean;
+  /** Attachments this session has already had rejected. */
+  rejectionsSoFar: number;
+  /** Too large for the composer to accept. */
+  oversized: boolean;
+  /** The composer refused typed text last turn. */
+  composerRefused: boolean;
+  /** The model could not read the attachment last turn. */
+  attachmentRejected: boolean;
+}): boolean {
+  if (!state.uploadsAvailable) return false;
+  // Whatever kept the last upload from being readable will keep this one from
+  // being readable too, so the immediate retry types.
+  if (state.attachmentRejected) return false;
+  // And once it has happened enough times to be a pattern rather than a
+  // mishap, stop paying for the attempt at all.
+  if (state.rejectionsSoFar >= MAX_ATTACHMENT_REJECTIONS) return false;
+  return state.oversized || state.composerRefused;
+}
+
+/**
  * Whether a turn too large to type has somewhere else to go.
  *
  * The compaction budget turns on this: with uploads the account's window is
@@ -239,6 +279,17 @@ export class BrowserTransport implements Transport {
   private typeNextTurn = false;
   /** Set when the composer refused typed text; the next send uploads instead. */
   private uploadNextTurn = false;
+  /**
+   * Attachments rejected so far this session.
+   *
+   * The one-shot retry above is right for a rejection that was a one-off, and
+   * one-offs are what it usually catches. What it cannot do is notice a
+   * pattern: the override is cleared on the very next send, so an account
+   * whose uploads are never readable attaches, is rejected, and retries by
+   * typing on *every* oversized turn — paying a whole wasted round trip each
+   * time, forever, for a path that has never once worked.
+   */
+  private attachmentsRejected = 0;
 
   constructor(private cookies: SessionCookie[]) {}
 
@@ -272,7 +323,15 @@ export class BrowserTransport implements Transport {
     // refused composer uploads. A short pointer has far better odds against a
     // composer that would not take a 200-line payload, and the upload itself
     // is one request the composer never sees.
-    if (uploadsAvailable() && (oversized || this.uploadNextTurn) && !this.typeNextTurn) {
+    if (
+      shouldAttachTurn({
+        uploadsAvailable: uploadsAvailable(),
+        rejectionsSoFar: this.attachmentsRejected,
+        oversized,
+        composerRefused: this.uploadNextTurn,
+        attachmentRejected: this.typeNextTurn,
+      })
+    ) {
       try {
         attachment = writeTurnFile(body);
         message = turnPointer(path.basename(attachment), opts.reminder);
@@ -365,10 +424,17 @@ export class BrowserTransport implements Transport {
     // the turn into the composer instead.
     if (attachment && attachmentRejected(content, path.basename(attachment))) {
       this.typeNextTurn = true;
+      this.attachmentsRejected += 1;
       logger.warn("transport", "the model could not read the attached turn", {
         file: path.basename(attachment),
+        rejections: this.attachmentsRejected,
         reply: content.trim().slice(0, 200),
       });
+      if (this.attachmentsRejected >= MAX_ATTACHMENT_REJECTIONS) {
+        logger.warn("transport", "giving up on attachments for this session", {
+          rejections: this.attachmentsRejected,
+        });
+      }
       throw new ChatGPTBrowserError(
         "ChatGPT answered that it could not read the attached turn file, so the model never saw this turn. Retrying with the turn typed into the composer instead."
       );
