@@ -914,7 +914,9 @@ function registerIpc(): void {
     };
     void (async () => {
       try {
+        console.log(`[desktop] downloading update ${info.latest}: ${info.installable!.name}`);
         const file = await downloadUpdate(info.installable!.url, info.installable!.name, report);
+        console.log(`[desktop] update downloaded to ${file}; handing off to the installer`);
         report({ phase: "installing" });
         const { relaunches } = applyUpdate(file);
         if (!relaunches) {
@@ -931,10 +933,9 @@ function registerIpc(): void {
         }, 1_200);
       } catch (e) {
         updating = false;
-        report({
-          phase: "error",
-          message: e instanceof Error ? e.message : String(e),
-        });
+        const message = e instanceof Error ? e.message : String(e);
+        console.error(`[desktop] update failed: ${message}`);
+        report({ phase: "error", message });
       }
     })();
     return { started: true };
@@ -1271,8 +1272,16 @@ if (!singleInstance) {
     // goes to whichever window is in front; if none is, the next check finds
     // the same version and offers it again.
     startUpdateWatch((info) => {
+      // Logged because an update that never appears is otherwise invisible:
+      // there is no error to report, and the person only knows they are on
+      // an old version.
+      console.log(
+        `[desktop] update available: ${info.latest} (running ${info.current}), ` +
+          `installable: ${info.installable ? info.installable.name : "no"}`
+      );
       const ws = frontWorkspace();
       if (ws) sendTo(ws, "update-available", info);
+      else console.log("[desktop] no window to show the update banner; will offer again later");
     });
   });
 
