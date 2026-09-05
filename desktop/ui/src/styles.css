@@ -1396,6 +1396,41 @@ a:hover {
   flex-wrap: wrap;
 }
 
+/*
+ * The chips shed their labels when the column gets narrow.
+ *
+ * Opening the browser or the terminal takes width from the chat, and the row
+ * — model, reasoning, approval, plus the attach and context buttons — wrapped
+ * onto a second line, which pushed the hint text down and made the composer
+ * look broken rather than compact.
+ *
+ * A *container* query, not a media query: the window can be as wide as you
+ * like while this column is narrow, so the viewport says nothing useful about
+ * whether the labels fit. Each chip keeps its `data-tip`, so what it is
+ * remains one hover away.
+ */
+.composer {
+  container-type: inline-size;
+  container-name: composer;
+}
+
+@container composer (max-width: 560px) {
+  .composer .chips {
+    flex-wrap: nowrap;
+  }
+  .composer .chip .chip-label {
+    display: none;
+  }
+  .composer .chip {
+    padding: 5px 7px;
+  }
+  /* With the words gone the arrow is the only thing left saying "menu", so
+     it stays — but it no longer needs a gap to sit after. */
+  .composer .chip .chev {
+    margin-left: 0;
+  }
+}
+
 .chip {
   display: inline-flex;
   align-items: center;

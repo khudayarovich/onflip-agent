@@ -519,14 +519,14 @@ export function Composer({
             }}
           >
             <ModelIcon />
-            {modelLabel}
+            <span className="chip-label">{modelLabel}</span>
             <span className="chev">
               <ChevronDown size={12} />
             </span>
           </button>
           <button className="chip" data-tip={t("menuReasoning")} onClick={thinkingMenu.open}>
             <ThinkingIcon />
-            {t(thinkingInfo(status?.thinking).label)}
+            <span className="chip-label">{t(thinkingInfo(status?.thinking).label)}</span>
             <span className="chev">
               <ChevronDown size={12} />
             </span>
@@ -537,7 +537,7 @@ export function Composer({
             onClick={approvalMenu.open}
           >
             <ShieldIcon />
-            {t(approvalInfo(status?.approvalMode).label)}
+            <span className="chip-label">{t(approvalInfo(status?.approvalMode).label)}</span>
             <span className="chev">
               <ChevronDown size={12} />
             </span>
@@ -545,7 +545,7 @@ export function Composer({
           {status && !status.shellEnabled && (
             <span className="chip warn" data-tip={t("shellOffTip")}>
               <ShellOffIcon />
-              {t("shellOff")}
+              <span className="chip-label">{t("shellOff")}</span>
             </span>
           )}
           {contextPct !== null && (
