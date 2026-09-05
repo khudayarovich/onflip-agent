@@ -318,6 +318,20 @@ export async function runTurn(
         logger.info("tool", `run ${call.tool}`, { args: loggableArguments(call) });
         const startedAt = Date.now();
         const result = await opts.tools.run(call.tool, call.arguments);
+        // A failure logs *why*, at warn, and not only that it happened.
+        // Measured across every session in `~/.onflip/logs`: 16% of all tool
+        // calls fail, and `edit` fails 57% of the time (71 of 125) with
+        // `multi_edit` at 18 of 18 — and none of it was diagnosable, because
+        // the only thing recorded was `error: true`. The tool's message is
+        // the first line of its output; that is what the model is reacting
+        // to, so that is what has to be in the log next to the arguments.
+        if (result.error && !result.denied) {
+          logger.warn("tool", `failed ${call.tool}`, {
+            ms: Date.now() - startedAt,
+            args: loggableArguments(call),
+            reason: result.output.split("\n", 1)[0].slice(0, 300),
+          });
+        }
         logger.info("tool", `done ${call.tool}`, {
           ms: Date.now() - startedAt,
           error: Boolean(result.error),

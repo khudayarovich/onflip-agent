@@ -78,6 +78,34 @@ export function asBool(value: unknown): boolean {
   return false;
 }
 
+/**
+ * An argument that should be a list, however the model wrote it.
+ *
+ * The block form (`edits: |` then an indented JSON array) is decoded by
+ * `coerce`; the same array written inline on the `edits:` line is not, and
+ * stays a string. That is deliberate at the protocol level — a scalar is
+ * text, so `content: [1,2,3]` writes those five characters to a file rather
+ * than becoming an array — but it is wrong at a parameter that is declared
+ * an array, and it made `multi_edit` fail **eighteen times out of eighteen**
+ * across every session in `~/.onflip/logs`, always with "`edits` must be a
+ * non-empty array". The model had written a perfectly good call.
+ *
+ * So the decoding happens here, at the boundary that knows a list is
+ * expected, instead of in the parser that cannot know it.
+ */
+export function asArray(value: unknown): unknown[] | undefined {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  if (!text.startsWith("[")) return undefined;
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Resolve a possibly-relative tool path against the working directory. */
 export function resolveIn(cwd: string, p?: unknown): string {
   const s = typeof p === "string" && p.trim() ? p.trim() : ".";

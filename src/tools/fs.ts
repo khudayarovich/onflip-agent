@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { ToolDefinition, ToolContext, FileSnapshot } from "../types";
-import { err, ok, denied, asNumber, asBool, resolveIn, relative, isProbablyBinary, IGNORED_DIRS } from "./util";
+import { err, ok, denied, asNumber, asBool, asArray, resolveIn, relative, isProbablyBinary, IGNORED_DIRS } from "./util";
 
 const MAX_READ_BYTES = 400_000;
 const MAX_READ_LINES = 2_000;
@@ -643,13 +643,20 @@ export const multiEditTool: ToolDefinition = {
     }
     const before = beforeRevision.contents;
     if (before === null) return err(`File not found: ${relative(ctx.cwd, file)}`);
-    if (!Array.isArray(args.edits) || args.edits.length === 0) {
-      return err("`edits` must be a non-empty array");
+    // Accepts the array written inline on the `edits:` line as well as the
+    // block form — see `asArray`, and the 18-out-of-18 failures that came
+    // from rejecting the former.
+    const edits = asArray(args.edits);
+    if (!edits || edits.length === 0) {
+      return err(
+        "`edits` must be a non-empty array of {old_string, new_string} objects. " +
+          "Write it as a JSON array — either inline after `edits:` or indented under `edits: |`."
+      );
     }
 
     let working = before;
     let applied = 0;
-    for (const [i, raw] of (args.edits as unknown[]).entries()) {
+    for (const [i, raw] of edits.entries()) {
       const e = raw as Record<string, unknown>;
       const rawOld = String(e.old_string ?? "");
       const rawNew = String(e.new_string ?? "");
@@ -674,7 +681,7 @@ export const multiEditTool: ToolDefinition = {
       tool: "multi_edit",
       subject: relative(ctx.cwd, file),
       targetPath: file,
-      detail: [`${(args.edits as unknown[]).length} edits, ${applied} replacements`],
+      detail: [`${edits.length} edits, ${applied} replacements`],
     });
     if (!decision.allow) {
       return denied("Edits", decision.reason);
@@ -686,7 +693,7 @@ export const multiEditTool: ToolDefinition = {
     snapshot(ctx, file, before, working, "multi_edit");
     ctx.session.readFiles.set(file, Date.now());
 
-    const summary = `Applied ${(args.edits as unknown[]).length} edits (${applied} replacements) to ${relative(ctx.cwd, file)}`;
+    const summary = `Applied ${edits.length} edits (${applied} replacements) to ${relative(ctx.cwd, file)}`;
     return ok(stale ? `${summary}\n${stale}` : summary, {
       title: relative(ctx.cwd, file),
       display: { kind: "diff", path: file, oldText: before, newText: working },
