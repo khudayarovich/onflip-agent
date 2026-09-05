@@ -2268,7 +2268,18 @@ async function readComposer(p: Page): Promise<string> {
  */
 export const EXTRACT_MESSAGE = new Function(
   "el",
-  `const walk = (node) => {
+  `const padding = (n) => {
+    if (n.nodeType !== 3) return false;
+    const t = n.textContent || "";
+    // Whitespace *containing a newline* between two nodes is the renderer
+    // indenting its own markup, never something the model typed: a real gap
+    // between words arrives as a plain space. Carrying it through put four
+    // spaces in front of the second paragraph of every reply — and four
+    // spaces at the start of a Markdown line is an indented code block, so
+    // ordinary prose came back rendered as code.
+    return !t.trim() && t.indexOf("\\n") >= 0;
+  };
+  const walk = (node) => {
     if (node.nodeType === 3) return node.textContent || "";
     if (node.nodeType !== 1) return "";
     const tag = node.tagName.toLowerCase();
@@ -2304,23 +2315,59 @@ export const EXTRACT_MESSAGE = new Function(
     if (tag === "br") return "\\n";
     if (tag === "script" || tag === "style" || tag === "svg" || tag === "button") return "";
 
+    // Lists are walked item by item rather than through the generic path
+    // below, for two reasons. The markup ChatGPT renders is pretty-printed,
+    // so an <li> holds whitespace text nodes around its <p> — glueing the
+    // marker to that raw inner text put the bullet on a line of its own and
+    // the content on the next ("- \\n\\nGoogle Fonts import"), which is what
+    // every captured list looked like. And <ol> has to count: numbering
+    // every ordered list as "- " lost the numbers from every reply that had
+    // steps in it, including the handover brief compaction writes.
+    //
+    // Continuation lines are deliberately NOT indented under the marker.
+    // Correct Markdown would indent them, but a fenced block inside a list
+    // item would then start indented too, and the turn parser reads an
+    // \`\`\`onflip fence at the start of a line. Losing a tool call to
+    // prettier list output is not a trade worth making.
+    if (tag === "ul" || tag === "ol") {
+      const ordered = tag === "ol";
+      let n = ordered ? parseInt(node.getAttribute("start") || "1", 10) || 1 : 0;
+      let out = "";
+      for (const item of node.childNodes) {
+        if (item.nodeType !== 1 || item.tagName.toLowerCase() !== "li") continue;
+        let body = "";
+        for (const part of item.childNodes) if (!padding(part)) body += walk(part);
+        body = body.trim();
+        if (!body) continue;
+        out += (ordered ? n++ + ". " : "- ") + body + "\\n";
+      }
+      return out + "\\n";
+    }
+
     let inner = "";
-    for (const child of node.childNodes) inner += walk(child);
+    for (const child of node.childNodes) if (!padding(child)) inner += walk(child);
 
     // Put back the delimiters the Markdown renderer consumed.
     if (tag === "code") return "\`" + inner + "\`";
     if (tag === "em" || tag === "i") return "_" + inner + "_";
     if (tag === "strong" || tag === "b") return "**" + inner + "**";
-    if (tag === "li") return "- " + inner + "\\n";
-    if (tag === "blockquote") return "> " + inner + "\\n";
-    if (/^h[1-6]$/.test(tag)) return "\\n" + "#".repeat(Number(tag[1])) + " " + inner + "\\n";
+    // Reached only by an <li> outside a list. Trimmed for the same reason
+    // the list branch trims: the marker must not be left on its own line.
+    if (tag === "li") return "- " + inner.trim() + "\\n";
+    if (tag === "blockquote") return "> " + inner.trim() + "\\n";
+    if (/^h[1-6]$/.test(tag)) {
+      return "\\n" + "#".repeat(Number(tag[1])) + " " + inner.trim() + "\\n";
+    }
     // Cells ran together ("ab" out of a | b); the pipes keep a row a row.
     if (tag === "td" || tag === "th") return " " + inner.trim() + " |";
     if (tag === "tr") return "|" + inner + "\\n";
     if (tag === "table") return "\\n" + inner + "\\n";
-    if (tag === "p" || tag === "div" || tag === "ul" || tag === "ol") {
-      return inner + "\\n";
-    }
+    // A paragraph break has to be a blank line. It used to come for free from
+    // the renderer's own indentation between <p> tags; now that padding is
+    // dropped, the break has to be stated, or two paragraphs run together
+    // into one.
+    if (tag === "p") return inner + "\\n\\n";
+    if (tag === "div") return inner + "\\n";
     return inner;
   };
   return walk(el).replace(/\\n{3,}/g, "\\n\\n").trim();`
