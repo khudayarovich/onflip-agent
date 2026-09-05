@@ -2364,6 +2364,85 @@ async function readMessage(node: Locator): Promise<string> {
  * only ever used the count and the last turn, so walking every turn of a
  * long thread on each poll was cost with nothing to show for it.
  */
+/**
+ * A revision counter for the page, so an unchanged DOM costs nothing to read.
+ *
+ * Installed once per document: a `MutationObserver` that does nothing but
+ * increment a number. Every probe hands back the key it last saw, and when
+ * the key still matches, the page returns the key alone — no `querySelectorAll`,
+ * no message walk, no serialised payload crossing the process boundary.
+ *
+ * The identity is per *document*, so a navigation or a reload produces a key
+ * that can never match a stale one and the next read is a full one. That is
+ * the property that makes this safe: the failure mode of a mismatched key is
+ * a wasted full read, never a stale answer.
+ *
+ * The attribute filter is what keeps the counter from ticking on every React
+ * re-render: only the attributes this transport actually reads count as a
+ * change. `childList` and `characterData` stay on, because a reply arriving
+ * is exactly a stream of those.
+ */
+export const OBSERVE_REVISION = new Function(
+  "attrs",
+  `const g = globalThis;
+   if (!g.__onflipRev) {
+     const state = { id: String(performance.timeOrigin) + ":" + Math.random().toString(36).slice(2), n: 0 };
+     state.observer = new MutationObserver(() => { state.n++; });
+     state.observer.observe(document.documentElement, {
+       subtree: true, childList: true, characterData: true, attributes: true, attributeFilter: attrs,
+     });
+     g.__onflipRev = state;
+   }
+   return g.__onflipRev.id + ":" + g.__onflipRev.n;`
+) as (attrs: string[]) => string;
+
+/** The attributes worth waking the counter for: the ones this file reads. */
+export const REVISION_ATTRIBUTES = [
+  "data-message-author-role",
+  "data-testid",
+  "data-turn",
+  "data-streaming-response-status",
+  "aria-label",
+  "aria-busy",
+  "aria-expanded",
+  "disabled",
+  "hidden",
+  "class",
+  "style",
+];
+
+/** The page's current revision key, or null when it cannot be read. */
+async function revisionKey(p: Page): Promise<string | null> {
+  try {
+    return await p.evaluate(OBSERVE_REVISION, REVISION_ATTRIBUTES);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * `assistantTurns`, but skipping the read when the page has not changed.
+ *
+ * The reply loop polls four times a second and extracts the whole newest
+ * message every time — a full DOM walk and re-serialisation — even while the
+ * reply stream is already delivering the same text. On a thirty-second reply
+ * that is seventy-five extractions to learn what the stream had already said.
+ *
+ * A null key (an unreadable page) always falls through to the full read, so
+ * this can only ever save work, never skip it wrongly.
+ */
+export async function assistantTurnsCached(
+  p: Page,
+  cache: { key: string | null; value: { count: number; last: string } }
+): Promise<{ count: number; last: string }> {
+  const key = await revisionKey(p);
+  if (key && cache.key === key) return cache.value;
+  const value = await assistantTurns(p);
+  cache.key = key;
+  cache.value = value;
+  return value;
+}
+
 async function assistantTurns(p: Page): Promise<{ count: number; last: string }> {
   for (const sel of ASSISTANT_SELECTORS) {
     try {
@@ -3099,6 +3178,14 @@ export async function waitForReply(
   const started = Date.now();
   const deadline = started + timeout;
   const pollMs = 400;
+  /**
+   * Last DOM revision and what was read at it. Local to this wait, so it
+   * cannot outlive the reply it belongs to.
+   */
+  const turnsCache: { key: string | null; value: { count: number; last: string } } = {
+    key: null,
+    value: { count: 0, last: "" },
+  };
 
   /**
    * Completion is decided by the *text*, not by the page chrome.
@@ -3205,7 +3292,7 @@ export async function waitForReply(
 
     let turns: { count: number; last: string };
     try {
-      turns = await assistantTurns(p);
+      turns = await assistantTurnsCached(p, turnsCache);
     } catch {
       continue;
     }
