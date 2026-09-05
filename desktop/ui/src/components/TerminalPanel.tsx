@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
+import { Close } from "./icons";
 
 /**
  * The built-in terminal: a docked panel for running commands without leaving
@@ -139,7 +140,7 @@ export function TerminalPanel({
           ⌫
         </button>
         <button className="term-btn" title={t("termClose")} onClick={onClose}>
-          ✕
+          <Close size={13} />
         </button>
       </div>
       <div className="term-out" ref={scrollRef} onClick={() => inputRef.current?.focus()}>

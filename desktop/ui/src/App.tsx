@@ -32,6 +32,7 @@ import { SessionPeekModal } from "./components/SessionPeekModal";
 import { SignInModal } from "./components/SignInModal";
 import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
+import { ChevronDown, CircleHalf } from "./components/icons";
 
 type ModalName =
   | "settings"
@@ -1400,12 +1401,16 @@ function TodoPanel({ items }: { items: TodoItemDTO[] }): React.ReactElement | nu
           <span className="todo-counter">
             {done}/{visible.length}
           </span>
-          <span className="chev">{collapsed ? "▴" : "▾"}</span>
+          <span className={`chev${collapsed ? "" : " open"}`}>
+            <ChevronDown size={13} />
+          </span>
         </button>
         {collapsed ? (
           current && (
             <div className="todo-current">
-              <span className="current-mark">◐</span>
+              <span className="current-mark">
+                <CircleHalf size={12} />
+              </span>
               <span className="current-text">{current.content}</span>
             </div>
           )

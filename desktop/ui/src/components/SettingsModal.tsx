@@ -8,6 +8,7 @@ import type {
 import { api } from "../api";
 import { Modal, Toggle } from "./common";
 import { Lang, LANGS, useT } from "../i18n";
+import { Close, RadioOff, RadioOn } from "./icons";
 
 export function SettingsModal({
   status,
@@ -90,13 +91,19 @@ export function SettingsModal({
               className={theme === "dark" ? "on" : ""}
               onClick={() => onSetTheme("dark")}
             >
-              ● {t("themeDark")}
+              <span className="radio-mark">
+                <RadioOn size={13} />
+              </span>{" "}
+              {t("themeDark")}
             </button>
             <button
               className={theme === "light" ? "on" : ""}
               onClick={() => onSetTheme("light")}
             >
-              ○ {t("themeLight")}
+              <span className="radio-mark">
+                <RadioOff size={13} />
+              </span>{" "}
+              {t("themeLight")}
             </button>
           </div>
         </div>
@@ -251,7 +258,7 @@ export function SettingsModal({
                       className="x"
                       onClick={() => void api.deleteRule(rule.pattern).then(setConfig)}
                     >
-                      ✕
+                      <Close size={12} />
                     </button>
                   </td>
                 </tr>

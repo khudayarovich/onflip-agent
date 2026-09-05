@@ -6,6 +6,7 @@ import type {
   SessionSummaryDTO,
 } from "../../../shared/protocol";
 import { Menu, useMenu, relativeTime, baseName } from "./common";
+import { ChevronDown, Close, Folder, Plus } from "./icons";
 import { useT } from "../i18n";
 
 export function Sidebar({
@@ -111,12 +112,19 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="top">
         <button className="new-chat-btn" onClick={onNewSession}>
-          <span className="plus">+</span> {t("newSession")}
+          <span className="plus">
+            <Plus size={14} />
+          </span>{" "}
+          {t("newSession")}
         </button>
         <button className="project-btn" onClick={projectMenu.open} title={status?.cwd}>
-          <span>🗀</span>
+          <span className="folder">
+            <Folder size={14} />
+          </span>
           <span className="folder-name">{projectName}</span>
-          <span className="chev">▼</span>
+          <span className={`chev${projectMenu.anchor ? " open" : ""}`}>
+            <ChevronDown size={13} />
+          </span>
         </button>
       </div>
 
@@ -135,7 +143,9 @@ export function Sidebar({
                       if (!switching && !current) onOpenProject(group.dir);
                     }}
                   >
-                    <span className="folder">🗀</span>
+                    <span className="folder">
+                      <Folder size={14} />
+                    </span>
                     <span className="group-name">{baseName(group.dir)}</span>
                     <span className="group-count">{group.sessions.length}</span>
                   </button>
@@ -297,7 +307,7 @@ function SessionRow({
             onDelete(session.id);
           }}
         >
-          ✕
+          <Close size={13} />
         </button>
       )}
     </div>
@@ -388,7 +398,6 @@ function AccountBar({
   const account = status?.account ?? null;
   const usage = status?.usage;
   const displayName = account?.name || account?.email || t("chatgptAccount");
-  const initial = (account?.name || account?.email || "?").trim().charAt(0).toUpperCase();
 
   return (
     <div className="bottom account-bar">
@@ -397,14 +406,15 @@ function AccountBar({
         onClick={() => setOpen(!open)}
         title={connectDetail ?? connLabel}
       >
-        <span className="avatar">{initial}</span>
         <span className="account-meta">
           <span className="account-name">{displayName}</span>
           <span className="account-state">
             <span className={`conn-dot ${connect}`} /> {connLabel}
           </span>
         </span>
-        <span className="chev">▴</span>
+        <span className={`chev${open ? " open" : ""}`}>
+          <ChevronDown size={13} />
+        </span>
       </button>
 
       {open && (
@@ -412,7 +422,6 @@ function AccountBar({
           <div className="pop-backdrop" onClick={() => setOpen(false)} />
           <div className="account-popover">
             <div className="account-head">
-              <span className="avatar big">{initial}</span>
               <div className="account-head-text">
                 <div className="account-name">{displayName}</div>
                 <div className="account-email">

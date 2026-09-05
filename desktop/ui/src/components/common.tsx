@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { Check, Close } from "./icons";
 
 // ---------------------------------------------------------------------------
 // Toggle
@@ -100,7 +101,7 @@ export function Menu({
                 entry.onPick?.();
               }}
             >
-              <span className="check">{entry.checked ? "✓" : ""}</span>
+              <span className="check">{entry.checked ? <Check size={13} /> : null}</span>
               <span className="label">{entry.label}</span>
               {entry.hint && <span className="hint">{entry.hint}</span>}
             </button>
@@ -166,7 +167,7 @@ export function Modal({
         <div className="modal-head">
           <h2>{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
-            ✕
+            <Close size={13} />
           </button>
         </div>
         <div className="modal-body">{children}</div>

@@ -8,6 +8,7 @@ import type {
 import { Menu, useMenu } from "./common";
 import { useT, StringKey, LangContext } from "../i18n";
 import { SKILLS, canonicaliseSkillMentions, findSkillMention } from "../../../shared/skills";
+import { ChevronDown, Close } from "./icons";
 
 export interface SlashCommand {
   name: string;
@@ -448,7 +449,7 @@ export function Composer({
                   title={t("attachRemove")}
                   onClick={() => setAttached((prev) => prev.filter((f) => f !== file))}
                 >
-                  ✕
+                  <Close size={12} />
                 </button>
               </span>
             ))}
@@ -519,12 +520,16 @@ export function Composer({
           >
             <ModelIcon />
             {modelLabel}
-            <span className="chev">▼</span>
+            <span className="chev">
+              <ChevronDown size={12} />
+            </span>
           </button>
           <button className="chip" data-tip={t("menuReasoning")} onClick={thinkingMenu.open}>
             <ThinkingIcon />
             {t(thinkingInfo(status?.thinking).label)}
-            <span className="chev">▼</span>
+            <span className="chev">
+              <ChevronDown size={12} />
+            </span>
           </button>
           <button
             className="chip"
@@ -533,7 +538,9 @@ export function Composer({
           >
             <ShieldIcon />
             {t(approvalInfo(status?.approvalMode).label)}
-            <span className="chev">▼</span>
+            <span className="chev">
+              <ChevronDown size={12} />
+            </span>
           </button>
           {status && !status.shellEnabled && (
             <span className="chip warn" data-tip={t("shellOffTip")}>

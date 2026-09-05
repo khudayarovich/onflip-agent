@@ -1,6 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useT } from "../i18n";
+import { Close } from "./icons";
 
 /**
  * The browser the agent drives, live and touchable.
@@ -141,7 +142,7 @@ export function BrowserPanel({
           </button>
         )}
         <button className="term-btn" title={t("termClose")} onClick={onClose}>
-          ✕
+          <Close size={13} />
         </button>
       </div>
 
