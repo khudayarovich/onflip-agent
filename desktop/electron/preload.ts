@@ -57,6 +57,20 @@ export interface OnFlipBridge {
     height: number;
   }): Promise<boolean>;
   browserViewHide(): Promise<boolean>;
+  /** The embedded browser's toolbar: where it is, and moving it. */
+  browserViewChrome(): Promise<{
+    url: string;
+    title: string;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+  } | null>;
+  browserViewAct(action: "back" | "forward" | "reload" | "stop"): Promise<boolean>;
+  browserViewGo(url: string): Promise<boolean>;
+  /** Open whatever the view is showing in the user's own browser. */
+  browserViewExternal(): Promise<boolean>;
+  onBrowserChrome(listener: (chrome: unknown) => void): () => void;
+
   /** The narrowest this window may be dragged, given what is open. */
   setMinWidth(width: number): Promise<boolean>;
   /** False when the DevTools port never opened and the old screencast is in use. */
@@ -166,6 +180,16 @@ const bridge: OnFlipBridge = {
 
   browserViewBounds: (rect) => ipcRenderer.invoke("browser-view-bounds", rect),
   browserViewHide: () => ipcRenderer.invoke("browser-view-hide"),
+  browserViewChrome: () => ipcRenderer.invoke("browser-view-chrome"),
+  browserViewAct: (action) => ipcRenderer.invoke("browser-view-act", { action }),
+  browserViewGo: (url) => ipcRenderer.invoke("browser-view-go", { url }),
+  browserViewExternal: () => ipcRenderer.invoke("browser-view-external"),
+  onBrowserChrome: (listener) => {
+    const handler = (_e: unknown, chrome: unknown) => listener(chrome);
+    ipcRenderer.on("browser-chrome", handler);
+    return () => ipcRenderer.removeListener("browser-chrome", handler);
+  },
+
   setMinWidth: (width) => ipcRenderer.invoke("set-min-width", { width }),
   browserViewAvailable: () => ipcRenderer.invoke("browser-view-available"),
 

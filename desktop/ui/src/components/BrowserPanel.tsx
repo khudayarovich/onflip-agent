@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useT } from "../i18n";
-import { Close } from "./icons";
+import { ArrowLeft, ArrowRight, Close, Reload, StopCircle } from "./icons";
 
 /**
  * The browser the agent drives.
@@ -78,6 +78,35 @@ export function BrowserPanel({
   const seenRef = useRef<string | undefined>(undefined);
   /** null until the main process has said which of the two panels this is. */
   const [embedded, setEmbedded] = useState<boolean | null>(null);
+  /** Where the view is, as the view itself reports it. */
+  const [chrome, setChrome] = useState<{
+    url: string;
+    title: string;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+  } | null>(null);
+  /** What is typed in the address bar, which is not where the view is. */
+  const [typed, setTyped] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!embedded) return;
+    const read = () => {
+      void window.onflip
+        .browserViewChrome?.()
+        .then((next) => setChrome(next as never))
+        .catch(() => {});
+    };
+    read();
+    // Pushed on every navigation, including the ones the agent makes — which
+    // is most of them, and the reason the bar cannot just be typed into and
+    // forgotten about.
+    return window.onflip.onBrowserChrome?.((next) => {
+      setChrome(next as never);
+      // Whatever was half-typed is stale the moment the page moves.
+      setTyped(null);
+    });
+  }, [embedded]);
 
   useEffect(() => {
     let alive = true;
@@ -222,10 +251,12 @@ export function BrowserPanel({
   return (
     <div className={`browser-panel${open ? "" : " closed"}`}>
       <div className="term-head">
-        <span className="term-title">◍ {t("browserTitle")}</span>
-        <span className="term-cwd" title={frame?.url ?? ""}>
-          {host}
-        </span>
+        <span className="term-title">{t("browserTitle")}</span>
+        {!embedded && (
+          <span className="term-cwd" title={frame?.url ?? ""}>
+            {host}
+          </span>
+        )}
         {frame?.live && !embedded && <span className="browser-live" title={t("browserLive")} />}
         {/* Zoom is a screencast affordance: the image had to be scaled to fit
             the panel, so being able to see it whole mattered. A docked view
@@ -243,6 +274,72 @@ export function BrowserPanel({
           <Close size={13} />
         </button>
       </div>
+
+      {/*
+        The toolbar a browser is expected to have.
+        Only for the docked view: the screencast is a picture of somebody
+        else's Chromium, and back and reload have nothing to act on there.
+      */}
+      {embedded && (
+        <div className="browser-bar">
+          <button
+            className="browser-nav"
+            title={t("browserBack")}
+            disabled={!chrome?.canGoBack}
+            onClick={() => void window.onflip.browserViewAct?.("back")}
+          >
+            <ArrowLeft size={14} />
+          </button>
+          <button
+            className="browser-nav"
+            title={t("browserForward")}
+            disabled={!chrome?.canGoForward}
+            onClick={() => void window.onflip.browserViewAct?.("forward")}
+          >
+            <ArrowRight size={14} />
+          </button>
+          <button
+            className="browser-nav"
+            title={chrome?.loading ? t("browserStop") : t("browserReload")}
+            onClick={() =>
+              void window.onflip.browserViewAct?.(chrome?.loading ? "stop" : "reload")
+            }
+          >
+            {chrome?.loading ? <StopCircle size={14} /> : <Reload size={14} />}
+          </button>
+          <input
+            className="browser-url"
+            spellCheck={false}
+            placeholder={t("browserUrlPlaceholder")}
+            // Shows where the view *is* until somebody starts typing, then
+            // shows what they typed — a field that fought the page every time
+            // the agent navigated would be unusable.
+            value={typed ?? chrome?.url ?? ""}
+            onChange={(e) => setTyped(e.target.value)}
+            onFocus={(e) => e.currentTarget.select()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                const target = (typed ?? chrome?.url ?? "").trim();
+                if (target) void window.onflip.browserViewGo?.(target);
+                e.currentTarget.blur();
+              } else if (e.key === "Escape") {
+                setTyped(null);
+                e.currentTarget.blur();
+              }
+            }}
+            onBlur={() => setTyped(null)}
+          />
+          {chrome?.url && (
+            <button
+              className="browser-nav"
+              title={t("browserOpenExternal")}
+              onClick={() => void window.onflip.browserViewExternal?.()}
+            >
+              ↗
+            </button>
+          )}
+        </div>
+      )}
 
       <div className={`browser-body${embedded ? " embedded" : ""}`} ref={bodyRef}>
         {embedded ? (

@@ -26,6 +26,11 @@ import {
   hideView,
   resolveEndpoint,
   setViewBounds,
+  actOnView,
+  navigateView,
+  viewChrome,
+  watchViewChrome,
+  type ViewAction,
 } from "./browser-view";
 import { checkForUpdate } from "./updates";
 import {
@@ -790,6 +795,9 @@ function createWindow(cwd?: string): Workspace {
   // is a blank about-page with zero bounds — cheap, and far cheaper than the
   // whole second Chromium this replaces.
   ensureView(win);
+  // The toolbar mirrors the view, so it has to hear about every navigation
+  // — including the ones the agent makes, which is most of them.
+  watchViewChrome(win, () => sendTo(ws, "browser-chrome", viewChrome(win)));
 
   // The custom maximise button swaps its glyph with the real window state.
   win.on("maximize", () => sendTo(ws, "win-state", { maximized: true }));
@@ -943,6 +951,35 @@ function registerIpc(): void {
   // The renderer decides whether to draw a placeholder or the old screencast,
   // and it cannot know which until it is told whether the port opened.
   ipcMain.handle("browser-view-available", () => resolveEndpoint() !== null);
+
+  ipcMain.handle("browser-view-chrome", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    return win ? viewChrome(win) : null;
+  });
+  ipcMain.handle("browser-view-act", (e, payload: { action: ViewAction }) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    return win ? actOnView(win, payload.action) : false;
+  });
+  /**
+   * Hand the page to the user's own browser.
+   *
+   * Its own handler rather than reusing `open-release`, which is locked to
+   * this project's release pages on purpose: `openExternal` will launch
+   * anything at all, a `file://` path included. Http and https only, and
+   * only what the view is actually showing.
+   */
+  ipcMain.handle("browser-view-external", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    const url = win ? (viewChrome(win)?.url ?? "") : "";
+    if (!/^https?:\/\//i.test(url)) return false;
+    void shell.openExternal(url);
+    return true;
+  });
+
+  ipcMain.handle("browser-view-go", (e, payload: { url: string }) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    return win ? navigateView(win, payload.url) : false;
+  });
 
   /**
    * The floor the window cannot be dragged below.

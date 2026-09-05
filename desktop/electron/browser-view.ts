@@ -287,6 +287,124 @@ export function hideView(win: BrowserWindow): void {
   }
 }
 
+/**
+ * What the toolbar can do to the view.
+ *
+ * A panel with no address bar and no back button is a browser you can only
+ * watch. These are the four things a person reaches for without thinking,
+ * and they are the view's own — the agent's Playwright handle is unaffected
+ * by any of them, because it holds the page, not the URL.
+ */
+export type ViewAction = "back" | "forward" | "reload" | "stop";
+
+export function actOnView(win: BrowserWindow, action: ViewAction): boolean {
+  const view = views.get(win);
+  if (!view || view.webContents.isDestroyed()) return false;
+  const wc = view.webContents;
+  const nav = (wc as unknown as { navigationHistory?: { goBack(): void; goForward(): void; canGoBack(): boolean; canGoForward(): boolean } }).navigationHistory;
+  switch (action) {
+    // Electron 36 moved these onto `navigationHistory` and deprecated the
+    // old spelling; both are accepted so this keeps working either side of
+    // that change rather than silently doing nothing after an upgrade.
+    case "back":
+      if (nav?.canGoBack()) nav.goBack();
+      else if (wc.canGoBack?.()) wc.goBack();
+      return true;
+    case "forward":
+      if (nav?.canGoForward()) nav.goForward();
+      else if (wc.canGoForward?.()) wc.goForward();
+      return true;
+    case "reload":
+      wc.reload();
+      return true;
+    case "stop":
+      wc.stop();
+      return true;
+  }
+}
+
+/**
+ * Send the view somewhere, forgivingly.
+ *
+ * People type "example.com", not "https://example.com", and they paste
+ * things with spaces around them. Anything that is not a URL at all becomes
+ * a search rather than an error page, which is what every browser does and
+ * what makes an address bar usable as one.
+ */
+export function navigateView(win: BrowserWindow, input: string): boolean {
+  const view = ensureView(win);
+  if (!view) return false;
+  view.webContents.loadURL(normaliseUrl(input));
+  return true;
+}
+
+export function normaliseUrl(input: string): string {
+  const text = input.trim();
+  if (!text) return "about:blank";
+  // A scheme, but only a real one. "localhost:3000" also matches "a word
+  // followed by a colon", and treating that as a scheme leaves it untouched
+  // — so the commonest address anybody types into this bar went nowhere.
+  // Either a named scheme, or anything with the "//" that makes it a URL.
+  if (/^(https?|file|about|data|blob|view-source|chrome|devtools|ftp):/i.test(text)) return text;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
+
+  // Loopback and bare IPv4 first, and over http. An address like
+  // "127.0.0.1:5173" is word characters separated by dots, so a
+  // general "looks like a host" rule matches it and sends a local dev
+  // server to https — which it is not serving, so the page fails to load.
+  // Caught exactly that way: typing 127.0.0.1:55377 opened
+  // https://127.0.0.1:55377 and got an error page.
+  if (/^localhost(:\d+)?(\/|$)/i.test(text)) return `http://${text}`;
+  if (/^\d{1,3}(\.\d{1,3}){3}(:\d+)?(\/|$)/.test(text)) return `http://${text}`;
+
+  // A hostname with a dot in it, or one with a port: "example.com",
+  // "docs.example.com/x", "myhost:8080".
+  if (/^[\w-]+(\.[\w-]+)+(:\d+)?(\/|.*)?$/.test(text) && !text.includes(" ")) {
+    return `https://${text}`;
+  }
+  return `https://duckduckgo.com/?q=${encodeURIComponent(text)}`;
+}
+
+/** Everything the toolbar needs to draw itself. */
+export interface ViewChrome {
+  url: string;
+  title: string;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+export function viewChrome(win: BrowserWindow): ViewChrome | null {
+  const view = views.get(win);
+  if (!view || view.webContents.isDestroyed()) return null;
+  const wc = view.webContents;
+  const nav = (wc as unknown as { navigationHistory?: { canGoBack(): boolean; canGoForward(): boolean } }).navigationHistory;
+  const url = wc.getURL();
+  const blank = url.startsWith("data:") && url.includes(viewMark);
+  return {
+    url: blank ? "" : url,
+    title: blank ? "" : wc.getTitle(),
+    loading: wc.isLoading(),
+    canGoBack: nav ? nav.canGoBack() : Boolean(wc.canGoBack?.()),
+    canGoForward: nav ? nav.canGoForward() : Boolean(wc.canGoForward?.()),
+  };
+}
+
+/** Tell the window whenever the toolbar's state could have changed. */
+export function watchViewChrome(win: BrowserWindow, notify: () => void): void {
+  const view = ensureView(win);
+  if (!view) return;
+  const wc = view.webContents;
+  // Listed one by one rather than looped: each of these events has its own
+  // handler signature, and a union of names does not resolve against them.
+  wc.on("did-start-loading", () => notify());
+  wc.on("did-stop-loading", () => notify());
+  wc.on("did-navigate", () => notify());
+  wc.on("did-navigate-in-page", () => notify());
+  wc.on("page-title-updated", () => notify());
+  wc.on("did-fail-load", () => notify());
+}
+
 /** What the panel header shows, read from the live view. */
 export function viewState(win: BrowserWindow): { url: string; title: string } | null {
   const view = views.get(win);

@@ -287,6 +287,45 @@ export const Clock = (p: IconProps = {}): React.ReactElement =>
     p
   );
 
+// --- browser toolbar -------------------------------------------------------
+
+export const ArrowLeft = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <line x1="19" y1="12" x2="5" y2="12" />
+      <polyline points="11 6 5 12 11 18" />
+    </>,
+    p
+  );
+
+export const ArrowRight = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <line x1="5" y1="12" x2="19" y2="12" />
+      <polyline points="13 6 19 12 13 18" />
+    </>,
+    p
+  );
+
+export const Reload = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <path d="M20 11a8 8 0 1 0-.6 4" />
+      <polyline points="20 4 20 11 13.5 11" />
+    </>,
+    p
+  );
+
+/** Stop loading — the square inside a ring, as browsers draw it. */
+export const StopCircle = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor" stroke="none" />
+    </>,
+    p
+  );
+
 /** A quiet marker for the collapsed log strip. */
 export const Info = (p: IconProps = {}): React.ReactElement =>
   svg(
