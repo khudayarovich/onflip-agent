@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
-import { Close } from "./icons";
+import { Close, Eraser, Stop, Terminal as TerminalIcon } from "./icons";
+import { parseAnsi, isPlain, type AnsiSpan, type AnsiStyle } from "../../../shared/ansi";
 
 /**
  * The built-in terminal: a docked panel for running commands without leaving
@@ -14,14 +15,36 @@ interface TermLine {
   id: string;
   kind: "cmd" | "out" | "err" | "info";
   text: string;
+  /** Colour runs, for output that arrived with ANSI in it. */
+  spans?: AnsiSpan[];
 }
 
 const MAX_LINES = 4000;
 
-/** VT escape sequences PowerShell may emit; the panel renders plain text. */
-function stripAnsi(text: string): string {
-  // eslint-disable-next-line no-control-regex
-  return text.replace(/\x1b\[[0-9;?]*[ -/]*[@-~]/g, "").replace(/\x1b\][^\x07]*\x07/g, "");
+/** One styled run, as a span the browser can paint. */
+function Run({ span }: { span: AnsiSpan }): React.ReactElement {
+  if (isPlain(span)) return <>{span.text}</>;
+  const cls = [
+    span.fg && !span.fg.startsWith("#") ? `fg-${span.fg}` : "",
+    span.bg && !span.bg.startsWith("#") ? `bg-${span.bg}` : "",
+    span.bold ? "b" : "",
+    span.dim ? "d" : "",
+    span.italic ? "i" : "",
+    span.underline ? "u" : "",
+    span.inverse ? "inv" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  // Palette colours go through classes so they can follow the theme; the
+  // 256-colour cube and true colour are exact values and are set inline.
+  const style: React.CSSProperties = {};
+  if (span.fg?.startsWith("#")) style.color = span.fg;
+  if (span.bg?.startsWith("#")) style.background = span.bg;
+  return (
+    <span className={cls || undefined} style={style}>
+      {span.text}
+    </span>
+  );
 }
 
 export function TerminalPanel({
@@ -48,17 +71,30 @@ export function TerminalPanel({
   const historyIndexRef = useRef(-1);
   const scrollRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
+  /** Colour left open by the previous chunk of output. */
+  const styleRef = useRef<AnsiStyle>({});
 
-  const append = useCallback((kind: TermLine["kind"], text: string) => {
+  const append = useCallback(
+    (kind: TermLine["kind"], text: string, spans?: AnsiSpan[]) => {
     setLines((prev) => {
-      const next = [...prev, { id: crypto.randomUUID(), kind, text }];
+      const next = [...prev, { id: crypto.randomUUID(), kind, text, spans }];
       return next.length > MAX_LINES ? next.slice(-MAX_LINES) : next;
     });
-  }, []);
+  },
+    []
+  );
 
   useEffect(() => {
     const offData = window.onflip.onTermData((d) => {
-      append(d.kind === "err" ? "err" : "out", stripAnsi(d.text).replace(/\r(?!\n)/g, ""));
+      // A program may open a colour in one chunk and close it three chunks
+      // later, so the open style carries across; forgetting it between calls
+      // would drop the colour from every line but the first.
+      // A bare carriage return is a progress bar redrawing its line; without
+      // a newline after it there is nothing here to redraw, so it goes.
+      const clean = d.text.replace(/\r(?!\n)/g, "");
+      const { spans, style } = parseAnsi(clean, styleRef.current);
+      styleRef.current = style;
+      append(d.kind === "err" ? "err" : "out", spans.map((x) => x.text).join(""), spans);
     });
     const offExit = window.onflip.onTermExit((d) => {
       setRunning(false);
@@ -91,6 +127,7 @@ export function TerminalPanel({
 
     if (command === "clear" || command === "cls") {
       setLines([]);
+      styleRef.current = {};
       return;
     }
     append("cmd", command);
@@ -127,17 +164,20 @@ export function TerminalPanel({
   return (
     <div className="term-panel">
       <div className="term-head">
-        <span className="term-title">❯_ {t("termTitle")}</span>
+        <span className="term-title">
+          <TerminalIcon size={13} />
+          {t("termTitle")}
+        </span>
         <span className="term-cwd" title={cwd}>
           {shortCwd}
         </span>
         {running && (
           <button className="term-btn stop" title={t("termStop")} onClick={() => void window.onflip.termKill()}>
-            ■
+            <Stop size={11} />
           </button>
         )}
         <button className="term-btn" title={t("termClear")} onClick={() => setLines([])}>
-          ⌫
+          <Eraser size={13} />
         </button>
         <button className="term-btn" title={t("termClose")} onClick={onClose}>
           <Close size={13} />
@@ -151,6 +191,8 @@ export function TerminalPanel({
               <>
                 <span className="mark">❯</span> {line.text}
               </>
+            ) : line.spans?.length ? (
+              line.spans.map((span, i) => <Run key={i} span={span} />)
             ) : (
               line.text
             )}

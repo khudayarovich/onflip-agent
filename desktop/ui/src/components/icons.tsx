@@ -248,6 +248,21 @@ export const CircleSlash = (p: IconProps = {}): React.ReactElement =>
     p
   );
 
+/** Stop a running command: a filled square, the universal one. */
+export const Stop = (p: IconProps = {}): React.ReactElement =>
+  svg(<rect x="6.5" y="6.5" width="11" height="11" rx="1.6" fill="currentColor" stroke="none" />, p);
+
+/** Clear the scrollback. */
+export const Eraser = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <path d="M8.5 19H20" />
+      <path d="M14.8 5.2 5.2 14.8a1.6 1.6 0 0 0 0 2.3l1.7 1.7a1.6 1.6 0 0 0 2.3 0l9.6-9.6a1.6 1.6 0 0 0 0-2.3l-1.7-1.7a1.6 1.6 0 0 0-2.3 0z" />
+      <path d="M10.5 9.5 15 14" />
+    </>,
+    p
+  );
+
 /** A quiet marker for the collapsed log strip. */
 export const Info = (p: IconProps = {}): React.ReactElement =>
   svg(

@@ -24,6 +24,11 @@
   --yellow: #f0c000;
   --blue: #6ca9f5;
   --mono: "Cascadia Code", "Consolas", "Courier New", monospace;
+  /* The terminal gets its own stack: Ubuntu Mono where it exists, then
+     the app's usual mono. Requested by name, and it is the font the
+     panel is meant to look like. */
+  --term-font: "Ubuntu Mono", "Ubuntu Sans Mono", "Ubuntu", "Cascadia Code", "Consolas",
+    "DejaVu Sans Mono", "Courier New", monospace;
   --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
   --radius: 10px;
   --radius-lg: 16px;
@@ -1692,6 +1697,9 @@ a:hover {
   border-bottom: 1px solid var(--border);
 }
 .term-title {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   font-size: 11px;
   font-weight: 700;
   letter-spacing: 0.06em;
@@ -1735,14 +1743,14 @@ a:hover {
   overflow-y: auto;
   padding: 12px 14px;
   background: #0c0d10;
-  font-family: var(--mono, ui-monospace, Consolas, monospace);
-  font-size: 12.5px;
-  line-height: 1.6;
+  font-family: var(--term-font);
+  font-size: 13px;
+  line-height: 1.5;
   letter-spacing: 0.01em;
   cursor: text;
 }
 .term-out ::selection {
-  background: rgba(126, 231, 135, 0.22);
+  background: rgba(232, 150, 60, 0.24);
 }
 .term-line {
   margin: 0;
@@ -1756,7 +1764,7 @@ a:hover {
   margin-top: 8px;
 }
 .term-line .mark {
-  color: #7ee787;
+  color: var(--accent);
   font-weight: 700;
 }
 .term-line.err {
@@ -1765,6 +1773,64 @@ a:hover {
 .term-line.info {
   color: #8b949e;
   font-style: italic;
+}
+
+/*
+ * The sixteen ANSI colours.
+ *
+ * The panel used to strip every escape sequence and render the result flat.
+ * Almost everything worth running disagrees: `git status` colours staged
+ * against unstaged, `npm` colours its warnings, every test runner colours
+ * pass and fail. Losing all of it was most of why this read like a log file
+ * rather than a terminal — and red-versus-green is how a wall of test output
+ * is actually read.
+ *
+ * The output surface is a true dark terminal in both themes, so one palette
+ * serves both. These are GitHub's dark terminal colours, which are tuned for
+ * contrast on exactly this background.
+ */
+.term-line .fg-black { color: #484f58; }
+.term-line .fg-red { color: #ff7b72; }
+.term-line .fg-green { color: #3fb950; }
+.term-line .fg-yellow { color: #d29922; }
+.term-line .fg-blue { color: #58a6ff; }
+.term-line .fg-magenta { color: #bc8cff; }
+.term-line .fg-cyan { color: #39c5cf; }
+.term-line .fg-white { color: #b1bac4; }
+.term-line .fg-bright-black { color: #6e7681; }
+.term-line .fg-bright-red { color: #ffa198; }
+.term-line .fg-bright-green { color: #56d364; }
+.term-line .fg-bright-yellow { color: #e3b341; }
+.term-line .fg-bright-blue { color: #79c0ff; }
+.term-line .fg-bright-magenta { color: #d2a8ff; }
+.term-line .fg-bright-cyan { color: #56d4dd; }
+.term-line .fg-bright-white { color: #f0f6fc; }
+
+.term-line .bg-black { background: #484f58; }
+.term-line .bg-red { background: #da3633; }
+.term-line .bg-green { background: #238636; }
+.term-line .bg-yellow { background: #9e6a03; }
+.term-line .bg-blue { background: #1f6feb; }
+.term-line .bg-magenta { background: #8957e5; }
+.term-line .bg-cyan { background: #1b7c83; }
+.term-line .bg-white { background: #b1bac4; }
+.term-line .bg-bright-black { background: #6e7681; }
+.term-line .bg-bright-red { background: #f85149; }
+.term-line .bg-bright-green { background: #2ea043; }
+.term-line .bg-bright-yellow { background: #bb8009; }
+.term-line .bg-bright-blue { background: #388bfd; }
+.term-line .bg-bright-magenta { background: #a371f7; }
+.term-line .bg-bright-cyan { background: #2b7489; }
+.term-line .bg-bright-white { background: #f0f6fc; }
+
+.term-line .b { font-weight: 700; }
+.term-line .d { opacity: 0.65; }
+.term-line .i { font-style: italic; }
+.term-line .u { text-decoration: underline; }
+/* Inverse is a real thing programs use for selected rows and headers. */
+.term-line .inv {
+  background: #d8dbe0;
+  color: #0c0d10;
 }
 .term-hint {
   font-size: 11.5px;
@@ -1785,8 +1851,8 @@ a:hover {
   border-top: 1px solid #1d1f24;
 }
 .term-input-row .prompt {
-  color: #7ee787;
-  font-family: var(--mono, ui-monospace, Consolas, monospace);
+  color: var(--accent);
+  font-family: var(--term-font);
   font-weight: 700;
 }
 .term-input-row input {
@@ -1795,9 +1861,9 @@ a:hover {
   border: none;
   outline: none;
   color: #f2f4f8;
-  caret-color: #7ee787;
-  font-family: var(--mono, ui-monospace, Consolas, monospace);
-  font-size: 12.5px;
+  caret-color: var(--accent);
+  font-family: var(--term-font);
+  font-size: 13px;
 }
 .term-input-row input::placeholder {
   color: #6b7280;
