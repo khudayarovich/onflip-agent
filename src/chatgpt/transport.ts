@@ -145,13 +145,26 @@ function clampPayload(text: string): string {
  * Below the threshold nothing changes: a typed message is the more faithful
  * path, and at a few thousand characters it is the faster one too.
  */
-// 26k, not 20k: the system prompt alone is now just under 21k characters,
-// so at 20k every fresh chat's first turn went up as a file — and the model
-// answered one of those "[attachment unreadable]", which costs a wasted send
-// and a typed retry. Chunked pasting has since made a 21k payload a
-// sub-second type (the 27k measurement above predates it), so the file
-// path is kept for turns that are genuinely large.
-const UPLOAD_ABOVE_CHARS = Number(process.env.ONFLIP_UPLOAD_ABOVE ?? 26_000);
+// 45k, not 26k. The measurements above predate chunked pasting and are no
+// longer what typing costs. Re-measured over 240 typed sends and 21 uploaded
+// ones in `~/.onflip/logs`:
+//
+//   typed, 20k–30k chars     median   686ms   (max 4.4s)
+//   sending → submitted, typed        1,235ms  (p90 2.4s)
+//   sending → submitted, uploaded     5,123ms  (p90 6.8s)
+//
+// So the upload path is four times slower end to end, and at 26k it was
+// taking 31% of all turns — including plenty that now type in under a
+// second. It also has a failure the typed path does not: the model
+// answering "[attachment unreadable]", which costs a wasted send and a
+// typed retry anyway.
+//
+// The ceiling is set from what the composer is known to accept: 60,831
+// characters typed and answered normally, 112,586 could not be entered at
+// all. 45k keeps a wide margin under the proven figure while leaving the
+// file path for turns that are genuinely large — and `MAX_PAYLOAD_CHARS`
+// (80k) is still the backstop behind both.
+const UPLOAD_ABOVE_CHARS = Number(process.env.ONFLIP_UPLOAD_ABOVE ?? 45_000);
 
 /**
  * Whether a turn too large to type has somewhere else to go.
