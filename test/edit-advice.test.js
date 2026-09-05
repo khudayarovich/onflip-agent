@@ -34,17 +34,19 @@ function workspace(contents, name = "a.go") {
 
 const TABBED = "package main\n\nfunc main() {\n\tx := 1\n\tprintln(x)\n}\n";
 
-test("a whitespace-only mismatch quotes the file's own bytes back", async () => {
-  const { ctx } = workspace(TABBED);
-  const r = await editTool.run(
-    { path: "a.go", old_string: "    x := 1", new_string: "    x := 2" },
-    ctx
-  );
+test("an ambiguous near-match quotes the candidates instead of only their line numbers", async () => {
+  // A unique whitespace mismatch is applied outright now, so what reaches
+  // this message is the ambiguous case — and line numbers alone would cost a
+  // round trip to act on.
+  // Tabs in the file, spaces in the call: no literal match anywhere, and two
+  // candidates once indentation is ignored.
+  const { ctx } = workspace("if a:\n\tdo()\nif b:\n\t\tdo()\n", "a.py");
+  const r = await editTool.run({ path: "a.py", old_string: "    do()", new_string: "    done()" }, ctx);
   assert.equal(r.error, true);
-  assert.match(r.output, /line 4/);
-  assert.match(r.output, /indents with tabs/);
-  // The actual bytes, fenced so the leading tab survives the round trip.
-  assert.match(r.output, /```\n\tx := 1\n```/);
+  assert.match(r.output, /lines 2, 4/);
+  // The actual bytes of each candidate, fenced so the indentation survives.
+  assert.match(r.output, /```\n\tdo\(\)\n```/);
+  assert.match(r.output, /```\n\t\tdo\(\)\n```/);
 });
 
 test("a string that is genuinely absent gets the plain message, not a quote", async () => {

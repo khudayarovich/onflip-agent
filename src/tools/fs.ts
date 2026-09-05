@@ -484,20 +484,27 @@ function notFoundAdvice(haystack: string, needle: string, where: string): string
   }
   const style = indentStyle(haystack);
   const lines = near.length === 1 ? `line ${near[0]}` : `lines ${near.join(", ")}`;
-  // Telling the model to go and read the lines costs a whole round trip, and
-  // `edit` fails often enough for that to matter — 71 failures in 125 calls
-  // across the logged sessions. When there is exactly one near-match the
-  // exact bytes it needs are already in hand here, so they are quoted
-  // verbatim and the next attempt can be a copy rather than another read.
-  const quoted = near.length === 1 ? exactLines(haystack, near[0], needle) : null;
+  // A single near-match is applied outright now (see `relaxedMatch`), so by
+  // the time this runs the usual reason is *ambiguity*: the same text, at two
+  // or more indentations, and no way to know which was meant. Telling the
+  // model to go and read them costs a round trip; showing the candidates
+  // verbatim lets the next call pick one and extend it. Fenced, so the
+  // leading whitespace survives being read back out of a chat message.
+  const quoted = near
+    .slice(0, MAX_QUOTED_CANDIDATES)
+    .map((line) => exactLines(haystack, line, needle))
+    .filter((block): block is string => block !== null);
   return (
     `\`old_string\` not found in ${where}, but the same text with different indentation is at ${lines}. ` +
     (style ? `This file indents with ${style}. ` : "") +
-    (quoted
-      ? `Copy this exactly, leading whitespace included:\n${quoted}`
+    (quoted.length
+      ? `Copy the one you mean exactly, leading whitespace included — and add surrounding lines if more than one is shown:\n${quoted.join("\n")}`
       : "Read those lines and copy them exactly as they come back — leading whitespace included.")
   );
 }
+
+/** How many candidate snippets an error message will show. */
+const MAX_QUOTED_CANDIDATES = 3;
 
 /**
  * The file's own bytes for a near-match, fenced so whitespace survives.
@@ -563,6 +570,94 @@ function replaceFirst(haystack: string, oldStr: string, newStr: string): string 
   return haystack.replace(oldStr, () => newStr);
 }
 
+/**
+ * Find `needle` when the whitespace is close but not exact.
+ *
+ * `edit` failed 57% of the time across the logged sessions — 71 of 125 calls —
+ * and the overwhelming majority were whitespace: spaces reproduced where the
+ * file has a tab, a leading indent dropped, a trailing space invented. The
+ * text was right and the bytes were not, and a chat model cannot reliably
+ * reproduce leading whitespace it only ever saw rendered.
+ *
+ * Codex solves this in `apply_patch` by matching with decreasing strictness —
+ * exact, then ignoring trailing whitespace, then ignoring leading and trailing
+ * — and that is what this is. The one deliberate difference: Codex takes the
+ * first match at whichever tier hits, while this requires the tier to match
+ * *exactly once* in the whole file. A unique looser match is almost certainly
+ * the line meant; an ambiguous one is a guess, and guessing wrong here edits
+ * the wrong part of someone's file.
+ *
+ * Returns the file's own text for the matched region, so the replacement is
+ * performed against real bytes rather than the approximation of them.
+ */
+export function relaxedMatch(
+  haystack: string,
+  needle: string
+): { text: string; line: number; tier: "trailing" | "indentation" } | null {
+  const wanted = needle.split("\n");
+  // A trailing newline in the needle produces an empty last element that
+  // would have to match a line of its own; drop it and let the join below
+  // put it back.
+  const trailingNewline = wanted.length > 1 && wanted[wanted.length - 1] === "";
+  if (trailingNewline) wanted.pop();
+  if (!wanted.length) return null;
+
+  const lines = haystack.split("\n");
+  if (wanted.length > lines.length) return null;
+
+  const tiers: { tier: "trailing" | "indentation"; normalise: (s: string) => string }[] = [
+    { tier: "trailing", normalise: (s) => s.replace(/\s+$/, "") },
+    { tier: "indentation", normalise: (s) => s.trim() },
+  ];
+
+  for (const { tier, normalise } of tiers) {
+    const want = wanted.map(normalise);
+    const hits: number[] = [];
+    for (let i = 0; i + want.length <= lines.length; i++) {
+      let ok = true;
+      for (let j = 0; j < want.length; j++) {
+        if (normalise(lines[i + j]) !== want[j]) {
+          ok = false;
+          break;
+        }
+      }
+      // Two candidates is already ambiguous; no need to count the rest.
+      if (ok && hits.push(i) > 1) break;
+    }
+    if (hits.length !== 1) continue;
+    const start = hits[0];
+    const text = lines.slice(start, start + wanted.length).join("\n");
+    return { text: trailingNewline ? `${text}\n` : text, line: start + 1, tier };
+  }
+  return null;
+}
+
+/** The leading whitespace of the first line that has any content. */
+function baseIndent(text: string): string {
+  for (const line of text.split("\n")) {
+    if (line.trim()) return /^[ \t]*/.exec(line)?.[0] ?? "";
+  }
+  return "";
+}
+
+/**
+ * Re-indent the replacement to sit where the matched text actually sits.
+ *
+ * The model wrote `old_string` at the wrong indentation, so it almost
+ * certainly wrote `new_string` at the same wrong indentation. Substituting it
+ * verbatim would fix the match and then break the file — which on a Python
+ * file is a syntax error and on a Go file is a diff nobody wants. Only the
+ * common prefix is swapped, so relative indentation inside the replacement is
+ * preserved exactly as written.
+ */
+export function reindentTo(newStr: string, from: string, to: string): string {
+  if (from === to || !from) return newStr;
+  return newStr
+    .split("\n")
+    .map((line) => (line.startsWith(from) ? to + line.slice(from.length) : line))
+    .join("\n");
+}
+
 export const editTool: ToolDefinition = {
   name: "edit",
   description:
@@ -594,9 +689,17 @@ export const editTool: ToolDefinition = {
     if (!rawOld) return err("`old_string` must be non-empty. Use the `write` tool to create a file.");
     if (rawOld === rawNew) return err("`old_string` and `new_string` are identical — nothing to do.");
 
-    const { oldStr, newStr, count: occurrences } = matchLineEndings(before, rawOld, rawNew);
+    let { oldStr, newStr, count: occurrences } = matchLineEndings(before, rawOld, rawNew);
+    // Nothing matched byte for byte. Before reporting that, look again with
+    // the whitespace relaxed — see `relaxedMatch` for why, and for why it
+    // insists on a unique hit.
+    let relaxed: ReturnType<typeof relaxedMatch> = null;
     if (occurrences === 0) {
-      return err(notFoundAdvice(before, oldStr, relative(ctx.cwd, file)));
+      relaxed = relaxedMatch(before, oldStr);
+      if (!relaxed) return err(notFoundAdvice(before, oldStr, relative(ctx.cwd, file)));
+      newStr = reindentTo(newStr, baseIndent(oldStr), baseIndent(relaxed.text));
+      oldStr = relaxed.text;
+      occurrences = 1;
     }
     const replaceAll = asBool(args.replace_all);
     if (occurrences > 1 && !replaceAll) {
@@ -622,8 +725,20 @@ export const editTool: ToolDefinition = {
     snapshot(ctx, file, before, after, "edit");
     ctx.session.readFiles.set(file, Date.now());
 
-    const summary = `Applied ${occurrences} replacement${occurrences === 1 ? "" : "s"} in ${relative(ctx.cwd, file)}`;
-    return ok(stale ? `${summary}\n${stale}` : summary, {
+    // Say so when the match was not literal. The edit is correct, but the
+    // model asked for something the file did not literally contain, and it
+    // should learn the file's real shape rather than repeat the near-miss.
+    const note = relaxed
+      ? `Note: \`old_string\` did not match byte for byte; it matched at line ${relaxed.line} ignoring ${relaxed.tier === "trailing" ? "trailing whitespace" : "indentation"}, and the file's own indentation was kept.`
+      : null;
+    const summary = [
+      `Applied ${occurrences} replacement${occurrences === 1 ? "" : "s"} in ${relative(ctx.cwd, file)}`,
+      note,
+      stale,
+    ]
+      .filter(Boolean)
+      .join("\n");
+    return ok(summary, {
       title: relative(ctx.cwd, file),
       display: { kind: "diff", path: file, oldText: before, newText: after },
     });
@@ -682,18 +797,29 @@ export const multiEditTool: ToolDefinition = {
 
     let working = before;
     let applied = 0;
+    let relaxedEdits = 0;
     for (const [i, raw] of edits.entries()) {
       const e = raw as Record<string, unknown>;
       const rawOld = String(e.old_string ?? "");
       const rawNew = String(e.new_string ?? "");
       if (!rawOld) return err(`edits[${i}]: \`old_string\` must be non-empty`);
-      const { oldStr, newStr, count } = matchLineEndings(working, rawOld, rawNew);
+      let { oldStr, newStr, count } = matchLineEndings(working, rawOld, rawNew);
       // The same advice as `edit` gives, against the working copy: after an
       // earlier edit in the batch the file on disk is no longer what a line
       // number would be counted against.
       const where = `${relative(ctx.cwd, file)}${applied ? " (after the preceding edits)" : ""}`;
       if (count === 0) {
-        return err(`edits[${i}]: ${notFoundAdvice(working, oldStr, where)} No changes were written.`);
+        // Relaxed whitespace matching, exactly as `edit` does it — a batch is
+        // more likely to hit this, not less, since every edit in it was
+        // written from the same reading of the file.
+        const relaxed = relaxedMatch(working, oldStr);
+        if (!relaxed) {
+          return err(`edits[${i}]: ${notFoundAdvice(working, oldStr, where)} No changes were written.`);
+        }
+        newStr = reindentTo(newStr, baseIndent(oldStr), baseIndent(relaxed.text));
+        oldStr = relaxed.text;
+        count = 1;
+        relaxedEdits++;
       }
       if (count > 1 && !asBool(e.replace_all)) {
         return err(`edits[${i}]: ${ambiguousAdvice(working, oldStr, count, where)} No changes were written.`);
@@ -719,7 +845,11 @@ export const multiEditTool: ToolDefinition = {
     snapshot(ctx, file, before, working, "multi_edit");
     ctx.session.readFiles.set(file, Date.now());
 
-    const summary = `Applied ${edits.length} edits (${applied} replacements) to ${relative(ctx.cwd, file)}`;
+    const relaxedNote = relaxedEdits
+      ? `
+Note: ${relaxedEdits} of these did not match byte for byte and were matched with whitespace relaxed; the file's own indentation was kept.`
+      : "";
+    const summary = `Applied ${edits.length} edits (${applied} replacements) to ${relative(ctx.cwd, file)}${relaxedNote}`;
     return ok(stale ? `${summary}\n${stale}` : summary, {
       title: relative(ctx.cwd, file),
       display: { kind: "diff", path: file, oldText: before, newText: working },
