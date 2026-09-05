@@ -9,6 +9,15 @@ import { SessionCookie } from "../auth/access";
 import { normalizeModel, thinkingDirective } from "../models";
 import { configDir, loadConfig, saveConfig } from "../config";
 import type { FailureCode } from "./backoff";
+import {
+  COMPOSER_SELECTORS,
+  ASSISTANT_SELECTORS,
+  STOP_SELECTORS,
+  SEND_SELECTORS,
+  MODEL_SWITCHER_SELECTORS,
+  FILE_INPUT_SELECTORS,
+  joined,
+} from "./selectors";
 import { paceNewChat } from "./backoff";
 import { logger, shapeOf } from "../log";
 
@@ -23,42 +32,11 @@ import { logger, shapeOf } from "../log";
  */
 
 const CHAT_URL = "https://chatgpt.com";
-const COMPOSER_SELECTORS = [
-  "#prompt-textarea",
-  "div[contenteditable='true'][id='prompt-textarea']",
-  "textarea[data-id='root']",
-  "div.ProseMirror[contenteditable='true']",
-  "form textarea",
-];
-/**
- * Where an assistant reply lives on the page.
- *
- * Every one of these has to be unable to match the *user's* turn. The
- * looser ones used to match any conversation turn's `.markdown`, so before
- * the assistant had rendered a word the newest turn was the message OnFlip
- * had just sent — and it was read back and parsed as a reply.
- */
-const ASSISTANT_SELECTORS = [
-  "[data-message-author-role='assistant']",
-  "article[data-testid^='conversation-turn'] [data-message-author-role='assistant']",
-  ".agent-turn [data-message-author-role='assistant']",
-  ".agent-turn .markdown",
-];
-const STOP_SELECTORS = [
-  "button[data-testid='stop-button']",
-  // The newer composer folds send and stop into one control and tells them
-  // apart by label.
-  "#composer-submit-button[aria-label='Stop streaming']",
-  "button[aria-label*='Stop']",
-  "button[aria-label*='stop']",
-];
+// Selectors live in `./selectors`, which is the whole surface area of this
+// app's coupling to someone else's DOM. Kept out of here so that "what would
+// we change if the page changed?" is one short file rather than a hunt.
 /** ChatGPT's own "Continue generating" is clicked this often before the model is asked to resend. */
 const MAX_CONTINUATIONS = 2;
-const SEND_SELECTORS = [
-  "button[data-testid='send-button']",
-  "button[data-testid='composer-send-button']",
-  "button[aria-label*='Send']",
-];
 
 let browser: Browser | null = null;
 let context: BrowserContext | null = null;
@@ -994,7 +972,7 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
   return page;
 }
 
-async function firstVisible(p: Page, selectors: string[], timeout: number) {
+async function firstVisible(p: Page, selectors: readonly string[], timeout: number) {
   const deadline = Date.now() + timeout;
   for (;;) {
     for (const sel of selectors) {
@@ -1041,15 +1019,26 @@ export async function pollUntil(
   }
 }
 
-async function anyVisible(p: Page, selectors: string[]): Promise<boolean> {
-  for (const sel of selectors) {
-    try {
-      if (await p.locator(sel).first().isVisible({ timeout: 150 })) return true;
-    } catch {
-      /* not present */
-    }
+/**
+ * Is any of these on the page?
+ *
+ * One comma-joined query rather than one query per selector. The answer is a
+ * boolean, so which selector matched does not matter — and the expensive case
+ * is the common one: "is ChatGPT still generating?" is asked on every poll of
+ * the reply loop and every poll of the send loop, and the answer is usually
+ * *no*, which used to mean walking all four stop selectors to the end before
+ * saying so. Joined, it is a single round trip whatever the answer.
+ *
+ * `firstVisible` deliberately keeps the per-selector walk: there the list is a
+ * preference order and which one matched decides which element gets used, and
+ * a joined query would return whichever happens to come first in the DOM.
+ */
+async function anyVisible(p: Page, selectors: readonly string[]): Promise<boolean> {
+  try {
+    return await p.locator(joined(selectors)).first().isVisible({ timeout: 150 });
+  } catch {
+    return false;
   }
-  return false;
 }
 
 /**
@@ -1203,13 +1192,6 @@ async function openNewChat(p: Page, model?: string, signal?: AbortSignal): Promi
   conversationsBeforeChat = activeProject ? await snapshotConversations(p) : null;
   logger.info("browser", "opened a new chat", { url: p.url() });
 }
-
-/** Where the page shows which model the chat will use. */
-const MODEL_SWITCHER_SELECTORS = [
-  "[data-testid='model-switcher-dropdown-button']",
-  "button[aria-label*='Model selector']",
-  "button[aria-label*='model picker']",
-];
 
 /** The distinctive word of a slug: "gpt-5.6-luna-wm" → "luna". */
 export function modelToken(slug?: string): string | null {
@@ -2097,7 +2079,7 @@ async function reloadKeepingConversation(p: Page): Promise<void> {
 /** Is the caret actually in the message box? */
 async function composerFocused(p: Page): Promise<boolean> {
   try {
-    return Boolean(await p.evaluate(IS_COMPOSER_FOCUSED, COMPOSER_SELECTORS));
+    return Boolean(await p.evaluate(IS_COMPOSER_FOCUSED, [...COMPOSER_SELECTORS]));
   } catch {
     return false;
   }
@@ -2481,11 +2463,6 @@ async function throttleNotice(p: Page): Promise<string | null> {
 }
 
 /** The composer's hidden file input, across the spellings ChatGPT has used. */
-const FILE_INPUT_SELECTORS = [
-  "input[type='file'][multiple]",
-  "input[type='file']",
-];
-
 /**
  * Attach local files to the ChatGPT composer.
  *
