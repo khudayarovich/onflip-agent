@@ -79,12 +79,15 @@ test("a compacted session is named from what it archived", () => {
   assert.equal(deriveTitle(s), "make me an animated three.js page");
 });
 
-test("a session with nothing but machinery anywhere says so plainly", () => {
+test("a session with nothing but machinery anywhere has no name", () => {
+  // Empty rather than a placeholder: "(empty session)" was being shown as
+  // though it were a title, across the top of every new chat. Each surface
+  // has its own wording for nothing.
   const s = session({
     messages: [said("user", "[Context carried over from the earlier part of this session]")],
   });
 
-  assert.equal(deriveTitle(s), "(empty session)");
+  assert.equal(deriveTitle(s), "");
 });
 
 test("a real title from ChatGPT wins", () => {

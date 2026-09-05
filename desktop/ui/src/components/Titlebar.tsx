@@ -103,7 +103,10 @@ export function Titlebar({
       .catch(() => {});
   }, []);
 
-  const title = status?.sessionTitle || (status ? "New session" : "");
+  // Nothing at all for a chat that has not been named yet. The app's own
+  // name is already on the left of this bar; a placeholder in the middle of
+  // it is one more thing to read and none of it is information.
+  const title = status?.sessionTitle ?? "";
   return (
     <div className={`titlebar${isMac ? " mac" : ""}`}>
       <button className="icon-btn" onClick={onToggleSidebar} title="Toggle sidebar">

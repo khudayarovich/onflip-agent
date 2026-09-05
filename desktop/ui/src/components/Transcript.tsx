@@ -6,6 +6,7 @@ import logo from "../assets/logo.svg";
 import { LangContext, useT } from "../i18n";
 import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/skills";
 import { ChevronDown, Close, Info } from "./icons";
+import { CopyButton } from "./CopyButton";
 
 export interface StreamingState {
   active: boolean;
@@ -354,6 +355,7 @@ function UserMessage({
             <button title={t("resendTip")} onClick={() => onRevise(id, "resend")}>
               ↻
             </button>
+            <CopyButton text={text} label={t("copyMessage")} />
           </div>
         )}
         <div className="msg-user">{bubble}</div>
@@ -475,14 +477,19 @@ export function TranscriptItem({
       return <div className="msg-user">{item.text}</div>;
     case "assistant":
       return (
-        <div className="msg-assistant">
+        <div className="msg-assistant has-copy">
           <Markdown text={item.text} />
+          {/* The whole message, as it was written — Markdown and all, since
+              that is what is worth pasting somewhere else. The code blocks
+              inside have their own buttons for the narrower case. */}
+          <CopyButton text={item.text} className="msg-copy" label={t("copyMessage")} />
         </div>
       );
     case "narration":
       return (
-        <div className="msg-narration">
+        <div className="msg-narration has-copy">
           <Markdown text={item.text} />
+          <CopyButton text={item.text} className="msg-copy" label={t("copyMessage")} />
         </div>
       );
     case "tool":
@@ -500,9 +507,10 @@ export function TranscriptItem({
       );
     case "question":
       return (
-        <div className="msg-question">
+        <div className="msg-question has-copy">
           <div className="msg-question-label">{t("questionLabel")}</div>
           <Markdown text={item.text} />
+          <CopyButton text={item.text} className="msg-copy" label={t("copyMessage")} />
         </div>
       );
     case "notice":

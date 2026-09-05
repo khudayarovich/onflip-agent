@@ -3488,3 +3488,84 @@ a:hover {
 .browser-url::placeholder {
   color: var(--text-muted);
 }
+
+/* ==========================================================================
+   copy buttons
+   ========================================================================== */
+
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  color: var(--text-muted);
+  flex-shrink: 0;
+  transition: color 0.12s, background 0.12s, opacity 0.12s;
+}
+.copy-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+/* The tick is the whole point of the button: it has to read as success. */
+.copy-btn.copied,
+.copy-btn.copied:hover {
+  color: var(--green);
+  background: transparent;
+}
+
+/*
+ * On a code block, pinned to the corner over the code.
+ *
+ * Outside the <pre> rather than in it: a button inside gets caught by a
+ * mouse selection and ends up in whatever is copied by hand — which is
+ * precisely the thing this is meant to save people from.
+ */
+.md-code-wrap {
+  position: relative;
+}
+.md-code-wrap .md-copy {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  opacity: 0;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+}
+.md-code-wrap:hover .md-copy,
+.md-code-wrap .md-copy:focus-visible,
+.md-code-wrap .md-copy.copied {
+  opacity: 1;
+}
+/* The language label sits in that corner too; the button takes it. */
+.md-code-wrap:hover pre.md-code::after {
+  opacity: 0;
+}
+
+/*
+ * On a message, in the top corner and only while the pointer is over it.
+ *
+ * Always-visible controls on every message turn a transcript into a wall of
+ * buttons; the text is what people are reading.
+ */
+.has-copy {
+  position: relative;
+}
+.has-copy > .msg-copy {
+  position: absolute;
+  top: 0;
+  right: 0;
+  opacity: 0;
+  background: var(--bg);
+}
+.has-copy:hover > .msg-copy,
+.has-copy > .msg-copy:focus-visible,
+.has-copy > .msg-copy.copied {
+  opacity: 1;
+}
+/* The user's own message already has a hover row; this joins it. */
+.msg-actions .copy-btn {
+  width: 22px;
+  height: 22px;
+}

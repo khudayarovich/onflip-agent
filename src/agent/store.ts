@@ -231,8 +231,13 @@ export function firstUserLine(messages: ChatMessage[]): string {
   // Only the user's own messages: tool results and OnFlip's own notes ride
   // the same role, and picking one of those named every compacted session
   // "[Context carried over from the earlier part of this session]".
+  // Empty, not "(empty session)". A session with nothing in it has no name,
+  // and a placeholder pretending to be one gets shown as though it were:
+  // the window's title bar was reading "(empty session)" across the top of
+  // every new chat. Each surface falls back to its own wording instead —
+  // the sidebar to "New session", the title bar to nothing at all.
   const first = messages.find(isUserRequest);
-  if (!first) return "(empty session)";
+  if (!first) return "";
   return first.content.split("\n")[0].slice(0, 80);
 }
 

@@ -1,4 +1,5 @@
 import React from "react";
+import { CopyButton } from "./components/CopyButton";
 
 /**
  * A small Markdown renderer that produces React elements directly.
@@ -119,10 +120,22 @@ export const Markdown = React.memo(function Markdown({
         body.push(lines[i]);
         i++;
       }
+      // Wrapped so the copy button has somewhere to sit that is not inside
+      // the <pre> — a button in there gets selected along with the code and
+      // ends up in whatever somebody copies by hand.
+      const code = body.join("\n");
+      // An empty fence is not a code block. They arrive when a turn's tool
+      // block is lifted out of the prose and the fence markers are left
+      // behind, and they rendered as an empty bordered box — easy to miss
+      // until a copy button appeared on one and there was nothing to copy.
+      if (!code.trim()) continue;
       blocks.push(
-        <pre key={key++} className="md-code" data-lang={lang || undefined}>
-          <code>{body.join("\n")}</code>
-        </pre>
+        <div key={key++} className="md-code-wrap">
+          <pre className="md-code" data-lang={lang || undefined}>
+            <code>{code}</code>
+          </pre>
+          <CopyButton text={code} className="md-copy" />
+        </div>
       );
       continue;
     }

@@ -287,6 +287,16 @@ export const Clock = (p: IconProps = {}): React.ReactElement =>
     p
   );
 
+/** Copy to the clipboard: the two-sheets glyph everyone recognises. */
+export const Copy = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <rect x="9" y="9" width="11" height="11" rx="2" />
+      <path d="M5 15V6a2 2 0 0 1 2-2h9" />
+    </>,
+    p
+  );
+
 // --- browser toolbar -------------------------------------------------------
 
 export const ArrowLeft = (p: IconProps = {}): React.ReactElement =>
