@@ -484,11 +484,37 @@ function notFoundAdvice(haystack: string, needle: string, where: string): string
   }
   const style = indentStyle(haystack);
   const lines = near.length === 1 ? `line ${near[0]}` : `lines ${near.join(", ")}`;
+  // Telling the model to go and read the lines costs a whole round trip, and
+  // `edit` fails often enough for that to matter — 71 failures in 125 calls
+  // across the logged sessions. When there is exactly one near-match the
+  // exact bytes it needs are already in hand here, so they are quoted
+  // verbatim and the next attempt can be a copy rather than another read.
+  const quoted = near.length === 1 ? exactLines(haystack, near[0], needle) : null;
   return (
     `\`old_string\` not found in ${where}, but the same text with different indentation is at ${lines}. ` +
     (style ? `This file indents with ${style}. ` : "") +
-    "Read those lines and copy them exactly as they come back — leading whitespace included."
+    (quoted
+      ? `Copy this exactly, leading whitespace included:\n${quoted}`
+      : "Read those lines and copy them exactly as they come back — leading whitespace included.")
   );
+}
+
+/**
+ * The file's own bytes for a near-match, fenced so whitespace survives.
+ *
+ * Capped, because an error message is not a way to read a file: a needle
+ * long enough to be worth quoting in full is long enough that the model
+ * should re-read it deliberately.
+ */
+const MAX_QUOTED_MATCH_LINES = 20;
+
+function exactLines(haystack: string, startLine: number, needle: string): string | null {
+  const count = needle.replace(/\n+$/, "").split("\n").length;
+  if (count > MAX_QUOTED_MATCH_LINES) return null;
+  const all = haystack.split("\n");
+  const slice = all.slice(startLine - 1, startLine - 1 + count);
+  if (!slice.length) return null;
+  return ["```", ...slice, "```"].join("\n");
 }
 
 /** The message for a string that is in the file more than once. */
