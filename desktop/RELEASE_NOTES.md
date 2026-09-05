@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.8.8
+# OnFlip Desktop 0.8.9
 
-**A quieter, better-behaved window.** Icons that are drawn rather than typed, the plumbing chatter folded away, sessions that remember what they were about and how long each turn took — and the reload keys can no longer throw your work off the screen.
+**The browser is a real browser now.** Not a sharper picture of one — an actual browser view inside the window, with working hover, native scrolling and text that stays crisp. And on some machines it was not working at all; that is fixed too.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,22 +8,36 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.8.8.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.8/OnFlip-Setup-0.8.8.exe) | ~84 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.8.8-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.8/OnFlip-0.8.8-mac-arm64.dmg) | ~101 MB |
-| **macOS** · Intel | [OnFlip-0.8.8-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.8/OnFlip-0.8.8-mac-x64.dmg) | ~108 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.8.9.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.9/OnFlip-Setup-0.8.9.exe) | ~84 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.8.9-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.9/OnFlip-0.8.9-mac-arm64.dmg) | ~101 MB |
+| **macOS** · Intel | [OnFlip-0.8.9-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.9/OnFlip-0.8.9-mac-x64.dmg) | ~108 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
 
-**On 0.8.7 already?** You should not need this page. 0.8.7 was the first build that can install the next one, so it will offer this update by itself.
+**On 0.8.7 or 0.8.8?** You should not need this page: the app offers the update itself.
 
-## What changed
+## A real browser, not a video of one
 
-- **The icons are drawn now.** Every arrow, folder, tick and cross was a text character before, which meant they looked different on every machine and none of them could move. The one that mattered: a tool card is a dropdown, and nothing on it said so — the Run Command card's own icon was a "▸" that read as a collapsed arrow and never opened. There is now a real arrow at the end of every card, and it turns when the card does.
-- **The plumbing chatter is folded away.** Lines like "ChatGPT could not read the attached turn file, retrying" are OnFlip talking about its own recovery — each one describes something it then handled by itself. Printed between your messages they were the loudest thing on screen during a turn that was going perfectly well. They are now a single quiet line you can click to open, rather than being shouted at you.
-- **Sessions are named after what you asked.** The sidebar took its title from the first message in the session, which after a long turn was OnFlip's own handover note — so compacted sessions sat in the list all called "[Context carried over from the ea…". Sessions whose request had been archived showed "(empty session)", and one whose conversation ChatGPT had named after an internal marker read "[attachment unreadable]". All three now show the request. Sessions already in your list fix themselves.
-- **How long each turn took is kept.** "Worked for 4m" was shown when a turn finished and then lost the moment the session was reopened. It is now recovered from the session itself, which means it appears for turns you ran weeks ago as well as new ones.
-- **Ctrl+F5 no longer throws the window away.** It reloaded the renderer — the transcript, and any approval prompt waiting on an answer — while the engine carried on working for a window that no longer existed. F5, Ctrl+R and Ctrl+Shift+R are all held now.
-- **The account row loses its avatar disc.** An initial in a coloured circle was decoration, and the only thing in the sidebar competing for attention with your sessions.
+The panel used to show a *screencast* of a separate Chromium — an image swapped several times a second, with your clicks played back into the real page as coordinates. It worked, and it always looked like what it was. Text was soft, scrolling stuttered, and hovering did nothing at all, because there is no such thing as hovering a screenshot. A cookie banner or a login field was something to watch rather than something to use.
+
+It is now a browser view docked straight into the window, composited the way any browser tab is:
+
+- **Hover works.** Links highlight, menus drop down, tooltips appear.
+- **Text is sharp** at any screen density, and scrolling is smooth.
+- **Selection works** — you can drag over text on the page and copy it.
+- **Nothing to download.** The agent's browser is the app's own, so there is no second Chromium to fetch, and it starts instantly.
+
+The agent drives it exactly as before, so every browsing task behaves the same — it just looks and feels like a browser now.
+
+## Fixed
+
+- **The agent's browser could fail to start at all.** On a machine with no Chrome, every `browser_open` failed with `Executable doesn't exist at …chrome-headless-shell.exe`, and OnFlip then advised running `npx playwright install` — which could not have helped. A hidden browser runs from a second download that OnFlip never fetched, and the check that was supposed to notice only looked for the first one. Seen on a real session: three attempts, three identical failures, a wasted turn, and no browser.
+- **Long sessions could still answer in the wrong language.** 0.8.8 carried your request through the point where a long conversation gets summarised, which was right but not enough — after that the model sees its own previous replies, all in the drifted language, and matches those. OnFlip now quotes your own words back to it on every turn.
+- **Edits could fail three at a time after a long session.** When a conversation is summarised the file contents go with it, and the agent would then edit from memory: `old_string not found`, three times in one reply, then a round trip to re-read what it had just lost. The summary now says plainly that the files must be read again.
+
+## Also in this release
+
+The **Working** label changes as a turn runs long — "Still working" after a minute, "Taking longer than usual" after five — and its glow turns orange. The animation is the same; only the colour changes, so it reads as the same indicator rather than as an alarm. While a reply is actually streaming it still says so, because that is the honest answer even on a long turn.
 
 ## Requirements
 
@@ -36,4 +50,6 @@ Windows 10/11, or macOS 13+. A ChatGPT account — the free plan is enough.
 
 ## Under the hood
 
-202 automated tests run on every push, up from 173. The Windows job had also been failing at random — on commits that changed nothing but Markdown — because a test was asserting against a timing budget tuned on a warm machine, and a cold CI runner could not meet it. Red builds nobody can explain are worse than none, so that is fixed too.
+Embedding a real browser means the app opens a debugging port for itself. It listens only on this machine, on a different port every run, and it is what lets the agent drive the view. If it cannot be opened, the old screencast takes over automatically; `ONFLIP_EMBEDDED_BROWSER=0` forces that too.
+
+207 automated tests run on every push, up from 202.
