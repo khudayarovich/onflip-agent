@@ -43,6 +43,19 @@ export interface OnFlipBridge {
   onUpdateAvailable(
     listener: (info: { current: string; latest?: string; url: string; available: boolean }) => void
   ): () => void;
+  /**
+   * The agent's browser is a real view docked into the window, so the panel
+   * tells the main process where it is instead of drawing anything itself.
+   */
+  browserViewBounds(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): Promise<boolean>;
+  browserViewHide(): Promise<boolean>;
+  /** False when the DevTools port never opened and the old screencast is in use. */
+  browserViewAvailable(): Promise<boolean>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
@@ -99,6 +112,10 @@ const bridge: OnFlipBridge = {
   appInfo: () => ipcRenderer.invoke("app-info"),
   checkUpdate: () => ipcRenderer.invoke("check-update"),
   openRelease: (url) => ipcRenderer.invoke("open-release", { url }),
+
+  browserViewBounds: (rect) => ipcRenderer.invoke("browser-view-bounds", rect),
+  browserViewHide: () => ipcRenderer.invoke("browser-view-hide"),
+  browserViewAvailable: () => ipcRenderer.invoke("browser-view-available"),
 
   setTheme: (theme) => ipcRenderer.invoke("set-theme", { theme }),
   setPrefs: (prefs) => ipcRenderer.invoke("set-prefs", prefs),

@@ -18,6 +18,14 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { Peer } from "../shared/wire";
 import { runSignIn, clearSignIn } from "./signin";
+import {
+  embeddedEnv,
+  enableEmbeddedBrowser,
+  ensureView,
+  hideView,
+  resolveEndpoint,
+  setViewBounds,
+} from "./browser-view";
 import { checkForUpdate } from "./updates";
 import {
   applyUpdate,
@@ -302,7 +310,10 @@ function spawnEngine(cwd: string): ChildProcess {
   // and the cookie worker needs Electron, whose ABI matches the sqlite
   // binding this app ships. Handing the path down is what makes the reader
   // work on a machine whose own Node was built against a different ABI.
-  const env = { ...process.env, ONFLIP_ELECTRON_PATH: process.execPath };
+  // ONFLIP_EMBEDDED_* is how the engine finds the view to drive. Absent
+  // when the DevTools port never opened, and the engine then launches a
+  // browser of its own exactly as it used to.
+  const env = { ...process.env, ONFLIP_ELECTRON_PATH: process.execPath, ...embeddedEnv() };
   try {
     const child = spawn(nodeBin, args, {
       cwd,
@@ -322,7 +333,7 @@ function spawnEngineViaElectron(args: string[], cwd: string): ChildProcess {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", ...embeddedEnv() },
   });
 }
 
@@ -662,6 +673,13 @@ function createWindow(cwd?: string): Workspace {
       ((input.control || input.meta) && input.shift && key === "r");
     if (reload) event.preventDefault();
   });
+  // Created with the window rather than when the panel first opens: the
+  // agent can be told to browse before anybody has looked at the panel, and
+  // the page has to exist for the engine to find it over CDP. A parked view
+  // is a blank about-page with zero bounds — cheap, and far cheaper than the
+  // whole second Chromium this replaces.
+  ensureView(win);
+
   // The custom maximise button swaps its glyph with the real window state.
   win.on("maximize", () => sendTo(ws, "win-state", { maximized: true }));
   win.on("unmaximize", () => sendTo(ws, "win-state", { maximized: false }));
@@ -786,6 +804,30 @@ function registerIpc(): void {
   });
 
   // Another window, another engine, another concurrent session.
+  // The panel owns the layout, so it measures its own placeholder and sends
+  // the rectangle; a native view knows nothing about CSS and would otherwise
+  // have to be positioned by guessing at the app's geometry.
+  ipcMain.handle(
+    "browser-view-bounds",
+    (e, payload: { x: number; y: number; width: number; height: number }) => {
+      const win = BrowserWindow.fromWebContents(e.sender);
+      if (!win) return false;
+      return setViewBounds(win, payload);
+    }
+  );
+
+  // Closing the panel must not throw the page away — the agent may still be
+  // working in it — so this only takes it off screen.
+  ipcMain.handle("browser-view-hide", (e) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (win) hideView(win);
+    return true;
+  });
+
+  // The renderer decides whether to draw a placeholder or the old screencast,
+  // and it cannot know which until it is told whether the port opened.
+  ipcMain.handle("browser-view-available", () => resolveEndpoint() !== null);
+
   ipcMain.handle("new-window", () => {
     createWindow();
     return true;
@@ -1255,6 +1297,11 @@ if (!app.isPackaged) {
   }
   app.setPath("userData", devData);
 }
+
+// Before anything else touches Chromium: a command-line switch appended
+// after it has initialised is ignored, and this one is what lets the
+// agent's browser be a real view inside the window.
+enableEmbeddedBrowser();
 
 const singleInstance = app.requestSingleInstanceLock();
 if (!singleInstance) {

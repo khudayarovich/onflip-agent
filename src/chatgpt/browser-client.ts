@@ -4649,13 +4649,33 @@ export type SignInProgress = "waiting" | "verifying" | "downloading";
  * OnFlip can drive at all. Playwright's own installer does the download,
  * into the same place its `executablePath()` looks afterwards.
  */
-export async function ensureBundledBrowser(onOutput?: (line: string) => void): Promise<boolean> {
-  try {
-    const exe = chromium.executablePath();
-    if (exe && fs.existsSync(exe)) return true;
-  } catch {
-    /* not installed */
+export async function ensureBundledBrowser(
+  onOutput?: (line: string) => void,
+  headless?: boolean
+): Promise<boolean> {
+  // `executablePath()` answers for the *headed* build, and a headless launch
+  // does not use it. Playwright 1.4x runs headless out of a second download,
+  // `chromium_headless_shell`, and the two are installed separately — so a
+  // machine with the headed build present passed this check and then failed
+  // to launch with "Executable doesn't exist at …chrome-headless-shell.exe",
+  // followed by Playwright's own advice to run `npx playwright install`,
+  // which the agent dutifully spent a turn on. Seen on a real session: three
+  // browser_open calls, three identical failures, no browser.
+  // Both builds, unless the caller knows it is launching headed. Playwright
+  // has no API for the shell's path, so there is nothing to check it against
+  // — and every caller here is already in a failure path, where re-running an
+  // installer that skips what it already has costs a second and fixes the
+  // case the old guard got wrong.
+  const wanted = headless === false ? ["chromium"] : ["chromium", "chromium-headless-shell"];
+  if (headless === false) {
+    try {
+      const exe = chromium.executablePath();
+      if (exe && fs.existsSync(exe)) return true;
+    } catch {
+      /* not installed */
+    }
   }
+
   let cli: string;
   try {
     // Not an exported subpath, so found beside the package's main entry.
@@ -4664,9 +4684,9 @@ export async function ensureBundledBrowser(onOutput?: (line: string) => void): P
   } catch {
     return false;
   }
-  logger.info("browser", "downloading the bundled browser");
+  logger.info("browser", "downloading the bundled browser", { wanted });
   return new Promise((resolve) => {
-    const child = spawn(process.execPath, [cli, "install", "chromium"], {
+    const child = spawn(process.execPath, [cli, "install", ...wanted], {
       // Harmless under plain Node; under Electron-as-Node it is what makes
       // the binary behave as Node for this child too.
       env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },

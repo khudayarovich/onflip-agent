@@ -37,6 +37,21 @@ interface OnFlipBridge {
   onUpdateAvailable?(
     listener: (info: { current: string; latest?: string; url: string; available: boolean }) => void
   ): () => void;
+  /**
+   * The agent's browser is a real view docked into the window, so the panel
+   * reports where it is rather than drawing anything itself. Optional because
+   * an older preload will not have them — the panel then falls back to the
+   * screencast it used to show.
+   */
+  browserViewBounds?(rect: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+  }): Promise<boolean>;
+  browserViewHide?(): Promise<boolean>;
+  /** False when the DevTools port never opened and the screencast is in use. */
+  browserViewAvailable?(): Promise<boolean>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;

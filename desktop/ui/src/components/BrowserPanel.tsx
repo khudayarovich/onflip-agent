@@ -4,16 +4,23 @@ import { useT } from "../i18n";
 import { Close } from "./icons";
 
 /**
- * The browser the agent drives, live and touchable.
+ * The browser the agent drives.
  *
- * That browser is a real Chromium window owned by Playwright, in its own OS
- * window and its own process — it cannot be reparented into this app. So the
- * panel shows its screencast, and plays the user's input back into it:
- * clicks, scrolls and typing land on the real page as fractions of the
- * frame, so the panel's scaling never has to agree with the viewport. A
- * watch-only panel kept failing the same moment — a cookie banner or a
- * login field the user could see and not touch, with the agent as the only
- * pair of hands.
+ * There are two of these, and which one runs depends on whether the app got
+ * a DevTools port at startup.
+ *
+ * **The real one.** A `WebContentsView` docked into the window, composited by
+ * Chromium like any other browser tab. This component then draws *nothing* —
+ * it is a hole in the layout that measures itself and tells the main process
+ * where to put the view. Everything about it is native: hover states, text
+ * selection, smooth scrolling, sharp text at any pixel density.
+ *
+ * **The fallback.** What this used to be, and still is when the port could
+ * not be opened: a screencast of a Chromium of Playwright's own, shown as an
+ * `<img>` replaced several times a second, with the user's clicks played back
+ * into the real page as fractions of the frame. It works, and it always
+ * looked like what it was — a video of a browser, with no hover, because
+ * there is no such thing as hovering a screenshot.
  */
 
 export interface BrowserFrameDTO {
@@ -69,6 +76,27 @@ export function BrowserPanel({
   const t = useT();
   const [zoom, setZoom] = useState(false);
   const seenRef = useRef<string | undefined>(undefined);
+  /** null until the main process has said which of the two panels this is. */
+  const [embedded, setEmbedded] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    const ask = window.onflip.browserViewAvailable;
+    if (!ask) {
+      setEmbedded(false);
+      return;
+    }
+    void ask()
+      .then((ok: boolean) => {
+        if (alive) setEmbedded(ok);
+      })
+      .catch(() => {
+        if (alive) setEmbedded(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // A new *page* drops any zoom so it is shown whole. Keyed on the URL, not
   // the image: a live stream replaces the image several times a second, and
@@ -85,10 +113,65 @@ export function BrowserPanel({
   // a drag would otherwise resize the page on every mouse move.
   const bodyRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    if (embedded === null) return;
     const el = bodyRef.current;
-    if (!el || !open) return;
+    if (!open || !el) {
+      // Off screen, not unloaded: the agent may still be working in the page,
+      // and a half-filled form nobody can see is still a form.
+      if (embedded) void window.onflip.browserViewHide?.().catch(() => {});
+      return;
+    }
+
     let timer: number | undefined;
-    const report = () => {
+    let frame = 0;
+    let last = "";
+
+    // The docked view is positioned every frame the layout moves, with no
+    // debounce. A native view that lags the panel it sits in tears away from
+    // it visibly during a drag — the delay that is right for relaunching a
+    // browser at a new viewport is completely wrong for moving a rectangle.
+    const place = () => {
+      const rect = el.getBoundingClientRect();
+      // A rectangle with no area is the panel mid-animation, not a place to
+      // put anything. Sending it would park the view at zero size, which is
+      // exactly how this went wrong.
+      if (rect.width < 2 || rect.height < 2) return;
+      const key = `${rect.left}|${rect.top}|${rect.width}|${rect.height}`;
+      if (key === last) return;
+      last = key;
+      void window.onflip
+        .browserViewBounds?.({
+          x: rect.left,
+          y: rect.top,
+          width: rect.width,
+          height: rect.height,
+        })
+        .catch(() => {});
+    };
+
+    /**
+     * Keep measuring until the panel has finished opening.
+     *
+     * A single call when the effect runs measures nothing: the panel animates
+     * out of a zero-width grid column, and the body inside it has a fixed
+     * `min-width`, so the body's own box never changes size while the column
+     * grows. No ResizeObserver fires, no second measurement happens, and the
+     * view stays where the first one put it — which was nowhere. Measured:
+     * the view sat at 0×0 with the panel open at 459×763, and a synthetic
+     * window resize was enough to snap it into place.
+     */
+    const settle = () => {
+      const until = performance.now() + 600;
+      const tick = () => {
+        place();
+        if (performance.now() < until) frame = requestAnimationFrame(tick);
+      };
+      tick();
+    };
+
+    // The screencast browser is relaunched at the new size, which is far too
+    // expensive to do on every mouse move during a drag.
+    const resize = () => {
       window.clearTimeout(timer);
       timer = window.setTimeout(() => {
         const rect = el.getBoundingClientRect();
@@ -106,14 +189,26 @@ export function BrowserPanel({
         }
       }, 350);
     };
-    report();
+
+    const report = embedded ? place : resize;
+    if (embedded) settle();
+    else report();
     const observer = new ResizeObserver(report);
     observer.observe(el);
+    // The panel's own box is what the grid resizes; the body inside it keeps
+    // a fixed width. Watching only the body misses every drag of the divider.
+    const panel = el.closest(".browser-panel");
+    if (panel) observer.observe(panel);
+    // A window move or a sidebar collapse changes where the panel is without
+    // changing its size, and the view has to follow both.
+    window.addEventListener("resize", report);
     return () => {
       window.clearTimeout(timer);
+      cancelAnimationFrame(frame);
       observer.disconnect();
+      window.removeEventListener("resize", report);
     };
-  }, [open]);
+  }, [open, embedded]);
 
   const host = (() => {
     if (!frame?.url) return "";
@@ -131,8 +226,11 @@ export function BrowserPanel({
         <span className="term-cwd" title={frame?.url ?? ""}>
           {host}
         </span>
-        {frame?.live && <span className="browser-live" title={t("browserLive")} />}
-        {frame?.image && (
+        {frame?.live && !embedded && <span className="browser-live" title={t("browserLive")} />}
+        {/* Zoom is a screencast affordance: the image had to be scaled to fit
+            the panel, so being able to see it whole mattered. A docked view
+            renders at the panel's size and has the page's own zoom. */}
+        {frame?.image && !embedded && (
           <button
             className="term-btn"
             title={t("browserZoom")}
@@ -146,8 +244,14 @@ export function BrowserPanel({
         </button>
       </div>
 
-      <div className="browser-body" ref={bodyRef}>
-        {frame?.image ? (
+      <div className={`browser-body${embedded ? " embedded" : ""}`} ref={bodyRef}>
+        {embedded ? (
+          // Deliberately empty. The real view is composited over this
+          // rectangle by the window itself, so anything drawn here would be
+          // behind it — and a placeholder nobody can see is a placeholder
+          // that gets left in by mistake.
+          null
+        ) : frame?.image ? (
           <>
             <img
               className={`browser-shot${zoom ? " zoom" : ""} interactive`}

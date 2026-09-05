@@ -25,6 +25,57 @@ import { ensureBundledBrowser } from "../chatgpt/browser-client";
 
 let context: BrowserContext | null = null;
 let page: Page | null = null;
+/**
+ * Set when this page is the desktop's own docked view rather than a browser
+ * this process launched.
+ *
+ * Two things follow from it. Nothing here may close that browser — it is the
+ * app window, and quitting it would take the whole desktop with it. And the
+ * screencast is pointless: the user is looking at the real thing.
+ */
+let embedded = false;
+
+/**
+ * Attach to the browser view the desktop has docked into its own window.
+ *
+ * Electron is Chromium, so a `WebContentsView` answers the DevTools protocol
+ * exactly like a tab, and Playwright drives it over CDP with every tool in
+ * this file working unchanged. What this buys is not a shorter code path but
+ * a real browser on screen: composited with the rest of the UI, sharp at any
+ * pixel density, with working hover and native scrolling — none of which a
+ * screencast can have.
+ *
+ * The mark is how the right page is picked. The endpoint also exposes the
+ * app's own interface, which is a page too and emphatically not something to
+ * hand to an agent, so the view is parked on a URL carrying a nonce the
+ * desktop generated. Playwright's handle survives navigation, so it only has
+ * to be found once.
+ */
+async function attachEmbedded(endpoint: string, mark: string): Promise<Page | null> {
+  try {
+    const browser = await chromium.connectOverCDP(endpoint, { timeout: 5_000 });
+    for (const ctx of browser.contexts()) {
+      for (const candidate of ctx.pages()) {
+        if (!candidate.url().includes(mark)) continue;
+        context = ctx;
+        embedded = true;
+        logger.info("browser-tool", "attached to the desktop's browser view", { endpoint });
+        return candidate;
+      }
+    }
+    // Connected, but the view is not there — a window that has not opened one
+    // yet, or a build where creating it failed. Launching our own is a worse
+    // experience, not a broken one.
+    logger.warn("browser-tool", "no marked view on the desktop endpoint; launching instead");
+    await browser.close().catch(() => {});
+  } catch (e) {
+    logger.warn("browser-tool", "could not attach to the desktop's browser view", {
+      endpoint,
+      error: e instanceof Error ? e.message.slice(0, 160) : String(e),
+    });
+  }
+  return null;
+}
 
 /**
  * The size the agent's browser renders at.
@@ -152,7 +203,7 @@ async function launch(headless: boolean): Promise<BrowserContext> {
     // download timed out, and a turn was spent on advice that could not work
     // from inside the sandbox anyway.
     logger.info("browser-tool", "no browser installed; fetching the bundled one");
-    if (await ensureBundledBrowser()) {
+    if (await ensureBundledBrowser(undefined, headless)) {
       return await chromium.launchPersistentContext(profileDir(), options);
     }
     throw new Error(
@@ -195,6 +246,22 @@ function armIdleClose(): void {
 async function ensurePage(): Promise<Page> {
   armIdleClose();
   if (page && !page.isClosed()) return page;
+
+  // The desktop's own docked view, when there is one. Tried first and every
+  // time, because a window can be opened after this process started.
+  const endpoint = process.env.ONFLIP_EMBEDDED_CDP;
+  const mark = process.env.ONFLIP_EMBEDDED_MARK;
+  if (endpoint && mark) {
+    const attached = await attachEmbedded(endpoint, mark);
+    if (attached) {
+      page = attached;
+      page.setDefaultTimeout(20_000);
+      // No screencast: the user is looking at the real view, and streaming
+      // frames of a page already on screen is pure waste.
+      return page;
+    }
+  }
+
   // The env var wins so a script can drive this without touching config;
   // a window that steals focus is fine for a person and not for a test.
   // Windowless by default: the desktop shows this browser in its own panel,
@@ -219,6 +286,29 @@ export async function closeAutomationBrowser(): Promise<void> {
   if (idleTimer) {
     clearTimeout(idleTimer);
     idleTimer = null;
+  }
+  // The docked view belongs to the desktop, not to this process, and its
+  // context is the whole Electron app — closing it would take the window,
+  // the transcript and every other panel with it. `browser_close` is a
+  // routine call the model makes at the end of a browsing task, so this is
+  // not a corner case: it is what would happen every single time. Blanking
+  // the page is the equivalent gesture, and the view is reused afterwards.
+  if (embedded) {
+    try {
+      // Back to the marked page, not `about:blank`: the mark in that URL is
+      // how the next `browser_open` finds this view again among the app's own
+      // pages, and blanking it plainly would strand the view for the rest of
+      // the session.
+      const blank = process.env.ONFLIP_EMBEDDED_BLANK;
+      if (page && !page.isClosed() && blank) await page.goto(blank);
+    } catch {
+      /* the window went away on its own */
+    }
+    page = null;
+    context = null;
+    embedded = false;
+    frameSink?.({ closed: true });
+    return;
   }
   try {
     if (context) await context.close();
