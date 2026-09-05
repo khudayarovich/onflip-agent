@@ -5,6 +5,7 @@ import { ToolCard } from "./ToolCard";
 import logo from "../assets/logo.svg";
 import { LangContext, useT } from "../i18n";
 import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/skills";
+import { ChevronDown, Close, Info } from "./icons";
 
 export interface StreamingState {
   active: boolean;
@@ -232,31 +233,35 @@ export function Transcript({
               {matchCount === 0 ? "0/0" : `${Math.min(matchCursor, matchCount - 1) + 1}/${matchCount}`}
             </span>
             <button title="Previous (Shift+Enter)" onClick={() => step(-1)}>
-              ▲
+              <span className="flip">
+                <ChevronDown size={13} />
+              </span>
             </button>
             <button title="Next (Enter)" onClick={() => step(1)}>
-              ▼
+              <ChevronDown size={13} />
             </button>
             <button title="Close (Esc)" onClick={closeSearch}>
-              ✕
+              <Close size={13} />
             </button>
           </div>
         </div>
       )}
       <div className="transcript-inner">
-        {items.map((item) =>
-          item.type === "user" ? (
+        {groupNotices(items).map((entry) =>
+          entry.kind === "notices" ? (
+            <NoticeGroup key={entry.id} notices={entry.notices} />
+          ) : entry.item.type === "user" ? (
             <UserMessage
-              key={item.id}
-              id={item.id}
-              text={item.text}
-              delivery={deliveries[item.id]}
+              key={entry.item.id}
+              id={entry.item.id}
+              text={entry.item.text}
+              delivery={deliveries[entry.item.id]}
               onRevise={onRevise}
             />
           ) : (
             <TranscriptItem
-              key={item.id}
-              item={item}
+              key={entry.item.id}
+              item={entry.item}
               toolProgress={toolProgress}
               onResume={onResume}
             />
@@ -374,6 +379,81 @@ function UserMessage({
           ) : (
             t("deliveryFailed")
           )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// notices, folded away
+// ---------------------------------------------------------------------------
+
+type Entry =
+  | { kind: "item"; item: ChatItem }
+  | { kind: "notices"; id: string; notices: Extract<ChatItem, { type: "notice" }>[] };
+
+/**
+ * Fold runs of notices into one collapsed strip.
+ *
+ * Notices are OnFlip talking about its own plumbing — a turn file ChatGPT
+ * could not read and is being retried, a reply that arrived without its
+ * closing block. Every one of them describes something OnFlip then handled
+ * by itself, and none of them is about the user's work. Printed inline in
+ * red-flag language between the messages, they read like the app coming
+ * apart, and they were the loudest thing on screen during a turn that was
+ * in fact going fine.
+ *
+ * They are not deleted, because when something *is* wrong they are the first
+ * place to look. They are one line, folded, and one click from being read.
+ */
+export function groupNotices(items: ChatItem[]): Entry[] {
+  const out: Entry[] = [];
+  for (const item of items) {
+    if (item.type !== "notice") {
+      out.push({ kind: "item", item });
+      continue;
+    }
+    const last = out[out.length - 1];
+    // Only a run that is genuinely adjacent is folded together. A notice with
+    // a message after it belongs to that moment in the conversation, and
+    // gathering the whole session into one strip would lose where they were.
+    if (last && last.kind === "notices") last.notices.push(item);
+    else out.push({ kind: "notices", id: item.id, notices: [item] });
+  }
+  return out;
+}
+
+function NoticeGroup({
+  notices,
+}: {
+  notices: Extract<ChatItem, { type: "notice" }>[];
+}): React.ReactElement {
+  const t = useT();
+  const [open, setOpen] = useState(false);
+  const label =
+    notices.length === 1
+      ? t("logsNote", { count: notices.length })
+      : t("logsNotes", { count: notices.length });
+
+  return (
+    <div className={`notice-group${open ? " open" : ""}`}>
+      <button className="notice-group-head" onClick={() => setOpen(!open)} aria-expanded={open}>
+        <span className="notice-group-icon">
+          <Info size={12} />
+        </span>
+        <span className="notice-group-label">{open ? t("logsHide") : label}</span>
+        <span className={`notice-group-chev${open ? " open" : ""}`}>
+          <ChevronDown size={12} />
+        </span>
+      </button>
+      {open && (
+        <div className="notice-group-body">
+          {notices.map((n) => (
+            <div key={n.id} className="msg-notice">
+              {n.text}
+            </div>
+          ))}
         </div>
       )}
     </div>
