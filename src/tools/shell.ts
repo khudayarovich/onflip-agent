@@ -82,12 +82,27 @@ export function shellHost(): ShellHost {
       ],
       // The probe runs after the command, so on its own it would make every
       // command exit 0 — a failed build reported as success, and the model
-      // moving on. The status is captured first and re-raised at the end:
-      // `$?` before anything else can overwrite it (it is the cmdlet
-      // verdict), $LASTEXITCODE for a native program's own code.
+      // moving on. The status is captured first: `$?` before anything else
+      // can overwrite it (it is the cmdlet verdict), $LASTEXITCODE for a
+      // native program's own code.
+      //
+      // The code then travels *in the marker* rather than through `exit`.
+      // `exit` discards PowerShell's pending formatter output, and the
+      // formatter is how every object-producing command prints: measured,
+      // `Get-ChildItem | Select-Object Name, Length` came back completely
+      // empty, and so did the cwd marker on the same line. That is most of
+      // idiomatic PowerShell silently returning nothing — seen in a real
+      // session where the agent asked for file sizes three times, got blank
+      // output each time, and burned four turns deciding its own code was
+      // broken. Strings and booleans survived, which is what made it look
+      // like an occasional glitch rather than a rule.
+      //
+      // Without `exit` the script ends normally, the formatter drains, and
+      // the marker is the last line written. Verified against a failing
+      // cmdlet (1), a native `exit 3` (3) and success (0).
       cwdProbe:
         "; $__ok = $?; $__rc = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($__ok) { 0 } else { 1 }" +
-        `; Write-Output ("${CWD_MARKER}:" + (Get-Location).Path); exit $__rc`,
+        `; Write-Output ("${CWD_MARKER}:" + $__rc + ":" + (Get-Location).Path)`,
     };
   }
   const file = process.env.SHELL && process.env.SHELL.includes("bash") ? process.env.SHELL : "/bin/sh";
@@ -97,7 +112,9 @@ export function shellHost(): ShellHost {
     args: (command) => ["-c", command],
     // Same shape as the PowerShell probe: keep the command's status, print
     // the directory, then exit with what the command exited with.
-    cwdProbe: `; __rc=$?; printf '${CWD_MARKER}:%s\\n' "$PWD"; exit $__rc`,
+    // Same marker shape as Windows so one parser reads both. `exit` is kept
+    // here because a POSIX shell has no deferred formatter to lose.
+    cwdProbe: `; __rc=$?; printf '${CWD_MARKER}:%s:%s\\n' "$__rc" "$PWD"; exit $__rc`,
   };
 }
 
@@ -275,13 +292,29 @@ function execute(
       clearTimeout(timer);
       signal.removeEventListener("abort", onAbort);
 
-      // Pull the trailing cwd probe out of stdout.
+      // Pull the trailing probe out of stdout. It carries both the working
+      // directory and the command's real exit code — see `cwdProbe`, where
+      // the code travels this way because `exit` would discard PowerShell's
+      // pending object output.
       let resolvedCwd: string | null = null;
+      let markerCode: number | null = null;
       const lines = stdout.split(/\r?\n/);
       for (let i = lines.length - 1; i >= 0; i--) {
         const idx = lines[i].indexOf(`${CWD_MARKER}:`);
         if (idx !== -1) {
-          resolvedCwd = lines[i].slice(idx + CWD_MARKER.length + 1).trim();
+          const payload = lines[i].slice(idx + CWD_MARKER.length + 1).trim();
+          // Only the first colon separates the code from the path: a Windows
+          // path is full of them.
+          const split = payload.indexOf(":");
+          const rc = split === -1 ? "" : payload.slice(0, split);
+          if (/^-?\d+$/.test(rc)) {
+            markerCode = Number(rc);
+            resolvedCwd = payload.slice(split + 1).trim();
+          } else {
+            // A probe from before the code was added, or a mangled line.
+            // The path is still worth having.
+            resolvedCwd = payload;
+          }
           // Output without a trailing newline shares the marker's line, so
           // only the marker goes — dropping the whole line turned
           // `Write-Host -NoNewline hello` into "(no output)".
@@ -293,7 +326,9 @@ function execute(
       resolve({
         stdout: lines.join("\n"),
         stderr,
-        code,
+        // The marker is the authority when it arrived: the process itself now
+        // exits 0 on Windows whatever the command did.
+        code: markerCode ?? code,
         timedOut,
         aborted,
         cwd: resolvedCwd,
@@ -370,7 +405,7 @@ export const bashTool: ToolDefinition = {
     if (!decision.allow) return denied("Command", decision.reason);
 
     if (asBool(args.background)) {
-      const started = startBackground(command, cwd);
+      const started = await startBackground(command, cwd);
       return cwdNote ? { ...started, output: `${cwdNote}\n${started.output}` } : started;
     }
 
@@ -419,7 +454,22 @@ export const bashTool: ToolDefinition = {
   },
 };
 
-function startBackground(command: string, cwd: string): ToolResult {
+/**
+ * How long a background command gets to prove it is still alive.
+ *
+ * Sized from the slow case rather than the obvious one. A bare PowerShell
+ * starts in 125ms, but a *failing* command takes far longer than that to
+ * fail: measured on this machine, `definitelynotarealprogram --serve` needed
+ * 761ms, because PowerShell searches PATH and then builds a full
+ * CommandNotFoundException record before exiting. A 400ms window let exactly
+ * the case this exists to catch slip through.
+ *
+ * The cost is about a second on each background start, paid once, against
+ * the four turns a phantom server cost in a real session.
+ */
+const BACKGROUND_SETTLE_MS = 1_200;
+
+async function startBackground(command: string, cwd: string): Promise<ToolResult> {
   const host = shellHost();
   const id = `job_${++jobCounter}`;
   const child = spawn(host.file, host.args(command), {
@@ -460,6 +510,51 @@ function startBackground(command: string, cwd: string): ToolResult {
     job.exitCode = 127;
   });
   jobs.set(id, job);
+
+  // "Started in the background" used to be said the instant `spawn` returned,
+  // which is before the child can possibly have failed. Live, on a machine
+  // with no `python` on PATH, `python -m http.server 8000` was reported as
+  // started; the agent then spent four turns and several rewrites hunting a
+  // server that had never existed, because every check it ran was right and
+  // the only wrong thing it had been told was this line.
+  //
+  // So the claim is now checked before it is made. A command still running
+  // after the settle window is reported as started, exactly as before.
+  await new Promise<void>((resolve) => {
+    if (job.exitCode !== null) return resolve();
+    const timer = setTimeout(resolve, BACKGROUND_SETTLE_MS);
+    child.once("close", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+    child.once("error", () => {
+      clearTimeout(timer);
+      resolve();
+    });
+  });
+
+  if (job.exitCode !== null) {
+    jobs.delete(id);
+    const detail = job.output.join("\n").trim();
+    // Exiting 0 straight away is not a failure — it is a command that simply
+    // was not long-running, and saying "started in the background" about it
+    // would be just as untrue as the failure case.
+    if (job.exitCode === 0) {
+      return ok(
+        `The command finished immediately rather than staying in the background.\n${detail || "(no output)"}`,
+        { title: `${command} (finished)` }
+      );
+    }
+    const how =
+      job.exitCode === 127
+        ? "it could not be started at all"
+        : `it exited immediately with code ${job.exitCode}`;
+    return err(
+      `The background command did not stay running — ${how}.\n` +
+        (detail ? `${detail}\n` : "") +
+        "Nothing is listening, so do not check it as though it were. Fix the command, or run it in the foreground to see the whole error."
+    );
+  }
 
   return ok(
     `Started in the background as ${id}. Read its output with the \`job_output\` tool (id: "${id}").`,
