@@ -3389,3 +3389,52 @@ a:hover {
 .sched-status.failed {
   color: var(--red);
 }
+
+/* -- telegram remote ------------------------------------------------------- */
+
+.setting-row.stack {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 8px;
+}
+.tg-field {
+  display: flex;
+  gap: 8px;
+}
+.tg-field input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12.5px;
+  padding: 8px 11px;
+  outline: none;
+}
+.tg-field input:focus {
+  border-color: var(--accent);
+}
+/* The connection light, so the state is readable before the words are. */
+.tg-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  margin-right: 6px;
+  background: var(--text-muted);
+  vertical-align: 1px;
+}
+.tg-dot.ok {
+  background: var(--green);
+}
+.tg-dot.bad {
+  background: var(--red);
+}
+.tg-dot.warm {
+  background: var(--yellow);
+}
+.tg-warn {
+  color: var(--yellow);
+}

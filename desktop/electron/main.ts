@@ -45,6 +45,12 @@ import {
   type FireResult,
   type StoredSchedule,
 } from "./schedules";
+import {
+  saveTelegram,
+  startTelegram,
+  telegramOnEvent,
+  telegramPublic,
+} from "./telegram";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
@@ -73,6 +79,8 @@ interface Workspace {
   lastFinal?: { kind: "assistant" | "question"; text: string };
   /** The project this window is on, as its engine last reported it. */
   cwd?: string;
+  /** The engine's last status, so the bot can answer /status instantly. */
+  lastStatus?: EngineStatus;
 }
 
 // ---------------------------------------------------------------------------
@@ -518,6 +526,7 @@ function startEngine(ws: Workspace, requested?: string): void {
   wire.onEvent = (event, data) => {
     if (event === "status") {
       const status = data as EngineStatus;
+      ws.lastStatus = status;
       if (status.cwd) {
         // Remembered per window as well as globally: a scheduled prompt has
         // to reach the window on *its* project, not whichever was last used.
@@ -565,6 +574,9 @@ function startEngine(ws: Workspace, requested?: string): void {
         else if (ws.lastFinal?.kind !== "question") notifyAway(ws, "finished", ws.lastFinal?.text ?? "");
       }
     }
+    // The bot mirrors whichever window it is driving. Fire-and-forget:
+    // a Telegram hiccup must never hold up the renderer's own update.
+    if (ws === frontWorkspace()) void telegramOnEvent(event, data);
     sendTo(ws, "engine-event", { event, data });
   };
 
@@ -933,6 +945,13 @@ function registerIpc(): void {
   });
 
   // -- scheduled prompts ---------------------------------------------------
+  ipcMain.handle("telegram-get", () => telegramPublic());
+  ipcMain.handle(
+    "telegram-save",
+    (_e, payload: { enabled?: boolean; token?: string; allowedIds?: string }) =>
+      saveTelegram(payload)
+  );
+
   ipcMain.handle("schedules-list", () => listSchedules());
   ipcMain.handle(
     "schedule-create",
@@ -1456,6 +1475,26 @@ if (!singleInstance) {
       for (const ws of workspaces.values()) {
         if (!ws.win.isDestroyed()) sendTo(ws, "schedules-changed", {});
       }
+    });
+
+    // The Telegram remote. It drives whichever window is in front, through
+    // the same engine RPC the window itself uses — there is one OnFlip and
+    // two ways to reach it.
+    startTelegram({
+      status: () => {
+        const ws = frontWorkspace();
+        return { ...(ws?.lastStatus ?? {}), cwd: ws?.cwd };
+      },
+      call: async (method, params) => {
+        const ws = frontWorkspace();
+        if (!ws?.peer || ws.engineExited) throw new Error("OnFlip is not running.");
+        return (await ws.peer.request(method, params ?? {})) as never;
+      },
+      changed: () => {
+        for (const ws of workspaces.values()) {
+          if (!ws.win.isDestroyed()) sendTo(ws, "telegram-changed", {});
+        }
+      },
     });
     registerIpc();
     createWindow();

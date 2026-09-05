@@ -327,6 +327,8 @@ export function SettingsModal({
         )}
       </div>
 
+      <TelegramSection />
+
       <div className="settings-section">
         <h3>{t("setAbout")}</h3>
         <div className="modal-note">
@@ -335,5 +337,141 @@ export function SettingsModal({
         </div>
       </div>
     </Modal>
+  );
+}
+
+
+type TelegramState = {
+  enabled: boolean;
+  hasToken: boolean;
+  allowedIds: string;
+  state: "off" | "connecting" | "connected" | "error";
+  detail?: string;
+  username?: string;
+};
+
+/**
+ * The Telegram remote.
+ *
+ * The token is write-only from here: it is stored encrypted by the OS and
+ * never sent back, so the field shows whether one is set rather than what it
+ * is. Somebody reading over a shoulder — or a screen recording of this
+ * dialog — should not walk away with control of the machine.
+ */
+function TelegramSection(): React.ReactElement {
+  const t = useT();
+  const [info, setInfo] = useState<TelegramState | null>(null);
+  const [token, setToken] = useState("");
+  const [ids, setIds] = useState("");
+  const [dirty, setDirty] = useState(false);
+
+  const refresh = () => {
+    void window.onflip
+      .telegramGet?.()
+      .then((next) => {
+        setInfo(next);
+        if (!dirty) setIds(next.allowedIds);
+      })
+      .catch(() => setInfo(null));
+  };
+  useEffect(() => {
+    refresh();
+    return window.onflip.onTelegramChanged?.(refresh);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  if (!info) return <></>;
+
+  const save = (patch: { enabled?: boolean; token?: string; allowedIds?: string }) => {
+    void window.onflip.telegramSave?.(patch).then((next) => {
+      setInfo(next);
+      setDirty(false);
+      if (patch.token !== undefined) setToken("");
+    });
+  };
+
+  const dot =
+    info.state === "connected"
+      ? "ok"
+      : info.state === "error"
+        ? "bad"
+        : info.state === "connecting"
+          ? "warm"
+          : "off";
+
+  return (
+    <div className="settings-section">
+      <h3>{t("setTelegram")}</h3>
+      <div className="modal-note">{t("setTelegramIntro")}</div>
+
+      <div className="setting-row">
+        <div className="info">
+          <div className="name">{t("setTelegramEnable")}</div>
+          <div className="desc">
+            <span className={`tg-dot ${dot}`} />
+            {info.state === "connected"
+              ? info.username
+                ? `@${info.username}`
+                : t("setTelegramOn")
+              : info.state === "connecting"
+                ? t("setTelegramConnecting")
+                : info.state === "error"
+                  ? (info.detail ?? t("setTelegramError"))
+                  : t("setTelegramOff")}
+          </div>
+        </div>
+        <Toggle on={info.enabled} onChange={(on) => save({ enabled: on })} />
+      </div>
+
+      <div className="setting-row stack">
+        <div className="info">
+          <div className="name">{t("setTelegramToken")}</div>
+          <div className="desc">
+            {info.hasToken ? t("setTelegramTokenSet") : t("setTelegramTokenHelp")}
+          </div>
+        </div>
+        <div className="tg-field">
+          <input
+            type="password"
+            value={token}
+            spellCheck={false}
+            placeholder={info.hasToken ? "••••••••••••••••" : "123456:ABC-DEF…"}
+            onChange={(e) => setToken(e.target.value)}
+          />
+          <button className="btn" disabled={!token.trim()} onClick={() => save({ token: token.trim() })}>
+            {t("setTelegramSave")}
+          </button>
+          {info.hasToken && (
+            <button className="btn danger" onClick={() => save({ token: "", enabled: false })}>
+              {t("clear")}
+            </button>
+          )}
+        </div>
+      </div>
+
+      <div className="setting-row stack">
+        <div className="info">
+          <div className="name">{t("setTelegramIds")}</div>
+          <div className="desc">{t("setTelegramIdsHelp")}</div>
+        </div>
+        <div className="tg-field">
+          <input
+            value={ids}
+            spellCheck={false}
+            placeholder="123456789"
+            onChange={(e) => {
+              setIds(e.target.value);
+              setDirty(true);
+            }}
+          />
+          <button className="btn" disabled={!dirty} onClick={() => save({ allowedIds: ids })}>
+            {t("setTelegramSave")}
+          </button>
+        </div>
+      </div>
+      {info.enabled && info.hasToken && !ids.trim() && (
+        <div className="modal-note tg-warn">{t("setTelegramNoIds")}</div>
+      )}
+    </div>
   );
 }

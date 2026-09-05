@@ -78,6 +78,28 @@ export interface OnFlipBridge {
   scheduleDelete(id: string): Promise<boolean>;
   scheduleRun(id: string): Promise<{ status: string; detail?: string }>;
   onSchedulesChanged(listener: () => void): () => void;
+  /** The Telegram remote: its state, and the fields that configure it. */
+  telegramGet(): Promise<{
+    enabled: boolean;
+    hasToken: boolean;
+    allowedIds: string;
+    state: "off" | "connecting" | "connected" | "error";
+    detail?: string;
+    username?: string;
+  }>;
+  telegramSave(patch: {
+    enabled?: boolean;
+    token?: string;
+    allowedIds?: string;
+  }): Promise<{
+    enabled: boolean;
+    hasToken: boolean;
+    allowedIds: string;
+    state: "off" | "connecting" | "connected" | "error";
+    detail?: string;
+    username?: string;
+  }>;
+  onTelegramChanged(listener: () => void): () => void;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
@@ -149,6 +171,13 @@ const bridge: OnFlipBridge = {
     const handler = () => listener();
     ipcRenderer.on("schedules-changed", handler);
     return () => ipcRenderer.removeListener("schedules-changed", handler);
+  },
+  telegramGet: () => ipcRenderer.invoke("telegram-get"),
+  telegramSave: (patch) => ipcRenderer.invoke("telegram-save", patch),
+  onTelegramChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("telegram-changed", handler);
+    return () => ipcRenderer.removeListener("telegram-changed", handler);
   },
   setTheme: (theme) => ipcRenderer.invoke("set-theme", { theme }),
   setPrefs: (prefs) => ipcRenderer.invoke("set-prefs", prefs),
