@@ -125,7 +125,7 @@ import {
   ToolCallDTO,
   ToolResultDTO,
 } from "../shared/protocol";
-import { buildFileDiff } from "./diffs";
+import { buildFileDiff, FULL_MAX_CHARS, FULL_MAX_LINES } from "./diffs";
 import { replayItems, stripMentionNote } from "./replay";
 import { expandSkillToken } from "../shared/skills";
 import { subjectFor } from "./subjects";
@@ -2229,7 +2229,15 @@ export class Engine {
     }
     const out: FileDiff[] = [];
     for (const [file, { before, after }] of byFile) {
-      out.push(buildFileDiff(file, this.cwd, before ?? "", after ?? ""));
+      // The whole diff, not a preview: this is the modal whose job is showing
+      // everything, and it pages what it renders rather than relying on the
+      // payload being small.
+      out.push(
+        buildFileDiff(file, this.cwd, before ?? "", after ?? "", {
+          maxLines: FULL_MAX_LINES,
+          maxChars: FULL_MAX_CHARS,
+        })
+      );
     }
     for (const file of unavailableFiles) {
       const rel = path.relative(this.cwd, file).replace(/\\/g, "/") || file;

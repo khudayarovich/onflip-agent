@@ -1,12 +1,34 @@
 import React from "react";
 import type { FileDiff } from "../../../shared/protocol";
+import { splitOnMatches } from "../../../shared/diff-search";
+
+/** A line's text with every occurrence of `query` marked. */
+function Highlighted({ text, query }: { text: string; query: string }): React.ReactElement {
+  if (!query) return <>{text}</>;
+  return (
+    <>
+      {splitOnMatches(text, query).map((part, i) =>
+        part.hit ? (
+          <mark key={i} className="diff-hit">
+            {part.text}
+          </mark>
+        ) : (
+          <React.Fragment key={i}>{part.text}</React.Fragment>
+        )
+      )}
+    </>
+  );
+}
 
 export function DiffView({
   diff,
   showHeader = true,
+  highlight = "",
 }: {
   diff: FileDiff;
   showHeader?: boolean;
+  /** Search term to mark within each line, if any. */
+  highlight?: string;
 }): React.ReactElement {
   if (diff.unavailable) {
     return (
@@ -41,7 +63,7 @@ export function DiffView({
           <div key={i} className={`diff-line ${line.kind}`}>
             <span className="ln">{line.newLine ?? line.oldLine ?? ""}</span>
             <span className="code">
-              {marker} {line.text}
+              {marker} <Highlighted text={line.text} query={highlight} />
             </span>
           </div>
         );
