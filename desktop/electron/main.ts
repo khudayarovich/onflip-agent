@@ -645,6 +645,23 @@ function createWindow(cwd?: string): Workspace {
     if (devServer && url.startsWith(devServer)) return;
     e.preventDefault();
   });
+  // Reload is not a thing this app can afford, and the keys for it are on
+  // everyone's fingers. Dropping the application menu took the menu's own
+  // accelerators away but not these: Ctrl+F5 still threw away the window
+  // mid-turn — the transcript, the running approval prompt, the lot — while
+  // the engine carried on working for a renderer that no longer existed.
+  // Swallowed at the input event because that catches every route to it,
+  // rather than only the one the menu owned.
+  win.webContents.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown") return;
+    const key = input.key.toLowerCase();
+    const reload =
+      key === "f5" ||
+      ((input.control || input.meta) && (key === "r" || key === "f5")) ||
+      // Chromium's own hard-reload pair.
+      ((input.control || input.meta) && input.shift && key === "r");
+    if (reload) event.preventDefault();
+  });
   // The custom maximise button swaps its glyph with the real window state.
   win.on("maximize", () => sendTo(ws, "win-state", { maximized: true }));
   win.on("unmaximize", () => sendTo(ws, "win-state", { maximized: false }));
