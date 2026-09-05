@@ -65,6 +65,21 @@ let context: BrowserContext | null = null;
 let page: Page | null = null;
 /** One conversation is reused per session; reset() forces a fresh one. */
 let inConversation = false;
+
+/**
+ * Give up the live thread, and say which path did it.
+ *
+ * Eleven places drop the conversation, and the next send then opens a new
+ * one — which is the request ChatGPT's abuse controls actually count.
+ * Measured in one session: 32 new chats for 55 replies, ending in a throttle
+ * notice, and nothing in the log said which of the eleven was responsible.
+ * `paceNewChat` slows the burst; this is how the *cause* of one gets found,
+ * since the fix for a path that churns chats is never "wait longer".
+ */
+function dropChat(reason: string): void {
+  if (inConversation) logger.info("browser", "dropping the live chat", { reason });
+  inConversation = false;
+}
 /** The session last put into the profile, for a reload that has to put it back. */
 let injectedCookies: SessionCookie[] = [];
 /**
@@ -2072,7 +2087,7 @@ async function reloadKeepingConversation(p: Page): Promise<void> {
     turnsBefore,
     turnsAfter: Math.max(0, seen),
   });
-  inConversation = false;
+  dropChat("attach found an empty thread");
   forgetChat();
   throw new ChatGPTBrowserError(
     "The ChatGPT page was reloaded and came back on a different chat, so the conversation on it is gone. Resending the transcript into a fresh chat."
@@ -2688,7 +2703,7 @@ async function recoverAnonymousPage(
   // the chat this page is actually on. A chat that had only just been opened
   // has nothing to replay, so it carries on.
   if (midConversation) {
-    inConversation = false;
+    dropChat("session recovered but the thread was lost");
     forgetChat();
     throw new ChatGPTBrowserError(
       "The ChatGPT page had lost its session mid-conversation. The session was restored, but the conversation on the page was not, so the transcript is being resent into a fresh chat."
@@ -2798,7 +2813,7 @@ async function sendOn(
         // taking input. Abandoning it makes the transport's next retry open
         // a fresh thread and replay, which is the switch-away-and-back that
         // is known to work.
-        inConversation = false;
+        dropChat("composer refused the send even after a reload");
       }
       throw e2;
     }
@@ -2819,7 +2834,7 @@ async function sendOn(
     // measured, three identical resends into the same silent page all
     // vanished, while a freshly opened chat accepted the same payload.
     if (e instanceof ChatGPTBrowserError && /never appeared/.test(e.message)) {
-      inConversation = false;
+      dropChat("the sent message never appeared");
     }
     // A send that failed still left a conversation behind, holding the
     // message that was accepted before the reply died. Filing only ran after
@@ -3275,7 +3290,7 @@ export async function waitForReply(
         sendLanded,
       });
       await stopGeneration(p);
-      inConversation = false;
+      dropChat("generation stalled with no output");
       throw new ChatGPTBrowserError(
         `ChatGPT sat for ${Math.round((now - started) / 1000)}s without producing any output — the generation looks stalled. Stopping it and retrying in a fresh conversation.`
       );
@@ -3352,7 +3367,7 @@ function refusedRequestError(refused: { url: string; status: number }): ChatGPTB
   const { url, status } = refused;
   if (status === 401 || status === 403) {
     sessionSuspect = true;
-    inConversation = false;
+    dropChat("a request came back 401/403");
     return new ChatGPTBrowserError(
       `ChatGPT rejected the message (status ${status} on ${url}) — the page's copy of the session was refused. Putting the session back and retrying in a fresh chat.`
     );
@@ -3362,7 +3377,7 @@ function refusedRequestError(refused: { url: string; status: number }): ChatGPTB
       `ChatGPT is throttling this account (too many requests: status 429 on ${url}, retry-after 180). Waiting before sending again; retrying now would extend the block.`
     );
   }
-  inConversation = false;
+  dropChat("a backend request failed");
   return new ChatGPTBrowserError(
     `ChatGPT's server answered status ${status} on ${url}, so the message never reached the model. Retrying.`
   );
@@ -3384,7 +3399,7 @@ async function stopGeneration(p: Page): Promise<void> {
 
 /** Forget the current chat so the next message opens a fresh conversation. */
 export function resetBrowserChat(): void {
-  inConversation = false;
+  dropChat("reset requested");
   forgetChat();
 }
 
@@ -3677,7 +3692,7 @@ export async function openConversation(
   }
 
   if (!landed) {
-    inConversation = false;
+    dropChat("the send did not land");
     logger.warn("browser", "conversation would not open", {
       id,
       url: p.url(),
