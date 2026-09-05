@@ -662,6 +662,63 @@ async function injectCookies(
   });
 }
 
+export interface SessionInjectionDecision {
+  /** Write the stored jar into the profile. */
+  inject: boolean;
+  /** This injection is the one the user asked for; clear the pending flag after it. */
+  consumesPending: boolean;
+  /** For the log, and for a person reading it afterwards. */
+  why: string;
+}
+
+/**
+ * Whose session wins: the browser profile's, or the stored jar's.
+ *
+ * Pure, and separate from the browser, because getting it wrong is expensive
+ * and invisible — the old answer ("always the jar") signed a working session
+ * out mid-run and the only symptom was an anonymous page seventeen minutes
+ * later. The rules, in order:
+ *
+ *   - Nothing stored: there is nothing to inject, whatever the profile holds.
+ *   - The user just signed in or imported: they have named the session, and a
+ *     name beats a guess. This is the only case that overwrites a profile
+ *     that already has one.
+ *   - The profile has a session: keep it. It is the copy the server has been
+ *     rotating, and the stored jar is at best a duplicate of it.
+ *   - The profile has none: inject, which is what the jar is for.
+ *
+ * A profile whose cookies could not be read reports a negative count, and is
+ * treated as "has a session" — injecting over a profile that may well hold a
+ * good one is the mistake this function exists to stop making.
+ */
+export function shouldInjectStoredSession(state: {
+  storedCookies: number;
+  profileSessionCookies: number;
+  pending: boolean;
+}): SessionInjectionDecision {
+  if (state.storedCookies <= 0) {
+    return { inject: false, consumesPending: false, why: "no stored session to put back" };
+  }
+  if (state.pending) {
+    return {
+      inject: true,
+      consumesPending: true,
+      why: "the user just signed in or imported a session",
+    };
+  }
+  if (state.profileSessionCookies < 0) {
+    return {
+      inject: false,
+      consumesPending: false,
+      why: "the profile's cookies could not be read, so its session is left untouched",
+    };
+  }
+  if (state.profileSessionCookies > 0) {
+    return { inject: false, consumesPending: false, why: "the profile already holds a session" };
+  }
+  return { inject: true, consumesPending: false, why: "the profile has no session of its own" };
+}
+
 /**
  * How many session-token cookies the profile itself is holding.
  *
@@ -894,20 +951,21 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
   // `sessionCookiesPending`, because the user asking for a session is not a
   // guess and must beat whatever the profile is holding.
   injectedCookies = cookies;
-  const pending = loadConfig().sessionCookiesPending === true;
-  const profileSession = await profileSessionCookies(context);
-  if (cookies.length > 0 && (pending || profileSession === 0)) {
-    logger.info("browser", "putting the stored session into the profile", {
-      cookies: cookies.length,
-      why: pending ? "just signed in or imported" : "profile had no session",
-    });
+  const decision = shouldInjectStoredSession({
+    storedCookies: cookies.length,
+    profileSessionCookies: await profileSessionCookies(context),
+    pending: loadConfig().sessionCookiesPending === true,
+  });
+  logger.info(
+    "browser",
+    decision.inject
+      ? "putting the stored session into the profile"
+      : "leaving the profile's own session alone",
+    { why: decision.why, storedCookies: cookies.length }
+  );
+  if (decision.inject) {
     await injectCookies(context, cookies);
-    if (pending) saveConfig({ sessionCookiesPending: undefined });
-  } else if (profileSession > 0) {
-    logger.info("browser", "profile already holds a session; leaving it alone", {
-      profileCookies: profileSession,
-      storedCookies: cookies.length,
-    });
+    if (decision.consumesPending) saveConfig({ sessionCookiesPending: undefined });
   }
 
   await context.addInitScript(() => {
