@@ -101,6 +101,28 @@ export interface ModelDTO {
   workOnly?: boolean;
 }
 
+/**
+ * A prompt that sends itself on a schedule.
+ *
+ * `description` and `nextRunAt` are worked out in the main process rather
+ * than the renderer: the cron parser lives there, and a list that computed
+ * "next run" per render would drift a second at a time while it was open.
+ */
+export interface ScheduleDTO {
+  id: string;
+  prompt: string;
+  cron: string;
+  /** The expression in words, or the expression itself when it has no plain reading. */
+  description: string;
+  cwd: string;
+  enabled: boolean;
+  createdAt: number;
+  nextRunAt?: number;
+  lastRunAt?: number;
+  lastStatus?: "sent" | "queued" | "missed" | "failed";
+  lastDetail?: string;
+}
+
 export interface SessionSummaryDTO {
   id: string;
   title: string;

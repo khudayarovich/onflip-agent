@@ -6,7 +6,7 @@ import type {
   SessionSummaryDTO,
 } from "../../../shared/protocol";
 import { Menu, useMenu, relativeTime, baseName } from "./common";
-import { ChevronDown, Close, Folder, Plus } from "./icons";
+import { ChevronDown, Clock, Close, Folder, Plus } from "./icons";
 import { useT } from "../i18n";
 
 export function Sidebar({
@@ -28,6 +28,7 @@ export function Sidebar({
   onOpenSettings,
   onOpenAbout,
   onOpenSkills,
+  onOpenSchedules,
   onSignIn,
   onSignOut,
 }: {
@@ -53,6 +54,7 @@ export function Sidebar({
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onOpenSkills: () => void;
+  onOpenSchedules: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
 }): React.ReactElement {
@@ -206,6 +208,7 @@ export function Sidebar({
         onOpenSettings={onOpenSettings}
         onOpenAbout={onOpenAbout}
         onOpenSkills={onOpenSkills}
+        onOpenSchedules={onOpenSchedules}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />
@@ -380,6 +383,7 @@ function AccountBar({
   onOpenSettings,
   onOpenAbout,
   onOpenSkills,
+  onOpenSchedules,
   onSignIn,
   onSignOut,
 }: {
@@ -390,6 +394,7 @@ function AccountBar({
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onOpenSkills: () => void;
+  onOpenSchedules: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
 }): React.ReactElement {
@@ -476,6 +481,18 @@ function AccountBar({
                 <SkillsIcon />
               </span>{" "}
               {t("menuSkills")}
+            </button>
+            <button
+              className="pop-item"
+              onClick={() => {
+                setOpen(false);
+                onOpenSchedules();
+              }}
+            >
+              <span className="pop-icon">
+                <Clock />
+              </span>{" "}
+              {t("menuSchedules")}
             </button>
             <button
               className="pop-item"

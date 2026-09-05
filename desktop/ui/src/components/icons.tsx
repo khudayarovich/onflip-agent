@@ -263,6 +263,30 @@ export const Eraser = (p: IconProps = {}): React.ReactElement =>
     p
   );
 
+/** Run this now, by hand. */
+export const Play = (p: IconProps = {}): React.ReactElement =>
+  svg(<path d="M8 5.5l10 6.5-10 6.5z" fill="currentColor" stroke="none" />, p);
+
+/** On or off — the switch on a saved schedule. */
+export const Power = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <path d="M12 3.5v7.5" />
+      <path d="M7.2 6.6a7.5 7.5 0 1 0 9.6 0" />
+    </>,
+    p
+  );
+
+/** A clock, for anything to do with scheduling. */
+export const Clock = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <circle cx="12" cy="12" r="9" />
+      <polyline points="12 7 12 12 15.5 14" />
+    </>,
+    p
+  );
+
 /** A quiet marker for the collapsed log strip. */
 export const Info = (p: IconProps = {}): React.ReactElement =>
   svg(

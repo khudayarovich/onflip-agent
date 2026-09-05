@@ -30,6 +30,7 @@ import { AboutModal } from "./components/AboutModal";
 import { SkillsModal } from "./components/SkillsModal";
 import { SessionPeekModal } from "./components/SessionPeekModal";
 import { SignInModal } from "./components/SignInModal";
+import { SchedulesModal } from "./components/SchedulesModal";
 import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
 import { ChevronDown, CircleHalf } from "./components/icons";
@@ -42,6 +43,7 @@ type ModalName =
   | "diff"
   | "about"
   | "skills"
+  | "schedules"
   | "signin"
   | null;
 
@@ -976,6 +978,7 @@ export function App(): React.ReactElement {
         onOpenSettings={() => setModal("settings")}
         onOpenAbout={() => setModal("about")}
         onOpenSkills={() => setModal("skills")}
+        onOpenSchedules={() => setModal("schedules")}
         onSignOut={() =>
           setConfirm({
             message: t("signOutConfirm"),
@@ -1317,6 +1320,10 @@ export function App(): React.ReactElement {
             boot();
           }}
         />
+      )}
+
+      {modal === "schedules" && (
+        <SchedulesModal cwd={status?.cwd ?? null} onClose={() => setModal(null)} />
       )}
 
       {modal === "skills" && (

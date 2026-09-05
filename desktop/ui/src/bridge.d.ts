@@ -1,4 +1,5 @@
 /** The preload bridge, as the renderer sees it. Mirrors electron/preload.ts. */
+
 interface OnFlipBridge {
   call(method: string, params?: unknown): Promise<unknown>;
   onEvent(listener: (event: string, data: unknown) => void): () => void;
@@ -54,6 +55,25 @@ interface OnFlipBridge {
   setMinWidth?(width: number): Promise<boolean>;
   /** False when the DevTools port never opened and the screencast is in use. */
   browserViewAvailable?(): Promise<boolean>;
+  /**
+   * Prompts that send themselves on a cron schedule. They live in the main
+   * process, which is what outlives any one window.
+   */
+  schedulesList?(): Promise<import("../../shared/protocol").ScheduleDTO[]>;
+  scheduleCreate?(input: {
+    prompt: string;
+    cron: string;
+    cwd?: string;
+  }): Promise<{ ok: boolean; error?: string }>;
+  scheduleUpdate?(input: {
+    id: string;
+    prompt?: string;
+    cron?: string;
+    enabled?: boolean;
+  }): Promise<{ ok: boolean; error?: string }>;
+  scheduleDelete?(id: string): Promise<boolean>;
+  scheduleRun?(id: string): Promise<{ status: string; detail?: string }>;
+  onSchedulesChanged?(listener: () => void): () => void;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;

@@ -16,6 +16,7 @@ import { spawn, ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { Peer } from "../shared/wire";
 import { runSignIn, clearSignIn } from "./signin";
 import {
@@ -34,6 +35,16 @@ import {
   type UpdateProgress,
 } from "./update-install";
 import { pairWithBrowser, extensionDir } from "./pairing";
+import {
+  createSchedule,
+  deleteSchedule,
+  listSchedules,
+  runScheduleNow,
+  startScheduler,
+  updateSchedule,
+  type FireResult,
+  type StoredSchedule,
+} from "./schedules";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
@@ -60,6 +71,8 @@ interface Workspace {
   termChild: ChildProcess | null;
   /** The turn's final answer or question so far, for the notification that ends it. */
   lastFinal?: { kind: "assistant" | "question"; text: string };
+  /** The project this window is on, as its engine last reported it. */
+  cwd?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,6 +177,62 @@ function appIcon(): string {
 function wsOf(e: IpcMainInvokeEvent | IpcMainEvent): Workspace | null {
   const win = BrowserWindow.fromWebContents(e.sender);
   return win ? (workspaces.get(win.id) ?? null) : null;
+}
+
+/** The project a window is on, if its engine has reported one yet. */
+function currentCwd(ws: Workspace | null): string | undefined {
+  return ws?.cwd;
+}
+
+/** Same folder, allowing for slash direction and case on Windows. */
+function samePath(a: string, b: string): boolean {
+  const norm = (p: string) => path.resolve(p).replace(/[\/]+$/, "").toLowerCase();
+  try {
+    return norm(a) === norm(b);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Send a scheduled prompt into the window that is on its project.
+ *
+ * Handed to the engine through the same `send` every typed message uses, so
+ * a schedule landing mid-turn queues behind it, gets its approvals and lands
+ * in the transcript exactly like anything else — rather than through a
+ * second path that would have to be kept in step with the first.
+ */
+async function fireSchedule(schedule: StoredSchedule): Promise<FireResult> {
+  let target: Workspace | null = null;
+  for (const ws of workspaces.values()) {
+    if (ws.peer && !ws.engineExited && samePath(ws.cwd ?? "", schedule.cwd)) {
+      target = ws;
+      break;
+    }
+  }
+  if (!target) {
+    // Deliberately not opening a window for it. A prompt sent into a window
+    // nobody asked for, on a project nobody has open, is an agent running
+    // unattended somewhere the user is not looking.
+    return {
+      status: "failed",
+      detail: `No window is open on ${schedule.cwd}.`,
+    };
+  }
+  const reply = (await target.peer!.request("send", { text: schedule.prompt })) as {
+    queued?: boolean;
+  };
+  if (!target.win.isDestroyed()) {
+    sendTo(target, "engine-event", {
+      event: "item",
+      data: {
+        type: "notice",
+        id: randomUUID(),
+        text: `Scheduled prompt sent: ${schedule.cron}`,
+      },
+    });
+  }
+  return { status: reply?.queued ? "queued" : "sent" };
 }
 
 /** The workspace the user is looking at, or the likeliest one. */
@@ -449,7 +518,12 @@ function startEngine(ws: Workspace, requested?: string): void {
   wire.onEvent = (event, data) => {
     if (event === "status") {
       const status = data as EngineStatus;
-      if (status.cwd) saveState({ lastCwd: status.cwd });
+      if (status.cwd) {
+        // Remembered per window as well as globally: a scheduled prompt has
+        // to reach the window on *its* project, not whichever was last used.
+        ws.cwd = status.cwd;
+        saveState({ lastCwd: status.cwd });
+      }
       // Told once, after the engine's first status: by then the renderer has
       // its transcript, so the note lands on screen instead of under it.
       if (missing && !explainedMissing) {
@@ -857,6 +931,27 @@ function registerIpc(): void {
     }
     return true;
   });
+
+  // -- scheduled prompts ---------------------------------------------------
+  ipcMain.handle("schedules-list", () => listSchedules());
+  ipcMain.handle(
+    "schedule-create",
+    (e, payload: { prompt: string; cron: string; cwd?: string }) => {
+      const ws = wsOf(e);
+      // The project the window is on, so a schedule made here runs here.
+      const cwd = payload.cwd || currentCwd(ws) || process.cwd();
+      return createSchedule({ prompt: payload.prompt, cron: payload.cron, cwd });
+    }
+  );
+  ipcMain.handle(
+    "schedule-update",
+    (_e, payload: { id: string; prompt?: string; cron?: string; enabled?: boolean }) =>
+      updateSchedule(payload.id, payload)
+  );
+  ipcMain.handle("schedule-delete", (_e, payload: { id: string }) =>
+    deleteSchedule(payload.id)
+  );
+  ipcMain.handle("schedule-run", (_e, payload: { id: string }) => runScheduleNow(payload.id));
 
   ipcMain.handle("new-window", () => {
     createWindow();
@@ -1354,6 +1449,14 @@ if (!singleInstance) {
     // macOS keeps the default menu, which is where Copy and Paste live; a
     // dev checkout keeps it everywhere for the DevTools shortcut.
     if (process.platform !== "darwin" && app.isPackaged) Menu.setApplicationMenu(null);
+
+    // Scheduled prompts. Armed here rather than at module load so the first
+    // tick cannot land before there is a window and an engine to send into.
+    startScheduler(fireSchedule, () => {
+      for (const ws of workspaces.values()) {
+        if (!ws.win.isDestroyed()) sendTo(ws, "schedules-changed", {});
+      }
+    });
     registerIpc();
     createWindow();
     // The tray icon is a Windows .ico; macOS keeps the app in the dock

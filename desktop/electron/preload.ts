@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
+import type { ScheduleDTO } from "../shared/protocol";
 
 /**
  * The only bridge between the sandboxed renderer and the rest of the app.
@@ -58,6 +59,25 @@ export interface OnFlipBridge {
   setMinWidth(width: number): Promise<boolean>;
   /** False when the DevTools port never opened and the old screencast is in use. */
   browserViewAvailable(): Promise<boolean>;
+  /**
+   * Prompts that send themselves on a cron schedule. They live in the main
+   * process, which is what outlives any one window.
+   */
+  schedulesList(): Promise<ScheduleDTO[]>;
+  scheduleCreate(input: {
+    prompt: string;
+    cron: string;
+    cwd?: string;
+  }): Promise<{ ok: boolean; error?: string }>;
+  scheduleUpdate(input: {
+    id: string;
+    prompt?: string;
+    cron?: string;
+    enabled?: boolean;
+  }): Promise<{ ok: boolean; error?: string }>;
+  scheduleDelete(id: string): Promise<boolean>;
+  scheduleRun(id: string): Promise<{ status: string; detail?: string }>;
+  onSchedulesChanged(listener: () => void): () => void;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
@@ -120,6 +140,16 @@ const bridge: OnFlipBridge = {
   setMinWidth: (width) => ipcRenderer.invoke("set-min-width", { width }),
   browserViewAvailable: () => ipcRenderer.invoke("browser-view-available"),
 
+  schedulesList: () => ipcRenderer.invoke("schedules-list"),
+  scheduleCreate: (input) => ipcRenderer.invoke("schedule-create", input),
+  scheduleUpdate: (input) => ipcRenderer.invoke("schedule-update", input),
+  scheduleDelete: (id) => ipcRenderer.invoke("schedule-delete", { id }),
+  scheduleRun: (id) => ipcRenderer.invoke("schedule-run", { id }),
+  onSchedulesChanged: (listener) => {
+    const handler = () => listener();
+    ipcRenderer.on("schedules-changed", handler);
+    return () => ipcRenderer.removeListener("schedules-changed", handler);
+  },
   setTheme: (theme) => ipcRenderer.invoke("set-theme", { theme }),
   setPrefs: (prefs) => ipcRenderer.invoke("set-prefs", prefs),
   signIn: () => ipcRenderer.invoke("sign-in"),
