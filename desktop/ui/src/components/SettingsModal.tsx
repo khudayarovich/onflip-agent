@@ -327,6 +327,8 @@ export function SettingsModal({
         )}
       </div>
 
+      <IndicatorSection />
+
       <TelegramSection />
 
       <div className="settings-section">
@@ -472,6 +474,69 @@ function TelegramSection(): React.ReactElement {
       {info.enabled && info.hasToken && !ids.trim() && (
         <div className="modal-note tg-warn">{t("setTelegramNoIds")}</div>
       )}
+    </div>
+  );
+}
+
+
+/**
+ * The floating status square.
+ *
+ * Off by default: an always-on-top window that appears without being asked
+ * for is the sort of thing people uninstall an app over.
+ */
+function IndicatorSection(): React.ReactElement {
+  const t = useT();
+  const [info, setInfo] = useState<{ enabled: boolean; size: number } | null>(null);
+
+  useEffect(() => {
+    void window.onflip
+      .indicatorGet?.()
+      .then(setInfo)
+      .catch(() => setInfo(null));
+  }, []);
+
+  if (!info) return <></>;
+  const save = (patch: { enabled?: boolean; size?: number }) => {
+    setInfo((current) => (current ? { ...current, ...patch } : current));
+    void window.onflip.indicatorSet?.(patch).then(setInfo);
+  };
+
+  return (
+    <div className="settings-section">
+      <h3>{t("setIndicator")}</h3>
+      <div className="modal-note">{t("setIndicatorIntro")}</div>
+
+      <div className="setting-row">
+        <div className="info">
+          <div className="name">{t("setIndicatorShow")}</div>
+          <div className="desc">{t("setIndicatorShowHelp")}</div>
+        </div>
+        <Toggle on={info.enabled} onChange={(on) => save({ enabled: on })} />
+      </div>
+
+      <div className="setting-row">
+        <div className="info">
+          <div className="name">{t("setIndicatorSize")}</div>
+          <div className="desc">{t("setIndicatorSizeHelp", { size: info.size })}</div>
+        </div>
+        <input
+          className="indicator-size"
+          type="range"
+          min={56}
+          max={200}
+          step={8}
+          value={info.size}
+          disabled={!info.enabled}
+          onChange={(e) => save({ size: Number(e.target.value) })}
+        />
+      </div>
+
+      <div className="indicator-legend">
+        <span><i className="dot idle" /> {t("setIndicatorIdle")}</span>
+        <span><i className="dot working" /> {t("setIndicatorWorking")}</span>
+        <span><i className="dot waiting" /> {t("setIndicatorWaiting")}</span>
+      </div>
     </div>
   );
 }

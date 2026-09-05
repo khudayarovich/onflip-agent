@@ -91,6 +91,9 @@ interface OnFlipBridge {
   scheduleRun?(id: string): Promise<{ status: string; detail?: string }>;
   onSchedulesChanged?(listener: () => void): () => void;
   /** The Telegram remote: its state, and the fields that configure it. */
+  /** The floating status square: what OnFlip is doing, at a glance. */
+  indicatorGet?(): Promise<{ enabled: boolean; size: number }>;
+  indicatorSet?(patch: { enabled?: boolean; size?: number }): Promise<{ enabled: boolean; size: number }>;
   telegramGet?(): Promise<{
     enabled: boolean;
     hasToken: boolean;

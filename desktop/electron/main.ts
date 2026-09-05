@@ -58,6 +58,13 @@ import {
   telegramOnEvent,
   telegramPublic,
 } from "./telegram";
+import {
+  applyIndicator,
+  indicatorSettings,
+  setIndicatorState,
+  startIndicator,
+  type IndicatorState,
+} from "./indicator";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
@@ -88,6 +95,8 @@ interface Workspace {
   cwd?: string;
   /** The engine's last status, so the bot can answer /status instantly. */
   lastStatus?: EngineStatus;
+  /** Whether a turn is running here, for the status widget. */
+  busy?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -192,6 +201,30 @@ function appIcon(): string {
 function wsOf(e: IpcMainInvokeEvent | IpcMainEvent): Workspace | null {
   const win = BrowserWindow.fromWebContents(e.sender);
   return win ? (workspaces.get(win.id) ?? null) : null;
+}
+
+/**
+ * What the status widget should be showing, across every window.
+ *
+ * One widget for the whole app, so the states are combined worst-first:
+ * anything waiting on a person beats anything merely running, because that
+ * is the state where looking at the screen is actually urgent.
+ */
+function refreshIndicator(): void {
+  let state: IndicatorState = "idle";
+  for (const ws of workspaces.values()) {
+    if (approvalPendingFor(ws) || ws.lastFinal?.kind === "question") {
+      state = "waiting";
+      break;
+    }
+    if (ws.busy) state = "working";
+  }
+  setIndicatorState(state);
+}
+
+function approvalPendingFor(ws: Workspace): boolean {
+  for (const waiter of approvalWaiters.values()) if (waiter.ws === ws) return true;
+  return false;
 }
 
 /** The project a window is on, if its engine has reported one yet. */
@@ -593,12 +626,15 @@ function startEngine(ws: Workspace, requested?: string): void {
       const turn = data as { state?: string; interrupted?: boolean; exhausted?: boolean; error?: string };
       if (turn.state === "start") {
         ws.lastFinal = undefined;
+        ws.busy = true;
       } else if (turn.state === "end" && !turn.interrupted) {
         if (turn.exhausted) notifyAway(ws, "exhausted", turn.error ?? "");
         else if (turn.error) notifyAway(ws, "error", turn.error);
         else if (ws.lastFinal?.kind !== "question") notifyAway(ws, "finished", ws.lastFinal?.text ?? "");
       }
     }
+    if (event === "turn" && (data as { state?: string }).state === "end") ws.busy = false;
+    refreshIndicator();
     // The bot mirrors whichever window it is driving. Fire-and-forget:
     // a Telegram hiccup must never hold up the renderer's own update.
     if (ws === telegramTarget()) void telegramOnEvent(event, data);
@@ -638,6 +674,7 @@ function askRendererForApproval(ws: Workspace, request: unknown): Promise<Approv
     // answer — which made the remote usable only in full-auto, the least
     // supervised mode there is.
     if (ws === telegramTarget()) telegramAskApproval(id, request);
+    refreshIndicator();
     // Judged before the window is brought forward: on Windows a background
     // window asked to focus usually only flashes in the taskbar, and the
     // toast is what actually reaches the person.
@@ -922,6 +959,7 @@ function registerIpc(): void {
       telegramApprovalDone(payload.id, payload.decision.allow ? "allowed here" : "denied here");
     }
     const waiter = approvalWaiters.get(payload.id);
+    setImmediate(refreshIndicator);
     if (!waiter) return;
     approvalWaiters.delete(payload.id);
     waiter.resolve(payload.decision);
@@ -1012,6 +1050,16 @@ function registerIpc(): void {
   });
 
   // -- scheduled prompts ---------------------------------------------------
+  ipcMain.handle("indicator-get", () => indicatorSettings());
+  ipcMain.handle(
+    "indicator-set",
+    (_e, payload: { enabled?: boolean; size?: number }) => {
+      const next = applyIndicator(payload);
+      refreshIndicator();
+      return next;
+    }
+  );
+
   ipcMain.handle("telegram-get", () => telegramPublic());
   ipcMain.handle(
     "telegram-save",
@@ -1547,6 +1595,8 @@ if (!singleInstance) {
     // The Telegram remote. It drives whichever window is in front, through
     // the same engine RPC the window itself uses — there is one OnFlip and
     // two ways to reach it.
+    startIndicator();
+
     startTelegram({
       status: () => {
         const ws = telegramTarget();

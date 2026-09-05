@@ -95,6 +95,9 @@ export interface OnFlipBridge {
   scheduleRun(id: string): Promise<{ status: string; detail?: string }>;
   onSchedulesChanged(listener: () => void): () => void;
   /** The Telegram remote: its state, and the fields that configure it. */
+  /** The floating status square: what OnFlip is doing, at a glance. */
+  indicatorGet(): Promise<{ enabled: boolean; size: number }>;
+  indicatorSet(patch: { enabled?: boolean; size?: number }): Promise<{ enabled: boolean; size: number }>;
   telegramGet(): Promise<{
     enabled: boolean;
     hasToken: boolean;
@@ -203,6 +206,8 @@ const bridge: OnFlipBridge = {
     ipcRenderer.on("schedules-changed", handler);
     return () => ipcRenderer.removeListener("schedules-changed", handler);
   },
+  indicatorGet: () => ipcRenderer.invoke("indicator-get"),
+  indicatorSet: (patch) => ipcRenderer.invoke("indicator-set", patch),
   telegramGet: () => ipcRenderer.invoke("telegram-get"),
   telegramSave: (patch) => ipcRenderer.invoke("telegram-save", patch),
   onTelegramChanged: (listener) => {
