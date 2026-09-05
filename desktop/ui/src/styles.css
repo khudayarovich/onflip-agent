@@ -2903,3 +2903,95 @@ a:hover {
   gap: 8px;
   margin-top: 10px;
 }
+
+/* ---------------------------------------------------------------------------
+   the update modal
+
+   Shown while an update downloads and installs. No close button while it is
+   working: the app is about to quit itself, and a dialog the user can wave
+   away would leave them unsure whether it did. Only the error state offers
+   a way out, because only the error state has one.
+   --------------------------------------------------------------------------- */
+
+.update-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  place-items: center;
+  background: rgba(0, 0, 0, 0.55);
+  backdrop-filter: blur(3px);
+}
+
+.update-modal {
+  width: min(420px, calc(100vw - 48px));
+  padding: 26px 26px 22px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: var(--panel);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
+  text-align: center;
+}
+
+.update-modal h2 {
+  margin: 0 0 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.update-progress {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 3px;
+  background: var(--border);
+}
+
+.update-progress-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 3px;
+  background: var(--accent);
+  transition: width 0.25s ease;
+}
+
+/* Installing has no percentage to report, so the bar says "working" instead
+   of pretending to a number it does not have. */
+.update-progress-fill.indeterminate {
+  width: 40%;
+  animation: update-slide 1.1s ease-in-out infinite;
+}
+
+@keyframes update-slide {
+  0% { margin-left: -40%; }
+  100% { margin-left: 100%; }
+}
+
+.update-modal-detail {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+
+.update-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: center;
+  margin-top: 18px;
+}
+
+.update-modal-actions button {
+  border: 1px solid var(--accent);
+  background: var(--accent);
+  color: #fff;
+  border-radius: 7px;
+  padding: 6px 14px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.update-modal-actions .update-dismiss {
+  background: transparent;
+  border-color: var(--border);
+  color: var(--text-dim);
+}

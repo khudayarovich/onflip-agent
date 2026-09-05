@@ -19,6 +19,12 @@ import * as path from "node:path";
 import { Peer } from "../shared/wire";
 import { runSignIn, clearSignIn } from "./signin";
 import { checkForUpdate } from "./updates";
+import {
+  applyUpdate,
+  downloadUpdate,
+  startUpdateWatch,
+  type UpdateProgress,
+} from "./update-install";
 import { pairWithBrowser, extensionDir } from "./pairing";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
@@ -132,6 +138,15 @@ let lastActiveId: number | null = null;
 let tray: Tray | null = null;
 /** Set once the user chose Quit; before that, closing the last window hides it. */
 let quitting = false;
+/** An update is downloading or installing — a second click must not start another. */
+let updating = false;
+/**
+ * The app is quitting to be replaced, so the tray must not keep it alive.
+ *
+ * Closing the last window normally hides to tray, which for an update would
+ * leave the old version running while the installer tries to overwrite it.
+ */
+let quittingForUpdate = false;
 
 function appIcon(): string {
   return path.join(__dirname, "..", "..", "buildResources", "icon.ico");
@@ -670,7 +685,10 @@ function createWindow(cwd?: string): Workspace {
     if (!win.isMinimized()) {
       saveState({ bounds: win.getNormalBounds(), maximized: win.isMaximized() });
     }
-    if (!quitting && workspaces.size <= 1) {
+    // Hiding to tray on an update would leave the old version running while
+    // the installer tries to overwrite it — on Windows that is a locked file
+    // and a failed update.
+    if (!quitting && !quittingForUpdate && workspaces.size <= 1) {
       e.preventDefault();
       win.hide();
     }
@@ -871,6 +889,56 @@ function registerIpc(): void {
   }));
 
   ipcMain.handle("check-update", () => checkForUpdate());
+
+  /**
+   * Download the update and hand it to the installer.
+   *
+   * Returns as soon as the work is under way; progress arrives on
+   * `update-progress`, because a download is the one thing here long enough
+   * that a person needs to see it moving. `updating` guards against a second
+   * click on a modal that is already working — the button is disabled too,
+   * but the IPC is what actually has to hold.
+   */
+  ipcMain.handle("start-update", async (event) => {
+    if (updating) return { started: false, reason: "already running" };
+    const info = await checkForUpdate();
+    if (!info.available || !info.installable) {
+      // Nothing to install for this platform or architecture. The caller
+      // falls back to the release page, which is what it did before.
+      return { started: false, reason: "no installable build for this platform" };
+    }
+    updating = true;
+    const web = event.sender;
+    const report = (p: UpdateProgress) => {
+      if (!web.isDestroyed()) web.send("update-progress", p);
+    };
+    void (async () => {
+      try {
+        const file = await downloadUpdate(info.installable!.url, info.installable!.name, report);
+        report({ phase: "installing" });
+        const { relaunches } = applyUpdate(file);
+        if (!relaunches) {
+          updating = false;
+          report({ phase: "error", message: "This platform has no automatic installer." });
+          return;
+        }
+        // Give the renderer a moment to paint "installing" before the window
+        // goes: quitting instantly makes a successful update look like a
+        // crash. The hand-off process is already detached and waiting.
+        setTimeout(() => {
+          quittingForUpdate = true;
+          app.quit();
+        }, 1_200);
+      } catch (e) {
+        updating = false;
+        report({
+          phase: "error",
+          message: e instanceof Error ? e.message : String(e),
+        });
+      }
+    })();
+    return { started: true };
+  });
 
   // Load unpacked wants a folder, so the app has to be able to say which
   // one and put it in front of the user. Shipped in resources, because
@@ -1196,6 +1264,16 @@ if (!singleInstance) {
     // The tray icon is a Windows .ico; macOS keeps the app in the dock
     // instead, which is that platform's own version of background mode.
     if (process.platform === "win32") createTray();
+
+    // Look for a new version on a timer rather than only at launch. A tray
+    // app can stay open for days, and the version that fixed something for
+    // someone is no use sitting in a release they will not visit. The banner
+    // goes to whichever window is in front; if none is, the next check finds
+    // the same version and offers it again.
+    startUpdateWatch((info) => {
+      const ws = frontWorkspace();
+      if (ws) sendTo(ws, "update-available", info);
+    });
   });
 
   // A tray app outlives its windows: all-closed just means "in the background".

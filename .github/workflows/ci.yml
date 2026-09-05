@@ -73,3 +73,11 @@ jobs:
       - name: build the renderer
         working-directory: desktop
         run: npm run build
+
+      # The whole suite, from the root, where both packages are now built.
+      # The engine job runs the same command but skips the desktop tests,
+      # because it never builds desktop/dist — this is the job that does.
+      # `node --test` with no path is deliberate: a bare directory argument
+      # is read as a module path on current Node and fails.
+      - name: run the test suite, desktop tests included
+        run: npm run test:only

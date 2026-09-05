@@ -29,6 +29,13 @@ export interface UpdateInfo {
   available: boolean;
   /** Set when the check could not be made at all, e.g. no network. */
   error?: string;
+  /**
+   * The artifact an automatic update would install, when this platform has
+   * one. Absent on Linux, and absent when the release did not publish a
+   * build for this architecture — in which case the offer falls back to
+   * opening `url`, which is what the app did before it could install.
+   */
+  installable?: { url: string; name: string };
 }
 
 /** "desktop-v0.7.8" and "v0.7.8" and "0.7.8" all mean the same thing. */
@@ -72,6 +79,28 @@ function assetFor(release: GitHubRelease): string | undefined {
         : null;
   if (!wanted) return undefined;
   return release.assets?.find((a) => a.name && wanted.test(a.name))?.browser_download_url;
+}
+
+/**
+ * The asset the *installer* wants, which is not always the one a person wants.
+ *
+ * On macOS a human wants the `.dmg` — it is the familiar drag-to-Applications
+ * window. An automatic update wants the `.zip`, because it holds the `.app`
+ * bundle directly and needs no disk image mounted, no window opened and no
+ * `hdiutil` in the path. Windows uses the same NSIS installer either way.
+ */
+export function installableAssetFor(release: GitHubRelease): { url: string; name: string } | undefined {
+  const wanted =
+    process.platform === "win32"
+      ? /\.exe$/i
+      : process.platform === "darwin"
+        ? new RegExp(`mac-${process.arch === "arm64" ? "arm64" : "x64"}\\.zip$`, "i")
+        : null;
+  if (!wanted) return undefined;
+  const hit = release.assets?.find((a) => a.name && wanted.test(a.name));
+  return hit?.browser_download_url && hit.name
+    ? { url: hit.browser_download_url, name: hit.name }
+    : undefined;
 }
 
 /**
@@ -128,6 +157,7 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
       latest,
       url: assetFor(release) ?? release.html_url ?? RELEASES_PAGE,
       available: Boolean(latest && !release.draft && !release.prerelease && isNewer(latest, current)),
+      installable: installableAssetFor(release),
     };
   } catch (e) {
     // A failed check is not worth a dialog. It is worth saying so in About,

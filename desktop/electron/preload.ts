@@ -28,6 +28,21 @@ export interface OnFlipBridge {
     error?: string;
   }>;
   openRelease(url: string): Promise<boolean>;
+  /** Download and install the update; progress arrives on onUpdateProgress. */
+  startUpdate(): Promise<{ started: boolean; reason?: string }>;
+  onUpdateProgress(
+    listener: (p: {
+      phase: "downloading" | "installing" | "error";
+      percent?: number;
+      receivedBytes?: number;
+      totalBytes?: number;
+      message?: string;
+    }) => void
+  ): () => void;
+  /** The periodic check found a newer version. */
+  onUpdateAvailable(
+    listener: (info: { current: string; latest?: string; url: string; available: boolean }) => void
+  ): () => void;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
@@ -93,6 +108,17 @@ const bridge: OnFlipBridge = {
   openExtensionFolder: () => ipcRenderer.invoke("open-extension-folder"),
   signOut: () => ipcRenderer.invoke("sign-out"),
   winControl: (action) => ipcRenderer.invoke("win-control", { action }),
+  startUpdate: () => ipcRenderer.invoke("start-update"),
+  onUpdateProgress: (listener) => {
+    const handler = (_e: unknown, p: Parameters<typeof listener>[0]) => listener(p);
+    ipcRenderer.on("update-progress", handler);
+    return () => ipcRenderer.removeListener("update-progress", handler);
+  },
+  onUpdateAvailable: (listener) => {
+    const handler = (_e: unknown, info: Parameters<typeof listener>[0]) => listener(info);
+    ipcRenderer.on("update-available", handler);
+    return () => ipcRenderer.removeListener("update-available", handler);
+  },
   onWinState: (listener) => {
     const handler = (_e: unknown, state: { maximized: boolean }) => listener(state);
     ipcRenderer.on("win-state", handler);

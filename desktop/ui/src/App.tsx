@@ -123,6 +123,11 @@ function SearchIcon(): React.ReactElement {
   );
 }
 
+/** Bytes as megabytes, for a progress line nobody reads twice. */
+function mb(bytes: number): string {
+  return (bytes / 1048576).toFixed(1);
+}
+
 export function App(): React.ReactElement {
   const [status, setStatus] = useState<EngineStatus | null>(null);
   const [connect, setConnect] = useState<ConnectState>("connecting");
@@ -179,26 +184,49 @@ export function App(): React.ReactElement {
   /**
    * A release newer than this build, once GitHub has been asked.
    *
-   * Asked once per launch and never again: an update is not urgent enough
-   * to poll for, and a banner that reappears after being dismissed is the
-   * fastest way to teach someone to ignore banners. Dismissing is
-   * remembered per version, so the next release gets to speak up again.
+   * Asked at launch, and again whenever the main process's own timer finds
+   * something — a tray app can stay open for days, and a fix is no use
+   * sitting in a release nobody revisits. What is *not* repeated is the
+   * offer: dismissing is remembered per version, and the timer announces a
+   * given version once, because a banner that reappears after being waved
+   * away is the fastest way to teach someone to ignore banners.
    */
   const [update, setUpdate] = useState<{ latest: string; current: string; url: string } | null>(
     null
   );
+  /**
+   * How an install is going, and therefore whether the modal is up.
+   *
+   * Null until the user asks for one. A download is the one thing here long
+   * enough that leaving the window looking idle would read as a hang.
+   */
+  const [updateRun, setUpdateRun] = useState<{
+    phase: "downloading" | "installing" | "error";
+    percent?: number;
+    receivedBytes?: number;
+    totalBytes?: number;
+    message?: string;
+  } | null>(null);
+
   useEffect(() => {
     // Guarded because this runs unattended on every launch: a renderer
     // newer than its preload would throw here before anything is on screen.
     if (typeof window.onflip.checkUpdate !== "function") return;
-    void window.onflip
-      .checkUpdate()
-      .then((info) => {
-        if (!info.available || !info.latest) return;
-        if (localStorage.getItem("onflip.update.dismissed") === info.latest) return;
-        setUpdate({ latest: info.latest, current: info.current, url: info.url });
-      })
-      .catch(() => {});
+    const offer = (info: { available: boolean; latest?: string; current: string; url: string }) => {
+      if (!info.available || !info.latest) return;
+      if (localStorage.getItem("onflip.update.dismissed") === info.latest) return;
+      setUpdate({ latest: info.latest, current: info.current, url: info.url });
+    };
+    void window.onflip.checkUpdate().then(offer).catch(() => {});
+    // And again whenever the main process's own timer finds one, so an app
+    // left open for days still hears about a release published today.
+    if (typeof window.onflip.onUpdateAvailable !== "function") return;
+    return window.onflip.onUpdateAvailable(offer);
+  }, []);
+
+  useEffect(() => {
+    if (typeof window.onflip.onUpdateProgress !== "function") return;
+    return window.onflip.onUpdateProgress((p) => setUpdateRun(p));
   }, []);
   /** Live view of the agent's browser: the last frame it sent, if any. */
   const [browserOpen, setBrowserOpen] = useState(false);
@@ -1028,7 +1056,23 @@ export function App(): React.ReactElement {
             </span>
             <button
               className="update-get"
-              onClick={() => void window.onflip.openRelease(update.url)}
+              onClick={() => {
+                // Install in place where the platform has a build for it, and
+                // fall back to the release page where it does not — Linux, or
+                // an architecture this release skipped. The modal opens on the
+                // first progress event rather than optimistically, so a
+                // refusal never leaves a dialog with nothing behind it.
+                if (typeof window.onflip.startUpdate !== "function") {
+                  void window.onflip.openRelease(update.url);
+                  return;
+                }
+                void window.onflip
+                  .startUpdate()
+                  .then((r) => {
+                    if (!r.started) void window.onflip.openRelease(update.url);
+                  })
+                  .catch(() => void window.onflip.openRelease(update.url));
+              }}
             >
               {t("updateGet")}
             </button>
@@ -1045,6 +1089,60 @@ export function App(): React.ReactElement {
             >
               {t("updateDismiss")}
             </button>
+          </div>
+        )}
+
+        {/*
+          The install, while it happens. Deliberately not dismissable while
+          it is working: the app is about to close itself, and a modal the
+          user can wave away would leave them wondering whether it did.
+          A failure turns it back into something with a way out.
+        */}
+        {updateRun && (
+          <div className="update-modal-backdrop">
+            <div className="update-modal">
+              {updateRun.phase === "error" ? (
+                <>
+                  <h2>{t("updateFailedTitle")}</h2>
+                  <p className="update-modal-detail">{updateRun.message}</p>
+                  <div className="update-modal-actions">
+                    <button onClick={() => void window.onflip.openRelease(update?.url ?? "")}>
+                      {t("updateOpenPage")}
+                    </button>
+                    <button className="update-dismiss" onClick={() => setUpdateRun(null)}>
+                      {t("close")}
+                    </button>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <h2>
+                    {updateRun.phase === "installing"
+                      ? t("updateInstalling")
+                      : t("updateDownloading", { version: update?.latest ?? "" })}
+                  </h2>
+                  <div className="update-progress">
+                    <div
+                      className={`update-progress-fill${
+                        updateRun.percent === undefined ? " indeterminate" : ""
+                      }`}
+                      style={
+                        updateRun.percent === undefined
+                          ? undefined
+                          : { width: `${updateRun.percent}%` }
+                      }
+                    />
+                  </div>
+                  <p className="update-modal-detail">
+                    {updateRun.phase === "installing"
+                      ? t("updateInstallingDetail")
+                      : updateRun.totalBytes
+                        ? `${mb(updateRun.receivedBytes ?? 0)} / ${mb(updateRun.totalBytes)} MB`
+                        : t("updateStarting")}
+                  </p>
+                </>
+              )}
+            </div>
           </div>
         )}
 

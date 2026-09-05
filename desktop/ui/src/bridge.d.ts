@@ -22,6 +22,21 @@ interface OnFlipBridge {
     error?: string;
   }>;
   openRelease(url: string): Promise<boolean>;
+  /** Download and install the update; progress arrives on onUpdateProgress. */
+  startUpdate?(): Promise<{ started: boolean; reason?: string }>;
+  onUpdateProgress?(
+    listener: (p: {
+      phase: "downloading" | "installing" | "error";
+      percent?: number;
+      receivedBytes?: number;
+      totalBytes?: number;
+      message?: string;
+    }) => void
+  ): () => void;
+  /** The main process's periodic check found a newer version. */
+  onUpdateAvailable?(
+    listener: (info: { current: string; latest?: string; url: string; available: boolean }) => void
+  ): () => void;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
