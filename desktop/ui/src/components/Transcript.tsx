@@ -623,6 +623,24 @@ function formatSize(bytes: number): string {
  * says the reply is being written; the moment the stream goes quiet it
  * falls back to the thinking label, so a real stall still looks like one.
  */
+/**
+ * How long a turn has run, in the three bands the label reacts to.
+ *
+ * The clock beside the label already counts, but a number is something you
+ * have to read and compare against an expectation you may not have. The
+ * colour is the part you notice without looking.
+ */
+export type WorkPace = "normal" | "long" | "very-long";
+
+const LONG_MS = 60_000;
+const VERY_LONG_MS = 300_000;
+
+export function paceOf(elapsedMs: number): WorkPace {
+  if (elapsedMs >= VERY_LONG_MS) return "very-long";
+  if (elapsedMs >= LONG_MS) return "long";
+  return "normal";
+}
+
 function WorkingLabel({ streaming }: { streaming: StreamingState }): React.ReactElement {
   const t = useT();
   const [, setTick] = useState(0);
@@ -632,17 +650,27 @@ function WorkingLabel({ streaming }: { streaming: StreamingState }): React.React
   }, []);
   const writing =
     streaming.lastDeltaAt !== undefined && Date.now() - streaming.lastDeltaAt < 10_000;
-  return (
-    <span className="shimmer">
-      {writing
-        ? t("streamWriting")
+  const pace = paceOf(streaming.startedAt ? Date.now() - streaming.startedAt : 0);
+
+  // Text and colour answer different questions, so they are not read off the
+  // same thing. The colour is "has this been going a while", which stays true
+  // whether or not tokens are arriving. The text is "what is happening right
+  // now", and while a reply is actually streaming that is the honest answer —
+  // saying "taking longer than usual" over text visibly landing on screen
+  // would be the same lie the writing label was added to stop.
+  const text = writing
+    ? t("streamWriting")
+    : pace === "very-long"
+      ? t("streamStillWorking")
+      : pace === "long"
+        ? t("streamWorkingLonger")
         : streaming.iteration === 0
           ? t("streamWorking")
           : streaming.iteration === 1
             ? t("streamThinking")
-            : t("streamStep", { n: streaming.iteration })}
-    </span>
-  );
+            : t("streamStep", { n: streaming.iteration });
+
+  return <span className={`shimmer${pace === "normal" ? "" : " slow"}`}>{text}</span>;
 }
 
 /** The clock beside "Working", ticking while the turn runs. */

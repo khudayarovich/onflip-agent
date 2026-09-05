@@ -1247,6 +1247,35 @@ a:hover {
   background-clip: text;
   color: transparent;
   animation: shimmer 1.8s linear infinite;
+  transition: none;
+}
+/*
+ * A turn that has been going a while.
+ *
+ * Same sweep, same timing — only the colour changes, so it reads as the
+ * same indicator in a different mood rather than as something new appearing.
+ * The clock beside it already counts, but a number has to be read and
+ * compared against an expectation; the colour is the part that is noticed
+ * without looking.
+ */
+.thinking-row .shimmer.slow {
+  background: linear-gradient(
+    90deg,
+    var(--accent-dim) 30%,
+    var(--accent) 50%,
+    var(--accent-dim) 70%
+  );
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+.thinking-row .label:has(.shimmer.slow) .spinner {
+  border-top-color: var(--accent);
+  border-color: var(--accent-soft);
+  border-top-color: var(--accent);
+}
+.thinking-row .label:has(.shimmer.slow) .elapsed {
+  color: var(--accent-dim);
 }
 @keyframes shimmer {
   to {
