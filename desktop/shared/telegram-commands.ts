@@ -102,15 +102,50 @@ export function parseIncoming(raw: string): Incoming {
   return { kind: "command", name: name as CommandName, argument: rest.join(" ").trim() };
 }
 
-/** Callback data is `onflip:<action>:<value>`; values may contain colons. */
-export function encodeCallback(action: string, value: string): string {
-  return `onflip:${action}:${value}`;
-}
+/**
+ * Telegram's hard limit on `callback_data`. Sixty-four *bytes*, not
+ * characters, and a message whose buttons exceed it is rejected outright
+ * with BUTTON_DATA_INVALID — seen live, on the folder picker, because a
+ * Windows project path is on its own longer than the whole budget.
+ */
+export const CALLBACK_LIMIT = 64;
 
-export function decodeCallback(data: string): { action: string; value: string } | null {
-  if (!data?.startsWith("onflip:")) return null;
-  const rest = data.slice("onflip:".length);
-  const at = rest.indexOf(":");
-  if (at < 0) return { action: rest, value: "" };
-  return { action: rest.slice(0, at), value: rest.slice(at + 1) };
+/**
+ * Buttons carry a ticket, not their value.
+ *
+ * The value lives here and the button carries a short key, so a path of any
+ * length fits. Bounded, because this is a map that would otherwise grow for
+ * the life of the process; the cap is far above the number of buttons any
+ * one picker shows, so a stale ticket is only possible after hundreds of
+ * newer ones — and a stale ticket is answered, not obeyed.
+ */
+const MAX_TICKETS = 500;
+
+export class CallbackTable {
+  private values = new Map<string, { action: string; value: string }>();
+  private next = 0;
+
+  /** A `callback_data` string for this action and value, always within limit. */
+  put(action: string, value: string): string {
+    const key = (this.next++).toString(36);
+    this.values.set(key, { action, value });
+    if (this.values.size > MAX_TICKETS) {
+      // Oldest first: Map keeps insertion order.
+      const oldest = this.values.keys().next().value;
+      if (oldest !== undefined) this.values.delete(oldest);
+    }
+    return `onflip:${key}`;
+  }
+
+  /** What that button meant, or null if it is not ours or has expired. */
+  take(data: string): { action: string; value: string } | null {
+    if (!data?.startsWith("onflip:")) return null;
+    return this.values.get(data.slice("onflip:".length)) ?? null;
+  }
+
+  /** For tests, and for a fresh start when the bot restarts. */
+  clear(): void {
+    this.values.clear();
+    this.next = 0;
+  }
 }

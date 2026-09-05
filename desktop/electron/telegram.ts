@@ -13,8 +13,7 @@ import {
   type StatusLike,
 } from "../shared/telegram-format";
 import {
-  decodeCallback,
-  encodeCallback,
+  CallbackTable,
   isAllowed,
   parseAllowList,
   parseIncoming,
@@ -80,6 +79,14 @@ let detail: string | undefined;
 let username: string | undefined;
 /** Chats that have talked to us, so a turn's output knows where to go. */
 const chats = new Set<number>();
+/**
+ * Buttons carry a ticket rather than their value.
+ *
+ * Telegram caps `callback_data` at 64 bytes, and a Windows project path is
+ * longer than that on its own — the folder picker came back
+ * BUTTON_DATA_INVALID and the message was never delivered.
+ */
+const tickets = new CallbackTable();
 
 // ---------------------------------------------------------------------------
 // stored settings
@@ -193,21 +200,40 @@ interface Keyboard {
   inline_keyboard: { text: string; callback_data: string }[][];
 }
 
+/**
+ * Send, and try once more if the network dropped it.
+ *
+ * Seen live: a `fetch failed` in the middle of a turn, which on this path
+ * means an answer the user simply never received. One retry is worth it for
+ * that; more would not be, because the failures that are not transient —
+ * a malformed message, a chat that does not exist — fail identically however
+ * many times they are tried, and Telegram says so in words.
+ */
 async function say(chatId: number, html: string, keyboard?: Keyboard): Promise<number | null> {
-  try {
-    const sent = await api<{ message_id: number }>("sendMessage", {
-      chat_id: chatId,
-      text: html,
-      parse_mode: "HTML",
-      disable_web_page_preview: true,
-      ...(keyboard ? { reply_markup: keyboard } : {}),
-    });
-    return sent?.message_id ?? null;
-  } catch (e) {
-    // A message Telegram refuses must not take the turn down with it.
-    console.error("[telegram] send failed:", e instanceof Error ? e.message : String(e));
-    return null;
+  const body = {
+    chat_id: chatId,
+    text: html,
+    parse_mode: "HTML",
+    disable_web_page_preview: true,
+    ...(keyboard ? { reply_markup: keyboard } : {}),
+  };
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const sent = await api<{ message_id: number }>("sendMessage", body);
+      return sent?.message_id ?? null;
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      // Telegram refusing the content will refuse it again; only a transport
+      // failure is worth a second go.
+      const transient = /fetch failed|network|ETIMEDOUT|ECONNRESET|socket/i.test(message);
+      if (!transient || attempt === 1) {
+        console.error("[telegram] send failed:", message);
+        return null;
+      }
+      await new Promise((r) => setTimeout(r, 1_200));
+    }
   }
+  return null;
 }
 
 async function edit(chatId: number, messageId: number, html: string): Promise<void> {
@@ -243,7 +269,7 @@ function rows(
     keyboard.push(
       items.slice(i, i + perRow).map((it) => ({
         text: it.label,
-        callback_data: encodeCallback(action, it.value),
+        callback_data: tickets.put(action, it.value),
       }))
     );
   }
@@ -297,7 +323,7 @@ async function sendFolderPicker(chatId: number): Promise<void> {
     1
   );
   keyboard.inline_keyboard.push([
-    { text: "＋ New chat, no folder", callback_data: encodeCallback("scratch", "") },
+    { text: "＋ New chat, no folder", callback_data: tickets.put("scratch", "") },
   ]);
   await say(chatId, "📁 <b>Project</b>\nChoose where OnFlip works.", keyboard);
 }
@@ -309,14 +335,14 @@ async function sendSettings(chatId: number): Promise<void> {
     {
       inline_keyboard: [
         [
-          { text: "🧠 Model", callback_data: encodeCallback("open", "model") },
-          { text: "💭 Thinking", callback_data: encodeCallback("open", "thinking") },
+          { text: "🧠 Model", callback_data: tickets.put("open", "model") },
+          { text: "💭 Thinking", callback_data: tickets.put("open", "thinking") },
         ],
         [
-          { text: "🛡 Access", callback_data: encodeCallback("open", "access") },
-          { text: "📁 Project", callback_data: encodeCallback("open", "folder") },
+          { text: "🛡 Access", callback_data: tickets.put("open", "access") },
+          { text: "📁 Project", callback_data: tickets.put("open", "folder") },
         ],
-        [{ text: "＋ New chat", callback_data: encodeCallback("new", "") }],
+        [{ text: "＋ New chat", callback_data: tickets.put("new", "") }],
       ],
     }
   );
@@ -414,9 +440,11 @@ async function handleCallback(
     await answer("Not allowed.");
     return;
   }
-  const decoded = decodeCallback(data);
+  const decoded = tickets.take(data);
   if (!decoded) {
-    await answer();
+    // A button from before the app restarted, or from a picker so old its
+    // ticket has been evicted. Say so rather than doing nothing.
+    await answer("That menu has expired — send /settings again.");
     return;
   }
 
@@ -621,6 +649,7 @@ function restart(): void {
   stopping = true;
   polling = false;
   chats.clear();
+  tickets.clear();
   offset = 0;
   activity = null;
 

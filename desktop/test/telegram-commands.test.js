@@ -119,28 +119,70 @@ test("an empty message is nothing at all", { skip: needsBuild }, () => {
 
 // --- the buttons -----------------------------------------------------------
 
-test("callback data survives a round trip", { skip: needsBuild }, () => {
-  const { encodeCallback, decodeCallback } = load();
+test("a button's data always fits Telegram's 64 bytes", { skip: needsBuild }, () => {
+  // Seen live: the folder picker came back BUTTON_DATA_INVALID and the whole
+  // message was never delivered, because a Windows project path is longer
+  // than the entire budget on its own.
+  const { CallbackTable, CALLBACK_LIMIT } = load();
+  const tickets = new CallbackTable();
+  // String.raw so the backslashes are backslashes: written any other way
+  // this stops being the Windows path the bug was about.
+  const monster = String.raw`C:\Users\somebody\AppData\Local\Temp\a-very-long-project-folder-name-indeed\nested\deeper`;
 
-  assert.deepEqual(decodeCallback(encodeCallback("model", "gpt-5-6-mini")), {
-    action: "model",
-    value: "gpt-5-6-mini",
-  });
+  const data = tickets.put("folder", monster);
+  assert.ok(
+    Buffer.byteLength(data, "utf8") <= CALLBACK_LIMIT,
+    `${Buffer.byteLength(data, "utf8")} bytes`
+  );
+  assert.deepEqual(tickets.take(data), { action: "folder", value: monster });
 });
 
-test("a value containing colons is not cut in half", { skip: needsBuild }, () => {
-  // Windows paths go through here: "folder" plus "C:\work" is two colons.
-  const { encodeCallback, decodeCallback } = load();
-  const round = decodeCallback(encodeCallback("folder", "C:\\work\\shop"));
+test("hundreds of buttons all stay within the limit", { skip: needsBuild }, () => {
+  const { CallbackTable, CALLBACK_LIMIT } = load();
+  const tickets = new CallbackTable();
 
-  assert.equal(round.action, "folder");
-  assert.equal(round.value, "C:\\work\\shop");
+  for (let i = 0; i < 2000; i++) {
+    const data = tickets.put("model", "some-model-slug-" + i);
+    assert.ok(Buffer.byteLength(data, "utf8") <= CALLBACK_LIMIT);
+  }
 });
 
-test("data from anything but this bot is refused", { skip: needsBuild }, () => {
-  const { decodeCallback } = load();
+test("a value keeps every character, colons and backslashes included", { skip: needsBuild }, () => {
+  const { CallbackTable } = load();
+  const tickets = new CallbackTable();
+  const value = String.raw`C:\work\shop:v2`;
 
-  assert.equal(decodeCallback("something:else"), null);
-  assert.equal(decodeCallback(""), null);
-  assert.equal(decodeCallback(undefined), null);
+  assert.equal(tickets.take(tickets.put("folder", value)).value, value);
+});
+
+test("data that is not ours is refused", { skip: needsBuild }, () => {
+  const { CallbackTable } = load();
+  const tickets = new CallbackTable();
+
+  assert.equal(tickets.take("something:else"), null);
+  assert.equal(tickets.take(""), null);
+  assert.equal(tickets.take(undefined), null);
+  // A ticket that was never issued — a button from before a restart.
+  assert.equal(tickets.take("onflip:zzz"), null);
+});
+
+test("the table does not grow without bound", { skip: needsBuild }, () => {
+  // A stale ticket is answered, not obeyed; an unbounded map is a leak for
+  // the life of the process.
+  const { CallbackTable } = load();
+  const tickets = new CallbackTable();
+  const first = tickets.put("model", "the-first-one");
+
+  for (let i = 0; i < 1000; i++) tickets.put("model", "m" + i);
+
+  assert.equal(tickets.take(first), null, "the oldest ticket should have been evicted");
+});
+
+test("clearing forgets everything", { skip: needsBuild }, () => {
+  const { CallbackTable } = load();
+  const tickets = new CallbackTable();
+  const data = tickets.put("model", "x");
+  tickets.clear();
+
+  assert.equal(tickets.take(data), null);
 });
