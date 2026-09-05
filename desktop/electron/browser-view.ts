@@ -111,6 +111,75 @@ function blankUrl(): string {
 /** Declared before `embeddedEnv` uses it; hoisting keeps the order readable. */
 export const blankViewUrl = blankUrl;
 
+/**
+ * Chrome's user agent, from Electron's own.
+ *
+ * Electron advertises itself twice in every request: once as the app
+ * ("onflip-desktop/0.8.9") and once as the runtime ("Electron/33.4.11").
+ * Both are true and neither belongs on the wire. To a bot check they are the
+ * two most conspicuous tokens a request can carry — reported live: Cloudflare
+ * challenging page after page, the same verification over and over, on a
+ * browser a person was sitting in front of and driving by hand.
+ *
+ * Everything else already looked like a real browser: `navigator.webdriver`
+ * false, five plugins, a real GPU behind WebGL, the `chrome` object present.
+ * It was the name badge alone.
+ *
+ * Derived by removing those two tokens rather than by writing a UA out in
+ * full, so the Chrome version stays whatever Chromium is actually underneath.
+ * A hard-coded version drifts at the next Electron bump and then claims a
+ * Chrome that does not match the engine's own behaviour — which is a worse
+ * signal than the one being removed.
+ */
+export function chromeUserAgent(electronUserAgent: string): string {
+  return electronUserAgent
+    .replace(/\s*Electron\/\S+/i, "")
+    .replace(/\s*onflip[^\s/]*\/\S+/i, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+/**
+ * The client-hint header that goes with that user agent.
+ *
+ * Chromium builds `Sec-CH-UA` from its own brand list, which says "Chromium"
+ * and never "Google Chrome", and there is no Electron API to change it. A
+ * request whose UA says Chrome while its hints say Chromium-only is exactly
+ * the inconsistency these checks look for, so the header is rewritten to
+ * agree with the name the UA gives.
+ */
+function brandHeader(version: string): string {
+  return `"Google Chrome";v="${version}", "Chromium";v="${version}", "Not?A_Brand";v="99"`;
+}
+
+/** The major Chrome version out of a UA string, or "" when it has none. */
+export function chromeMajor(userAgent: string): string {
+  return /Chrome\/(\d+)/i.exec(userAgent)?.[1] ?? "";
+}
+
+/**
+ * Would Chrome send client hints to this URL?
+ *
+ * Only to a secure origin — which includes localhost, however it is spelled,
+ * because Chromium treats loopback as potentially trustworthy.
+ */
+export function isSecure(url: string): boolean {
+  try {
+    const { protocol, hostname } = new URL(url);
+    if (protocol === "https:" || protocol === "wss:") return true;
+    return hostname === "localhost" || hostname === "127.0.0.1" || hostname === "[::1]";
+  } catch {
+    return false;
+  }
+}
+
+/** What `Sec-CH-UA-Platform` calls the machine this is running on. */
+export function platformHint(): string {
+  if (process.platform === "darwin") return "macOS";
+  if (process.platform === "win32") return "Windows";
+  return "Linux";
+}
+
 /** The window's view, created on first use. */
 export function ensureView(win: BrowserWindow): WebContentsView | null {
   if (!viewMark) return null;
@@ -130,6 +199,39 @@ export function ensureView(win: BrowserWindow): WebContentsView | null {
       webSecurity: true,
     },
   });
+  // The agent's browser presents itself as the Chromium it is, without the
+  // Electron and app-name tokens Electron adds. Set on the session as well as
+  // the page so subresource requests carry it too — a document that claims
+  // Chrome while its own scripts and images announce Electron is worse than
+  // not bothering.
+  const ua = chromeUserAgent(app.userAgentFallback);
+  const major = chromeMajor(ua);
+  view.webContents.setUserAgent(ua);
+  const partition = view.webContents.session;
+  partition.setUserAgent(ua);
+  if (major) {
+    partition.webRequest.onBeforeSendHeaders((details, done) => {
+      const headers = details.requestHeaders;
+      // Set rather than only replaced. Every Chrome since 89 sends these on
+      // a secure origin, so their *absence* is as clear a signal as a wrong
+      // value — and Electron was seen sending none at all. Written for
+      // secure origins only, because that is also the rule Chrome follows;
+      // adding them to a plain-http request would be the anomaly instead.
+      if (isSecure(details.url)) {
+        for (const key of Object.keys(headers)) {
+          const lower = key.toLowerCase();
+          if (lower === "sec-ch-ua" || lower === "sec-ch-ua-mobile" || lower === "sec-ch-ua-platform") {
+            delete headers[key];
+          }
+        }
+        headers["sec-ch-ua"] = brandHeader(major);
+        headers["sec-ch-ua-mobile"] = "?0";
+        headers["sec-ch-ua-platform"] = `"${platformHint()}"`;
+      }
+      done({ requestHeaders: headers });
+    });
+  }
+
   view.setBackgroundColor("#00000000");
   win.contentView.addChildView(view);
   // Parked off-screen rather than absent: a view with no bounds still loads,
