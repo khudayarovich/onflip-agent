@@ -124,6 +124,55 @@ export function shellHost(): ShellHost {
  */
 let sessionCwd: string | null = null;
 
+/**
+ * Split the trailing probe off a command's output.
+ *
+ * The probe line carries the working directory *and* the command's real exit
+ * code — see `cwdProbe`, where the code travels this way because on Windows
+ * `exit` would discard PowerShell's pending object output. Both shells emit
+ * the same shape, so one parser reads Windows and macOS alike:
+ *
+ *     __ONFLIP_CWD__:<code>:<path>
+ *
+ * Pure, because the two platform shapes differ in exactly the way that is
+ * easy to get wrong — a Windows path is full of colons and a POSIX one is
+ * not — and only one of them can be run from any given machine.
+ */
+export function parseProbe(stdout: string): {
+  stdout: string;
+  cwd: string | null;
+  code: number | null;
+} {
+  let cwd: string | null = null;
+  let code: number | null = null;
+  const lines = stdout.split(/\r?\n/);
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const idx = lines[i].indexOf(`${CWD_MARKER}:`);
+    if (idx === -1) continue;
+    const payload = lines[i].slice(idx + CWD_MARKER.length + 1).trim();
+    // Only the *first* colon separates the code from the path: `C:\Users\me`
+    // has its own, and splitting on all of them would truncate every Windows
+    // directory to its drive letter.
+    const split = payload.indexOf(":");
+    const rc = split === -1 ? "" : payload.slice(0, split);
+    if (/^-?\d+$/.test(rc)) {
+      code = Number(rc);
+      cwd = payload.slice(split + 1).trim();
+    } else {
+      // A probe from before the code was added, or a mangled line. The path
+      // is still worth having.
+      cwd = payload;
+    }
+    // Output without a trailing newline shares the marker's line, so only the
+    // marker goes — dropping the whole line turned `Write-Host -NoNewline
+    // hello` into "(no output)".
+    if (idx > 0) lines[i] = lines[i].slice(0, idx);
+    else lines.splice(i, 1);
+    break;
+  }
+  return { stdout: lines.join("\n"), cwd, code };
+}
+
 export function getShellCwd(fallback: string): string {
   return sessionCwd ?? fallback;
 }
@@ -296,42 +345,18 @@ function execute(
       // directory and the command's real exit code — see `cwdProbe`, where
       // the code travels this way because `exit` would discard PowerShell's
       // pending object output.
-      let resolvedCwd: string | null = null;
-      let markerCode: number | null = null;
-      const lines = stdout.split(/\r?\n/);
-      for (let i = lines.length - 1; i >= 0; i--) {
-        const idx = lines[i].indexOf(`${CWD_MARKER}:`);
-        if (idx !== -1) {
-          const payload = lines[i].slice(idx + CWD_MARKER.length + 1).trim();
-          // Only the first colon separates the code from the path: a Windows
-          // path is full of them.
-          const split = payload.indexOf(":");
-          const rc = split === -1 ? "" : payload.slice(0, split);
-          if (/^-?\d+$/.test(rc)) {
-            markerCode = Number(rc);
-            resolvedCwd = payload.slice(split + 1).trim();
-          } else {
-            // A probe from before the code was added, or a mangled line.
-            // The path is still worth having.
-            resolvedCwd = payload;
-          }
-          // Output without a trailing newline shares the marker's line, so
-          // only the marker goes — dropping the whole line turned
-          // `Write-Host -NoNewline hello` into "(no output)".
-          if (idx > 0) lines[i] = lines[i].slice(0, idx);
-          else lines.splice(i, 1);
-          break;
-        }
-      }
+      const probe = parseProbe(stdout);
       resolve({
-        stdout: lines.join("\n"),
+        stdout: probe.stdout,
         stderr,
         // The marker is the authority when it arrived: the process itself now
-        // exits 0 on Windows whatever the command did.
-        code: markerCode ?? code,
+        // exits 0 on Windows whatever the command did. A command that called
+        // `exit` itself kills the shell before the probe runs, so there is no
+        // marker and the process code is all there is — which is correct.
+        code: probe.code ?? code,
         timedOut,
         aborted,
-        cwd: resolvedCwd,
+        cwd: probe.cwd,
       });
     };
 
@@ -457,17 +482,22 @@ export const bashTool: ToolDefinition = {
 /**
  * How long a background command gets to prove it is still alive.
  *
- * Sized from the slow case rather than the obvious one. A bare PowerShell
- * starts in 125ms, but a *failing* command takes far longer than that to
- * fail: measured on this machine, `definitelynotarealprogram --serve` needed
- * 761ms, because PowerShell searches PATH and then builds a full
- * CommandNotFoundException record before exiting. A 400ms window let exactly
- * the case this exists to catch slip through.
+ * Sized from the slow case on each platform, because they are an order of
+ * magnitude apart. Measured with a missing executable, which is the case this
+ * exists to catch:
  *
- * The cost is about a second on each background start, paid once, against
- * the four turns a phantom server cost in a real session.
+ *   PowerShell   761ms   (bare startup 125ms — the rest is PATH search and
+ *                         building a full CommandNotFoundException record)
+ *   /bin/sh       37ms   (bare startup 33ms)
+ *
+ * A 400ms window let the Windows case slip straight through, which is how
+ * this was got wrong the first time. Using the Windows figure everywhere
+ * would instead have taxed every background start on macOS and Linux with
+ * more than a second of waiting for nothing, thirty times what that shell
+ * needs. The Windows budget is the measurement plus room for a loaded
+ * machine; the POSIX one is the same idea at its own scale.
  */
-const BACKGROUND_SETTLE_MS = 1_200;
+const BACKGROUND_SETTLE_MS = process.platform === "win32" ? 1_200 : 250;
 
 async function startBackground(command: string, cwd: string): Promise<ToolResult> {
   const host = shellHost();

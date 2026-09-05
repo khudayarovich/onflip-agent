@@ -249,17 +249,29 @@ export function inspectEnvironment(): DoctorEnvironment {
  * text in the SQLite file, and a name is all this needs.
  */
 function profileHasSession(): boolean {
-  const db = path.join(configDir(), "browser-profile", "Default", "Network", "Cookies");
-  try {
-    if (!fs.existsSync(db)) return false;
-    const raw = fs.readFileSync(db);
-    return raw.includes("__Secure-next-auth.session-token");
-  } catch (e) {
-    logger.debug("doctor", "could not read the profile cookie store", {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return false;
+  const profile = path.join(configDir(), "browser-profile");
+  // Chromium moved the cookie store under `Network/` around v96, and the
+  // layout is otherwise identical on Windows, macOS and Linux. Both are
+  // checked because a false "no session here" is the worst answer this can
+  // give: it is the one that sends someone to sign in again when they are
+  // already signed in, and the doctor is meant to be the thing you trust.
+  const candidates = [
+    path.join(profile, "Default", "Network", "Cookies"),
+    path.join(profile, "Default", "Cookies"),
+  ];
+  for (const db of candidates) {
+    try {
+      if (!fs.existsSync(db)) continue;
+      // The values are encrypted; the names are not, which is all this needs.
+      if (fs.readFileSync(db).includes("__Secure-next-auth.session-token")) return true;
+    } catch (e) {
+      logger.debug("doctor", "could not read a profile cookie store", {
+        db,
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
   }
+  return false;
 }
 
 /**

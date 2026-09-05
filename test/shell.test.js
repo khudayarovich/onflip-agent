@@ -17,7 +17,7 @@ const path = require("node:path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { bashTool, killAllJobs } = require("../dist/tools/shell");
+const { bashTool, killAllJobs, parseProbe } = require("../dist/tools/shell");
 
 const windows = process.platform === "win32";
 
@@ -109,6 +109,65 @@ test("the working directory is still tracked through the marker", async () => {
   const r = await w.run(windows ? "Get-Location | Out-String" : "pwd");
   assert.ok(!r.error);
   assert.ok(!r.output.includes("__ONFLIP_CWD__"), "the marker must not leak into the output");
+});
+
+// ---------------------------------------------------------------------------
+// the probe line, on both platforms
+//
+// Only one of these shells can be run from any given machine, and the two
+// shapes differ in exactly the way that is easy to get wrong: a Windows path
+// is full of colons and a POSIX one is not. So the parser is pure and both
+// are checked from anywhere.
+// ---------------------------------------------------------------------------
+
+test("a Windows probe keeps the drive letter in the path", () => {
+  const r = parseProbe("hello\n__ONFLIP_CWD__:0:C:\\Users\\me\\project\n");
+  assert.equal(r.code, 0);
+  assert.equal(r.cwd, "C:\\Users\\me\\project", "the path must not be cut at the drive colon");
+  assert.equal(r.stdout.trim(), "hello");
+});
+
+test("a macOS or Linux probe parses the same way", () => {
+  const r = parseProbe("hello\n__ONFLIP_CWD__:0:/Users/me/project\n");
+  assert.equal(r.code, 0);
+  assert.equal(r.cwd, "/Users/me/project");
+  assert.equal(r.stdout.trim(), "hello");
+});
+
+test("a non-zero code comes back from either platform's probe", () => {
+  assert.equal(parseProbe("__ONFLIP_CWD__:3:C:\\tmp").code, 3);
+  assert.equal(parseProbe("__ONFLIP_CWD__:127:/tmp").code, 127);
+});
+
+test("no probe at all leaves the process exit code in charge", () => {
+  // A command that calls `exit` itself kills the shell before the probe can
+  // run. There is then no marker, and the process code is the only truth.
+  const r = parseProbe("partial output\n");
+  assert.equal(r.code, null);
+  assert.equal(r.cwd, null);
+  assert.equal(r.stdout.trim(), "partial output");
+});
+
+test("output with no trailing newline keeps its text", () => {
+  // The marker shares that last line, so only the marker may be removed.
+  const r = parseProbe("no newline here__ONFLIP_CWD__:0:/tmp");
+  assert.equal(r.stdout, "no newline here");
+  assert.equal(r.cwd, "/tmp");
+});
+
+test("a path containing spaces survives", () => {
+  const r = parseProbe("__ONFLIP_CWD__:0:/Users/me/My Project");
+  assert.equal(r.cwd, "/Users/me/My Project");
+});
+
+test("the marker never leaks into the output", () => {
+  for (const line of [
+    "__ONFLIP_CWD__:0:/tmp",
+    "text__ONFLIP_CWD__:0:C:\\x",
+    "a\nb\n__ONFLIP_CWD__:1:/var",
+  ]) {
+    assert.ok(!parseProbe(line).stdout.includes("__ONFLIP_CWD__"), `leaked for: ${line}`);
+  }
 });
 
 // ---------------------------------------------------------------------------
