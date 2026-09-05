@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ChatMessage } from "onflip/dist/types";
-import { parseTurn } from "onflip/dist/agent/protocol";
+import { isUserRequest, parseTurn } from "onflip/dist/agent/protocol";
 import { ChatItem, ToolCallDTO, ToolResultDTO } from "../shared/protocol";
 import { subjectFor } from "./subjects";
 
@@ -36,8 +36,19 @@ export function replayItems(history: ChatMessage[]): ChatItem[] {
   /** Calls from the previous assistant message, waiting for their results. */
   let pendingCalls: ToolCallDTO[] = [];
 
-  for (const message of history) {
+  for (const [index, message] of history.entries()) {
     if (message.role === "system") continue;
+
+    // How long the turn before this one took, recovered from the timestamps
+    // the store already keeps. The live turn emits its own `duration` item,
+    // but that lives only in the renderer's state — reopen the session and
+    // every "worked for 4m" was gone. Nothing new has to be written down:
+    // the gap between a request and the last message answering it is the
+    // turn, and that is on disk for every session ever recorded.
+    if (isUserRequest(message)) {
+      const closed = turnDuration(history, index);
+      if (closed !== null) items.push({ type: "duration", id: randomUUID(), ms: closed });
+    }
 
     if (message.role === "assistant") {
       pendingCalls = [];
@@ -112,6 +123,10 @@ export function replayItems(history: ChatMessage[]): ChatItem[] {
     items.push({ type: "user", id: message.id, text: stripMentionNote(message.content) });
   }
 
+  // The last turn has no request after it to trigger the check above.
+  const final = turnDuration(history, history.length);
+  if (final !== null) items.push({ type: "duration", id: randomUUID(), ms: final });
+
   // A replayed call can never still be running: anything without a result by
   // now was cut off mid-turn, and must not wear a working spinner forever.
   for (const item of items) {
@@ -126,6 +141,32 @@ export function replayItems(history: ChatMessage[]): ChatItem[] {
   }
 
   return items;
+}
+
+/**
+ * How long the turn ending just before `end` took, or null if there is no
+ * turn there — the very first message, two requests in a row, or a session
+ * recorded before messages carried timestamps.
+ *
+ * A turn runs from what the user asked to the last thing written answering
+ * it. Sub-second turns are left out for the same reason the live path leaves
+ * them out: they are noise, not information.
+ */
+function turnDuration(history: ChatMessage[], end: number): number | null {
+  let last: ChatMessage | undefined;
+  let start: ChatMessage | undefined;
+  for (let i = end - 1; i >= 0; i--) {
+    const message = history[i];
+    if (message.role === "system") continue;
+    if (!last) last = message;
+    if (isUserRequest(message)) {
+      start = message;
+      break;
+    }
+  }
+  if (!start || !last || start === last) return null;
+  const ms = (last.createdAt ?? 0) - (start.createdAt ?? 0);
+  return ms >= 1_000 ? ms : null;
 }
 
 /**
