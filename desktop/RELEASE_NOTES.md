@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.8.6
+# OnFlip Desktop 0.8.7
 
-**Four bugs that made OnFlip lie to itself.** None of them raised an error — the agent was told something untrue and worked from it, rewriting code that was already correct. All four came out of one real session log.
+**OnFlip now updates itself.** Previous versions could tell you a new one existed and then hand you a download page. This one checks quietly in the background, offers the update when there is one, and installs it — download, quit, install, reopen — without you visiting GitHub.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,23 +8,28 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.8.6.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.6/OnFlip-Setup-0.8.6.exe) | ~84 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.8.6-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.6/OnFlip-0.8.6-mac-arm64.dmg) | ~101 MB |
-| **macOS** · Intel | [OnFlip-0.8.6-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.6/OnFlip-0.8.6-mac-x64.dmg) | ~108 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.8.7.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.7/OnFlip-Setup-0.8.7.exe) | ~84 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.8.7-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.7/OnFlip-0.8.7-mac-arm64.dmg) | ~101 MB |
+| **macOS** · Intel | [OnFlip-0.8.7-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.8.7/OnFlip-0.8.7-mac-x64.dmg) | ~108 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
 
+This is the first release that can install the next one. Updating *to* 0.8.7 is still a manual download; from here on it is a button.
+
+## New: updates install themselves
+
+- **It checks on its own.** Ninety seconds after launch, then every six hours. Nothing to click, and no check happens while you are mid-turn.
+- **It tells you once.** A new version announces itself with an **Update** button and then stays quiet — the same version is never announced at you twice.
+- **It shows you the download.** Clicking Update opens a progress screen rather than a spinner, so a slow connection looks slow instead of broken.
+- **It finishes the job.** The app closes itself and the installer runs. On Windows that is the normal installer in silent mode; on macOS the app bundle is swapped in place, and the old one is put back if the swap fails.
+
+The build is unsigned, so this is exactly what you would have done by hand — fetch the file this release publishes and run it — with one thing added: the download's length is checked against what GitHub said it would be. A half-downloaded installer is worse than none, because it runs and fails halfway. Nothing is touched while the app is alive.
+
 ## Fixed
 
-- **Half of PowerShell produced no output at all.** Anything that returns objects rather than text — `Get-ChildItem | Select-Object`, `Get-Process`, most idiomatic PowerShell — came back completely empty. The agent would ask for a file listing, get nothing, and start doubting work that was fine. Plain strings were unaffected, which is why it looked like an occasional glitch instead of a rule.
-- **"Started in the background" could be untrue.** A background command was reported as running the instant it was launched, before it could possibly have failed. On a machine without Python, `python -m http.server` was reported as started, and the agent then spent four turns investigating a server that never existed. It now waits for the command to prove it is alive, and says plainly when it died or simply finished.
-- **A malformed code fence could delete a step.** When a reply closed a block with two backticks instead of three, the block *after* it was silently swallowed — two actions written, one performed, no error either way. The missing step then had to be redone on the next turn.
-- **The browser told you to run a command that cannot work.** With no Chrome installed, the agent's browser suggested `npx playwright install` and then spent a turn watching it time out. OnFlip now fetches its own browser, and says so honestly if it cannot.
-
-## Also in this release
-
-- macOS and Linux no longer pay a Windows-sized delay when starting a background command. The two shells report a failure an order of magnitude apart — 37 ms against 761 ms — and each now waits only as long as it needs to.
-- The health checks look in both places Chromium keeps its cookies, so a signed-in profile is never reported as signed out.
+- **Every bulleted list came back broken.** Replies are read back out of the rendered page, and the page indents its own HTML. That indentation was being read as content, so a bullet arrived with its marker alone on one line and its text on the next, and numbered lists lost their numbers entirely. Worse, the same stray indentation put four spaces in front of the second paragraph of a reply — which Markdown reads as a code block, so ordinary prose was displayed as code. This also fed straight back into the agent: when a long session is summarised, the summary is what the agent reads next.
+- **A background server that had died still looked alive.** The message saying a server started stayed in the conversation looking true forever. In one session the agent checked a web page against a server that had exited some time earlier, failed, guessed wrong about why, and failed again the same way — two turns spent on a port nobody was listening to. The agent is now told which of its background jobs are still running and which are gone.
+- **Long sessions could change language mid-answer.** When a session grows too long, OnFlip summarises it and continues from the summary. The summary was the only surviving copy of the request — so an English session on a Russian-language Windows install compacted, and every reply after that point came back in Russian, imitating the only text left in view. Your request is now carried through the summary word for word.
 
 ## Requirements
 
@@ -37,6 +42,4 @@ Windows 10/11, or macOS 13+. A ChatGPT account — the free plan is enough.
 
 ## Under the hood
 
-144 automated tests now run on every push, up from 126. The new ones cover both platforms' shell behaviour from either machine — the two differ in exactly the way that is easy to get wrong, and only one of them can be run at a time.
-
-**Full changelog:** [desktop-v0.8.5...desktop-v0.8.6](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.8.5...desktop-v0.8.6)
+173 automated tests run on every push, up from 144. The new ones pin the page reader against markup shaped the way the real page is shaped — indentation included, because a test built from tidy HTML passes against the broken reader and proves nothing.

@@ -1,51 +1,59 @@
 # Releasing
 
-A release is the desktop app: a Windows installer built locally and macOS
-disk images built by GitHub Actions, both attached to one GitHub Release.
+A release is the desktop app: Windows and macOS artifacts on one GitHub
+Release, all of them built by `.github/workflows/desktop-release.yml` when the
+tag is pushed. Nothing is built by hand and nothing is uploaded by hand.
 
 Desktop releases are tagged `desktop-vX.Y.Z`.
 
-## 1. Version and tag
+## 1. Write the release page first
+
+The workflow creates the release from `desktop/RELEASE_NOTES.md` if that file
+exists, and falls back to generated notes if it does not — so the notes have
+to be committed *before* the tag, not after. Section 4 is what to put in them.
+
+## 2. Version and tag
 
 ```bash
 cd desktop
-# bump "version" in package.json and package-lock.json to X.Y.Z
+npm --no-git-tag-version version X.Y.Z   # package.json and package-lock.json
 cd ..
-git commit -am "OnFlip Desktop X.Y.Z"
+git commit -am "OnFlip Desktop X.Y.Z: <what changed>"
 git push origin main
 git tag desktop-vX.Y.Z
 git push origin desktop-vX.Y.Z
 ```
 
-## 2. Build the Windows installer
+Pushing the tag is the release. The version in `desktop/package.json` must
+match the tag: it is what the running app reports as its own version, and the
+update check compares the two.
 
-```bash
-cd desktop
-npm run installer
-```
+## 3. What the workflow does
 
-`scripts/release.js` compiles the main process, engine and renderer, then
-replaces the `node_modules/onflip` symlink with a real copy of the engine —
-electron-builder must not follow that link into the repository root — vendors
-the engine's production dependencies (including the built `better-sqlite3`
-binding and `prebuilds/`), runs electron-builder, and restores the symlink.
+**Windows first**, because that job creates the release. `scripts/release.js`
+compiles the main process, engine and renderer, then replaces the
+`node_modules/onflip` symlink with a real copy of the engine — electron-builder
+must not follow that link into the repository root — vendors the engine's
+production dependencies (including the built `better-sqlite3` binding and
+`prebuilds/`), runs electron-builder, and restores the symlink. It uploads
+`OnFlip-Setup-X.Y.Z.exe` and its `.blockmap`.
 
-The result is `desktop/release/OnFlip-Setup-X.Y.Z.exe`. Attach it, and its
-`.blockmap`, to the release.
+**macOS second**, on a real Mac: the artifacts cannot be cross-built from
+Windows, because the `.app` carries symlinks and the disk image needs
+`hdiutil`. It runs `release.js --mac` and attaches `dmg` and `zip` for both
+`arm64` and `x64` to the release the Windows job made.
 
-## 3. Build the macOS artifacts
+Both build unsigned (`CSC_IDENTITY_AUTO_DISCOVERY: false`); the mac build
+ad-hoc signs itself in `afterPack`, so a first launch needs
+**right-click → Open → Open**.
 
-macOS artifacts cannot be cross-built from Windows: the `.app` carries symlinks
-and the disk image needs `hdiutil`. Dispatch the workflow instead:
+The `.zip` is not a convenience copy — it is what the in-app updater installs
+on macOS, because it holds the `.app` directly and nothing has to be mounted.
+Do not drop it from the release.
 
-**Actions → macOS desktop build → Run workflow**, with the tag
-(`desktop-vX.Y.Z`) as input.
-
-It builds `release.js --mac` on a macOS runner and uploads `dmg` and `zip` for
-both `arm64` and `x64` to that release.
-
-The build runs unsigned (`CSC_IDENTITY_AUTO_DISCOVERY: false`), so a first
-launch needs **right-click → Open → Open**.
+**To rebuild without moving the tag:** *Actions → Desktop release → Run
+workflow*, with the tag as input. It uploads with `--clobber` and reuses the
+existing release.
 
 ## 4. Write the release page
 
