@@ -499,6 +499,25 @@ export const bashTool: ToolDefinition = {
  */
 const BACKGROUND_SETTLE_MS = process.platform === "win32" ? 1_200 : 250;
 
+/**
+ * How long to wait for a background command to prove it is alive.
+ *
+ * Overridable because the constant above is a *budget*, and a budget makes a
+ * bad assertion. The Windows figure is 1.5× a measurement taken on a warm
+ * machine, which is ample in production and far too tight on a cold shared CI
+ * runner, where the first PowerShell spawn of a job pays for loading the whole
+ * runtime. The test that proves a failing command is not reported as started
+ * was therefore racing the runner, and lost often enough that commits touching
+ * nothing but Markdown came back red.
+ *
+ * Raising it in a test costs no wall-clock time: the wait resolves as soon as
+ * the child closes, so the window is only a ceiling.
+ */
+function backgroundSettleMs(): number {
+  const override = Number(process.env.ONFLIP_BACKGROUND_SETTLE_MS);
+  return Number.isFinite(override) && override > 0 ? override : BACKGROUND_SETTLE_MS;
+}
+
 async function startBackground(command: string, cwd: string): Promise<ToolResult> {
   const host = shellHost();
   const id = `job_${++jobCounter}`;
@@ -552,7 +571,7 @@ async function startBackground(command: string, cwd: string): Promise<ToolResult
   // after the settle window is reported as started, exactly as before.
   await new Promise<void>((resolve) => {
     if (job.exitCode !== null) return resolve();
-    const timer = setTimeout(resolve, BACKGROUND_SETTLE_MS);
+    const timer = setTimeout(resolve, backgroundSettleMs());
     child.once("close", () => {
       clearTimeout(timer);
       resolve();

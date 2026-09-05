@@ -174,13 +174,43 @@ test("the marker never leaks into the output", () => {
 // background jobs that never started
 // ---------------------------------------------------------------------------
 
+/**
+ * Run with a settle window long enough that the runner cannot win the race.
+ *
+ * The production window is 1.5× a measurement taken on a warm machine. That
+ * is the right budget to ship and the wrong one to assert against: on a cold
+ * shared CI runner the first PowerShell spawn pays for loading the runtime,
+ * blows through 1200ms, and a command that failed gets reported as started —
+ * the test going red for a reason that has nothing to do with the code. It
+ * cost nothing to find, either: commits touching only Markdown came back red.
+ *
+ * Costs no wall-clock time, because the wait resolves the moment the child
+ * closes. The window is a ceiling, not a sleep.
+ */
+async function withSettleWindow(ms, body) {
+  const had = Object.prototype.hasOwnProperty.call(
+    process.env,
+    "ONFLIP_BACKGROUND_SETTLE_MS"
+  );
+  const previous = process.env.ONFLIP_BACKGROUND_SETTLE_MS;
+  process.env.ONFLIP_BACKGROUND_SETTLE_MS = String(ms);
+  try {
+    return await body();
+  } finally {
+    if (had) process.env.ONFLIP_BACKGROUND_SETTLE_MS = previous;
+    else delete process.env.ONFLIP_BACKGROUND_SETTLE_MS;
+  }
+}
+
 test("a background command that cannot start says so", async () => {
   // Live: `python -m http.server 8000` on a machine with no python was
   // reported as "Started in the background as job_1". Every check the agent
   // then ran was correct, and the only wrong thing it had been told was that
   // line — four turns and several rewrites chasing a server that never was.
   const w = workspace();
-  const r = await w.run("definitelynotarealprogram-xyz --serve", { background: true });
+  const r = await withSettleWindow(30_000, () =>
+    w.run("definitelynotarealprogram-xyz --serve", { background: true })
+  );
   assert.equal(r.error, true, `should have reported the failure:\n${r.output}`);
   assert.match(r.output, /did not stay running/);
   assert.ok(!/Started in the background/.test(r.output), "it must not claim to have started");
@@ -190,7 +220,9 @@ test("a background command that finishes at once says that too", async () => {
   // Exiting 0 immediately is not a failure, but "started in the background"
   // would be just as untrue about it.
   const w = workspace();
-  const r = await w.run(windows ? "Write-Output hello" : "echo hello", { background: true });
+  const r = await withSettleWindow(30_000, () =>
+    w.run(windows ? "Write-Output hello" : "echo hello", { background: true })
+  );
   assert.ok(!r.error, `should not be an error:\n${r.output}`);
   assert.match(r.output, /finished immediately/);
   assert.match(r.output, /hello/);
