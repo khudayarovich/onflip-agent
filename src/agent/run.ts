@@ -1,5 +1,5 @@
 import { ChatMessage, ToolCall, ToolResult, SessionState } from "../types";
-import { ToolRegistry } from "../tools";
+import { listJobs, ToolRegistry } from "../tools";
 import { isTerminalTool, TerminalToolName, TERMINAL_TOOL_NAMES } from "../tools/terminal";
 import { Transport, SendOptions, TransportReply, ReplyMeta } from "../chatgpt/transport";
 import { newMessage, parseTurn, formatToolResult } from "./protocol";
@@ -695,7 +695,13 @@ async function sendWithRetry(
     thinking: opts.thinking,
     signal: opts.signal,
     onDelta: events.onDelta,
-    reminder: turnReminder(opts.shellEnabled, opts.tools.list.map((t) => t.name)),
+    // Read per step, not once per turn: a job can exit between two steps of
+    // the same turn, and the step after it is the one that needs to know.
+    reminder: turnReminder(
+      opts.shellEnabled,
+      opts.tools.list.map((t) => t.name),
+      listJobs()
+    ),
   };
 
   let lastError: unknown;
@@ -1291,8 +1297,37 @@ export function detectFabrication(raw: string): boolean {
  * summary archived the kept tail while it was still live, and the desktop
  * showed those messages twice.
  */
+/**
+ * The most recent thing the user actually typed, or null.
+ *
+ * Not every `user` message is the user: tool results and protocol nudges ride
+ * the same role. Those are recognisable — a result carries `toolName` and
+ * opens with `<onflip:result`, and everything OnFlip writes itself opens with
+ * a bracketed tag.
+ */
+export function lastUserRequest(history: ChatMessage[], limit = 2_000): string | null {
+  for (let i = history.length - 1; i >= 0; i--) {
+    const message = history[i];
+    if (message.role !== "user" || message.toolName) continue;
+    const text = message.content.trim();
+    if (!text) continue;
+    if (text.startsWith("<onflip:result") || text.startsWith("[OnFlip")) continue;
+    if (text.startsWith("[Context carried over")) continue;
+    return text.length > limit ? `${text.slice(0, limit)}\n\n… (request truncated)` : text;
+  }
+  return null;
+}
+
 async function compact(history: ChatMessage[], opts: AgentOptions): Promise<ChatMessage[]> {
   const systemMessage = history[0]?.role === "system" ? history[0] : null;
+  // Kept before the transcript is replaced. A brief is the model's paraphrase
+  // of the request, written in whatever language the session had drifted into
+  // — and after compaction it is the only version of the request left, so the
+  // paraphrase becomes the request. Live, a session working in English on a
+  // Russian-locale machine compacted, and every reply after that point came
+  // back in Russian: the user's own words were gone and the Russian
+  // PowerShell errors in the tool output were all that was left to imitate.
+  const asked = lastUserRequest(history);
 
   // A summary is only worth having if it leaves room to work: a fifth of the
   // budget, so a compacted session can take several more turns before it
@@ -1352,6 +1387,16 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<Chat
           "[Context carried over from the earlier part of this session]",
           "",
           summary,
+          ...(asked
+            ? [
+                "",
+                "The request being worked on, in the user's own words:",
+                "",
+                asked,
+                "",
+                "Answer in the language of that request, whatever language the notes above happen to be in.",
+              ]
+            : []),
           "",
           "Continue from here. The tool protocol and every instruction above still applies.",
         ].join("\n")

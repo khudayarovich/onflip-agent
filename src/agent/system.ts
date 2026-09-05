@@ -291,7 +291,54 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
  * from imagination instead of calling a tool. This is short on purpose so it
  * stays cheap to repeat.
  */
-export function turnReminder(shellEnabled: boolean, tools?: string[]): string {
+/** A background job as the reminder needs to describe it. */
+export interface JobSummary {
+  id: string;
+  command: string;
+  running: boolean;
+}
+
+/**
+ * The state of this session's background jobs, or "" when there are none.
+ *
+ * Nothing told the model when a background job died. It learned that a job
+ * existed from the tool result that started it, and that result stayed true
+ * forever as far as the transcript was concerned — so a dev server that had
+ * since exited still looked alive, and compaction copied the belief into the
+ * handover brief as settled fact. Live, that cost two turns: a verification
+ * step ran against a server that was no longer listening, failed, and the
+ * retry guarded on `Get-Process node` — which matched some unrelated node
+ * process — so it never restarted the server and failed again the same way.
+ *
+ * Naming the exited jobs is what breaks that loop. The model cannot deduce it
+ * and will not ask.
+ */
+export function backgroundJobLine(jobs?: JobSummary[]): string {
+  if (!jobs?.length) return "";
+  const described = jobs
+    .map((j) => {
+      const command = j.command.replace(/\s+/g, " ").trim();
+      const shown = command.length > 60 ? `${command.slice(0, 57)}…` : command;
+      return `${j.id} \`${shown}\` — ${j.running ? "running" : "exited"}`;
+    })
+    .join("; ");
+  const dead = jobs.some((j) => !j.running);
+  return [
+    `Background jobs from this session: ${described}.`,
+    "Read a running job's output with `job_output`.",
+    dead
+      ? "A job listed as exited is gone — its port is not being served any more. Start it again before anything checks it, and do not guess from an earlier result that said it was up."
+      : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+export function turnReminder(
+  shellEnabled: boolean,
+  tools?: string[],
+  jobs?: JobSummary[]
+): string {
   // Naming them matters. Describing only the syntax leaves a model that is
   // used to native function calling concluding that no tools are attached to
   // *this* message, and refusing rather than emitting a block.
@@ -318,7 +365,7 @@ export function turnReminder(shellEnabled: boolean, tools?: string[]): string {
     // this machine — and the turn ended with nothing done.
     "Never hand the task to ChatGPT Work, Codex, Agent mode or any other ChatGPT product, and never offer to. They cannot reach this computer; every step happens here, through onflip blocks, however many it takes.",
     "Never invent file contents, directory listings, or command output. If you have not seen it in a tool result, call a tool.",
-    shellEnabled ? "" : "Shell access is disabled this session.",
+    shellEnabled ? backgroundJobLine(jobs) : "Shell access is disabled this session.",
   ]
     .filter(Boolean)
     .join("\n");
