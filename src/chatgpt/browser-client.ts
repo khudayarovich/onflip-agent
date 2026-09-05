@@ -995,6 +995,37 @@ async function firstVisible(p: Page, selectors: string[], timeout: number) {
   }
 }
 
+/**
+ * Ask now, then ask more slowly.
+ *
+ * A fixed poll interval pays its full cost on the common case. Measured over
+ * one 161-turn session: submitting a message cost a median 626ms and a p90 of
+ * 764ms — flat, so not a tail problem but a tax on every single turn — and
+ * most of it was the composer-cleared check sleeping 250ms *before* its first
+ * look. The composer usually clears in far less than that, so the wait was
+ * mostly spent waiting.
+ *
+ * The ramp checks immediately, then at 25, 50, 100ms and settles at `maxMs`.
+ * A page that answers at once costs one round trip; a page that is genuinely
+ * slow ends up polling no harder than the fixed interval it replaced.
+ */
+export async function pollUntil(
+  p: Pick<Page, "waitForTimeout">,
+  test: () => Promise<boolean>,
+  opts: { timeoutMs: number; maxIntervalMs?: number; signal?: AbortSignal }
+): Promise<boolean> {
+  const deadline = Date.now() + opts.timeoutMs;
+  const maxMs = opts.maxIntervalMs ?? 250;
+  let wait = 0;
+  for (;;) {
+    throwIfAborted(opts.signal);
+    if (await test().catch(() => false)) return true;
+    if (Date.now() >= deadline) return false;
+    if (wait > 0) await p.waitForTimeout(Math.min(wait, Math.max(0, deadline - Date.now())));
+    wait = wait === 0 ? 25 : Math.min(maxMs, wait * 2);
+  }
+}
+
 async function anyVisible(p: Page, selectors: string[]): Promise<boolean> {
   for (const sel of selectors) {
     try {
@@ -2239,9 +2270,13 @@ async function submitMessage(
     const waitStart = Date.now();
     const deadline = waitStart + (ctx?.attached ? 45_000 : 30_000);
     let nudged = false;
+    let pollWait = 25;
     for (;;) {
       throwIfAborted(signal);
-      const button = await firstVisible(p, SEND_SELECTORS, 1_000);
+      // One pass, not a nested one-second wait: this loop is already the
+      // retry, and letting `firstVisible` block for a second inside it made
+      // the outer ramp meaningless whenever the control was briefly absent.
+      const button = await firstVisible(p, SEND_SELECTORS, 0);
       if (button && (await button.isEnabled().catch(() => false))) break;
       if (Date.now() > deadline) {
         logger.info("browser", "send button never enabled; trying anyway", {
@@ -2265,7 +2300,11 @@ async function submitMessage(
           await p.keyboard.press("Backspace").catch(() => {});
         }
       }
-      await p.waitForTimeout(400);
+      // Ramped for the same reason as the composer-cleared check below: the
+      // button is usually enabled within a few tens of milliseconds of the
+      // text landing, and a flat 400ms turned that into 400ms.
+      await p.waitForTimeout(pollWait);
+      pollWait = Math.min(400, pollWait * 2);
     }
     const waited = Date.now() - waitStart;
     if (waited > 2_000) {
@@ -2325,13 +2364,18 @@ async function submitMessage(
     // The composer clears when ChatGPT accepts the message. Past this point
     // the message is with ChatGPT, so an abort is handled by waitForReply,
     // which stops the generation on the page rather than abandoning it.
-    for (let i = 0; i < 12; i++) {
-      await p.waitForTimeout(250);
-      const remaining = (await readComposer(p).catch(() => "")).trim();
-      if (!remaining) {
-        logger.info("browser", "submitted", { via: method.name });
-        return;
-      }
+    //
+    // Ramped rather than a flat 250ms: this used to sleep before its first
+    // look, so a composer that cleared in 30ms still cost a quarter-second,
+    // on every send. The budget is the same three seconds it always was.
+    const cleared = await pollUntil(
+      p,
+      async () => !(await readComposer(p).catch(() => "")).trim(),
+      { timeoutMs: 3_000 }
+    );
+    if (cleared) {
+      logger.info("browser", "submitted", { via: method.name });
+      return;
     }
     logger.info("browser", `submit via ${method.name} left the composer full`, {
       generating: await anyVisible(p, STOP_SELECTORS).catch(() => false),
@@ -2683,7 +2727,12 @@ async function sendOn(
   throwIfAborted(opts?.signal);
   await typeMessage(p, payload, opts?.signal);
   const typedMs = Date.now() - typedAt;
-  await p.waitForTimeout(200);
+  // Was a flat 200ms to let the editor settle before submitting. Measured
+  // across a 161-turn session it was the whole gap between `composeMs` and
+  // its parts — pure latency on every turn — and `submitMessage` opens by
+  // waiting for the send control to come enabled anyway, which is the same
+  // settling expressed as a condition rather than a guess.
+  await p.waitForTimeout(50);
   // The last moment where stopping is free: after this the message is gone.
   throwIfAborted(opts?.signal);
   const submitStart = Date.now();
