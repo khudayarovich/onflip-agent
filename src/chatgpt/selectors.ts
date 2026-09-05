@@ -82,8 +82,25 @@ export const SEND_SELECTORS = [
 ] as const;
 export const SEND_QUERY = joined(SEND_SELECTORS);
 
-/** Where the page says which model the chat will use. */
+/**
+ * Where the page says which model the chat will use.
+ *
+ * Measured against the live page on 2026-09-05: the control is a composer
+ * "pill" carrying **no `data-testid` and no `aria-label`** — its whole
+ * identity is `aria-haspopup="menu"` plus `data-tone="neutral"`, with the
+ * model's name as its text. Every selector previously in this list therefore
+ * matched nothing, which meant `verifyPageModel` had quietly stopped being
+ * able to verify anything: a chat that opened on the wrong model no longer
+ * said so, on an app whose whole promise is running on Luna. The dead
+ * selectors are kept below the working ones because a `data-testid` is the
+ * better handle if ChatGPT ever adds one back.
+ *
+ * The working forms are scoped to the composer's own form, because
+ * `aria-haspopup="menu"` alone is a shape plenty of other controls share.
+ */
 export const MODEL_SWITCHER_SELECTORS = [
+  "form button[aria-haspopup='menu'][data-tone='neutral']",
+  "form button.__composer-pill--neutral[aria-haspopup='menu']",
   "[data-testid='model-switcher-dropdown-button']",
   "button[aria-label*='Model selector']",
   "button[aria-label*='model picker']",

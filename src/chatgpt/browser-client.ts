@@ -1197,8 +1197,48 @@ async function assertLoggedIn(p: Page): Promise<void> {
  * exists instead, which needs nothing but the session already in use.
  */
 export function newChatUrl(model?: string): string {
-  if (model && model !== "auto") return `${CHAT_URL}/?model=${encodeURIComponent(model)}`;
-  return `${CHAT_URL}/`;
+  const params = new URLSearchParams();
+  if (model && model !== "auto") params.set("model", model);
+  // A Temporary Chat is ChatGPT's own privacy mode: the conversation never
+  // enters the sidebar, the account's history or its memory. That is exactly
+  // what an agent wants — a session of forty turns leaves forty chats behind
+  // otherwise, which is what filling a project up with them was working
+  // around rather than fixing.
+  //
+  // Verified against the live page: `?temporary-chat=true&model=<slug>` keeps
+  // both. The URL drops the `model` parameter once the app has read it — the
+  // ordinary chat URL does the same — and the composer's model pill still
+  // reads "GPT-5.6 Luna", so the pin survives the mode.
+  if (temporaryChats()) params.set("temporary-chat", "true");
+  const query = params.toString();
+  return query ? `${CHAT_URL}/?${query}` : `${CHAT_URL}/`;
+}
+
+/**
+ * Are new chats opened as Temporary Chats?
+ *
+ * On by default. The cost is that a temporary chat has no entry in the
+ * account's history, so nothing can be filed into a project, swept up later,
+ * or re-opened from the ChatGPT side — see `chatBookkeepingApplies`. None of
+ * that is a loss for OnFlip, whose transcript lives on this machine and is
+ * replayed into a fresh chat whenever the live one is gone; it is only a loss
+ * for someone who wants to read the raw threads in ChatGPT afterwards, which
+ * is what turning this off is for.
+ */
+export function temporaryChats(): boolean {
+  return loadConfig().temporaryChats !== false;
+}
+
+/**
+ * Whether the chat-tidying machinery means anything for the current chat.
+ *
+ * A Temporary Chat has no id in the account's history, so resolving one,
+ * filing it into a project and sweeping strays are all requests that cannot
+ * succeed — and requests that cannot succeed are the thing this transport can
+ * least afford, since they count against the same limits as real ones.
+ */
+function chatBookkeepingApplies(): boolean {
+  return !temporaryChats();
 }
 
 /** One wording for every way a chat can end up outside its project. */
@@ -1291,7 +1331,8 @@ async function openNewChat(p: Page, model?: string, signal?: AbortSignal): Promi
   // Taken while the chat is still empty, so whatever the account gains from
   // here is this chat. Only worth a request when there is a project to file
   // into.
-  conversationsBeforeChat = activeProject ? await snapshotConversations(p) : null;
+  conversationsBeforeChat =
+    activeProject && chatBookkeepingApplies() ? await snapshotConversations(p) : null;
   logger.info("browser", "opened a new chat", { url: p.url() });
 }
 
@@ -1595,6 +1636,8 @@ function isPageGone(message: string): boolean {
 }
 
 export async function sweepConversationsIntoProject(ids: string[]): Promise<void> {
+  // Nothing to sweep: temporary chats were never in the list this walks.
+  if (!chatBookkeepingApplies()) return;
   if (!activeProject || !page || page.isClosed()) return;
   const project = activeProject;
   const p = page;
@@ -1659,6 +1702,10 @@ export async function sweepConversationsIntoProject(ids: string[]): Promise<void
  * list is the entire complaint the project setting exists to answer.
  */
 async function groupInProject(p: Page): Promise<string | null> {
+  // A Temporary Chat is not in the account's history, so there is no id to
+  // resolve and nothing to file. Asking anyway is two or three backend
+  // requests per reply that can only fail.
+  if (!chatBookkeepingApplies()) return null;
   if (!activeProject) {
     const fromUrl = conversationIdFromUrl(p.url());
     if (fromUrl) openedConversations.add(fromUrl);

@@ -31,6 +31,20 @@ export interface OnFlipConfig {
    * as soon as it has been applied.
    */
   sessionCookiesPending?: boolean;
+  /**
+   * Open every new chat as a ChatGPT Temporary Chat. On unless set to false.
+   *
+   * An agent turns one request into dozens of messages, and each lost live
+   * thread starts another chat — so an afternoon's work used to leave dozens
+   * of conversations in the account's sidebar. Filing them into an "OnFlip"
+   * project moved the clutter rather than removing it. A Temporary Chat never
+   * enters the history, the sidebar or the account's memory at all.
+   *
+   * Off is for anyone who wants to read the raw threads in ChatGPT
+   * afterwards; OnFlip's own transcript is unaffected either way, since it
+   * lives on this machine.
+   */
+  temporaryChats?: boolean;
   sessionDeviceId?: string;
   accessToken?: string;
   accessTokenExpiry?: number;

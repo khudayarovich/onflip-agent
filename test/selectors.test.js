@@ -74,13 +74,30 @@ test("joined() produces one query equivalent to the list", () => {
 });
 
 test("the most specific selector comes first in each list", () => {
-  // Order is a preference, not a fallback of last resort: a data-testid that
-  // ChatGPT sets deliberately should be tried before a substring match on an
+  // Order is a preference, not a fallback of last resort: the handle ChatGPT
+  // sets deliberately should be tried before a substring match on an
   // aria-label, which can match a control with nothing to do with the job.
-  const firstIsSpecific = (list) => /data-testid|^#/.test(list[0]);
+  //
+  // "Specific" cannot just mean a data-testid or an id, because the live page
+  // does not always offer one — the model switcher is a composer pill whose
+  // entire identity is `aria-haspopup` plus `data-tone`, and leading with
+  // that is correct rather than a compromise. Two or more attribute
+  // predicates counts too.
+  const attributePredicates = (sel) => (sel.match(/\[[^\]]+\]/g) ?? []).length;
+  const specific = (sel) => /data-testid|^#/.test(sel) || attributePredicates(sel) >= 2;
   for (const name of ["COMPOSER_SELECTORS", "STOP_SELECTORS", "SEND_SELECTORS", "MODEL_SWITCHER_SELECTORS"]) {
-    assert.ok(firstIsSpecific(S[name]), `${name} does not lead with its most specific selector`);
+    assert.ok(specific(S[name][0]), `${name} does not lead with its most specific selector`);
   }
+});
+
+test("the model switcher is matched by shape, since it carries no test id", () => {
+  // Pinned because it was broken for an unknown length of time and nothing
+  // noticed: all three selectors here used to look for a data-testid or an
+  // aria-label, the live control has neither, so `verifyPageModel` could
+  // never verify anything — on an app whose whole promise is running on Luna.
+  const first = S.MODEL_SWITCHER_SELECTORS[0];
+  assert.match(first, /aria-haspopup/);
+  assert.match(first, /^form /, "it must be scoped to the composer's form");
 });
 
 test("loose aria-label matches are last, not first", () => {
