@@ -5,6 +5,7 @@ import { ToolDefinition, ToolResult } from "../types";
 import { configDir, loadConfig } from "../config";
 import { logger } from "../log";
 import { err, ok, denied, asBool, asNumber, clip } from "./util";
+import { ensureBundledBrowser } from "../chatgpt/browser-client";
 
 /**
  * A browser the agent drives itself.
@@ -139,7 +140,26 @@ async function launch(headless: boolean): Promise<BrowserContext> {
       });
     }
   }
-  return chromium.launchPersistentContext(profileDir(), options);
+  try {
+    return await chromium.launchPersistentContext(profileDir(), options);
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (!/Executable doesn'?t exist|Please run.*playwright install/i.test(message)) throw e;
+    // No Chrome, no Edge, and no bundled build yet. The transport has fetched
+    // its own browser on demand for a long time; this tool did not, so it
+    // handed Playwright's raw message — "run npx playwright install" —
+    // straight to the model. Seen live: the agent dutifully ran that, the
+    // download timed out, and a turn was spent on advice that could not work
+    // from inside the sandbox anyway.
+    logger.info("browser-tool", "no browser installed; fetching the bundled one");
+    if (await ensureBundledBrowser()) {
+      return await chromium.launchPersistentContext(profileDir(), options);
+    }
+    throw new Error(
+      "The agent's browser could not start: Chrome and Edge are not installed, and the bundled browser could not be downloaded. " +
+        "Check the network, or install Google Chrome. Running `npx playwright install` will not help — OnFlip fetches its own copy."
+    );
+  }
 }
 
 /**
