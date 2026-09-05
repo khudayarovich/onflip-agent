@@ -1102,7 +1102,14 @@ export const PAGE_CENSUS = new Function(
      // textContent, not innerText: innerText forces a synchronous layout, and
      // this runs on a page that is already misbehaving.
      bodyChars: (body && body.textContent ? body.textContent.length : 0),
-     text: ((body && body.innerText) || "").replace(/\s+/g, " ").slice(0, 700),
+     // The backslash is doubled because this whole program is a template
+     // literal: an untagged template turns \\s into a bare "s", so the
+     // single-backslash form compiled to /s+/g and quietly deleted every
+     // letter s from the sample. Caught by loading the real page — the
+     // sidebar came back as "Chat hi tory" and "Plugin ". It mattered:
+     // the signed-out check downstream looks for "Sign up", which had
+     // become "ign up".
+     text: ((body && body.innerText) || "").replace(/\\s+/g, " ").slice(0, 700),
    };`
 ) as (q: Record<string, string>) => PageState;
 

@@ -147,6 +147,36 @@ test("body size uses textContent, not innerText", () => {
   }
 });
 
+test("the text sample collapses whitespace and keeps every letter", () => {
+  // The bug this pins: the census program is built with `new Function` from a
+  // template literal, and an untagged template turns \s into a bare "s". The
+  // single-backslash form therefore compiled to /s+/g and deleted every
+  // letter s from the sample. Found by loading the real page, where the
+  // sidebar came back as "Chat hi tory" and "Plugin ".
+  //
+  // It was not cosmetic: the signed-out check downstream looks for "Sign up",
+  // which had become "ign up", so the one diagnostic guarding the most common
+  // failure mode could never have fired.
+  const restore = fakeDom({ bodyText: "Chat history \n\t Sign up  now" });
+  try {
+    const { text } = PAGE_CENSUS(QUERIES);
+    assert.equal(text, "Chat history Sign up now");
+    assert.match(text, /\bSign up\b/, "the signed-out check must still be able to match");
+    assert.ok(text.includes("history"), "the letter s must survive");
+  } finally {
+    restore();
+  }
+});
+
+test("the sample is capped so a whole page cannot land in the log", () => {
+  const restore = fakeDom({ bodyText: "x".repeat(5000) });
+  try {
+    assert.equal(PAGE_CENSUS(QUERIES).text.length, 700);
+  } finally {
+    restore();
+  }
+});
+
 test("shapeOfPage keeps the census and trims the page's own words", () => {
   const line = shapeOfPage({
     url: "https://chatgpt.com/c/abc",
