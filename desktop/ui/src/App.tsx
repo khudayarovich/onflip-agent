@@ -896,6 +896,25 @@ export function App(): React.ReactElement {
     window.addEventListener("mouseup", up);
   };
 
+  /**
+   * Keep the window from being dragged narrower than its own contents.
+   *
+   * The old floor was a single number in the main process, and it could not
+   * be right: the sidebar and both side panels are resizable, and at their
+   * own minimums they already add up to more than it — leaving the chat
+   * column nothing at all. Only the renderer knows what is open and how wide
+   * it is, so it does the arithmetic and the window follows.
+   */
+  useEffect(() => {
+    const CHAT_MIN = 420;
+    const needed =
+      (sidebarHidden ? 0 : sidebarWidth) +
+      (browserOpen ? browserWidth : 0) +
+      (terminalOpen ? termWidth : 0) +
+      CHAT_MIN;
+    void window.onflip.setMinWidth?.(needed).catch(() => {});
+  }, [sidebarHidden, sidebarWidth, browserOpen, browserWidth, terminalOpen, termWidth]);
+
   return (
     <LangContext.Provider value={lang}>
     <div

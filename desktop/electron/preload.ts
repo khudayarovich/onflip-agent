@@ -54,6 +54,8 @@ export interface OnFlipBridge {
     height: number;
   }): Promise<boolean>;
   browserViewHide(): Promise<boolean>;
+  /** The narrowest this window may be dragged, given what is open. */
+  setMinWidth(width: number): Promise<boolean>;
   /** False when the DevTools port never opened and the old screencast is in use. */
   browserViewAvailable(): Promise<boolean>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;
@@ -115,6 +117,7 @@ const bridge: OnFlipBridge = {
 
   browserViewBounds: (rect) => ipcRenderer.invoke("browser-view-bounds", rect),
   browserViewHide: () => ipcRenderer.invoke("browser-view-hide"),
+  setMinWidth: (width) => ipcRenderer.invoke("set-min-width", { width }),
   browserViewAvailable: () => ipcRenderer.invoke("browser-view-available"),
 
   setTheme: (theme) => ipcRenderer.invoke("set-theme", { theme }),

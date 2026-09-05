@@ -50,6 +50,8 @@ interface OnFlipBridge {
     height: number;
   }): Promise<boolean>;
   browserViewHide?(): Promise<boolean>;
+  /** The narrowest this window may be dragged, given what is open. */
+  setMinWidth?(width: number): Promise<boolean>;
   /** False when the DevTools port never opened and the screencast is in use. */
   browserViewAvailable?(): Promise<boolean>;
   setTheme(theme: "dark" | "light"): Promise<boolean>;

@@ -828,6 +828,36 @@ function registerIpc(): void {
   // and it cannot know which until it is told whether the port opened.
   ipcMain.handle("browser-view-available", () => resolveEndpoint() !== null);
 
+  /**
+   * The floor the window cannot be dragged below.
+   *
+   * A fixed one cannot work: the sidebar and the two side panels are all
+   * resizable, and at their own minimums they already add up to more than
+   * the window's old 760px floor — leaving the chat column exactly nothing.
+   * The renderer knows what is open and how wide it is, so it does the
+   * arithmetic and the window follows.
+   */
+  ipcMain.handle("set-min-width", (e, payload: { width: number }) => {
+    const win = BrowserWindow.fromWebContents(e.sender);
+    if (!win) return false;
+    // Never wider than the display it is on: a minimum bigger than the
+    // screen is a window that cannot be placed at all.
+    const usable = screen.getDisplayMatching(win.getBounds()).workAreaSize.width;
+    const width = Math.max(760, Math.min(Math.round(payload.width), usable));
+    const [, minHeight] = win.getMinimumSize();
+    win.setMinimumSize(width, minHeight);
+    // Growing the floor past where the window already is has to widen it too,
+    // or the constraint is one the user can see and not satisfy. Not while
+    // maximised or full screen, though: the window is already as wide as it
+    // can be, and setting bounds there drops it out of that state for no
+    // gain the user asked for.
+    if (!win.isMaximized() && !win.isFullScreen()) {
+      const bounds = win.getBounds();
+      if (bounds.width < width) win.setBounds({ ...bounds, width });
+    }
+    return true;
+  });
+
   ipcMain.handle("new-window", () => {
     createWindow();
     return true;
