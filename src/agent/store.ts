@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { ChatMessage, TodoItem, FileSnapshot } from "../types";
+import { isSyntheticUserText, isUserRequest } from "./protocol";
 import { configDir, withoutBom, writeFileAtomically } from "../config";
 
 /**
@@ -166,7 +167,7 @@ export function listSessions(opts?: { cwd?: string; limit?: number }): SessionSu
       if (opts?.cwd && path.resolve(s.cwd) !== path.resolve(opts.cwd)) continue;
       out.push({
         id: s.id,
-        title: s.title || firstUserLine(s.messages),
+        title: deriveTitle(s),
         cwd: s.cwd,
         model: s.model,
         updatedAt: s.updatedAt ?? s.createdAt ?? 0,
@@ -226,16 +227,49 @@ export function recentProjects(limit = 12): RecentProject[] {
   return [...byDir.values()].sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
 }
 
-function firstUserLine(messages: ChatMessage[]): string {
-  const first = messages.find((m) => m.role === "user" && !m.content.startsWith("<onflip:result"));
+export function firstUserLine(messages: ChatMessage[]): string {
+  // Only the user's own messages: tool results and OnFlip's own notes ride
+  // the same role, and picking one of those named every compacted session
+  // "[Context carried over from the earlier part of this session]".
+  const first = messages.find(isUserRequest);
   if (!first) return "(empty session)";
   return first.content.split("\n")[0].slice(0, 80);
 }
 
+/**
+ * Is this "title" a marker rather than a name?
+ *
+ * Two ways one gets in. OnFlip's own notes ride the `user` role, so a session
+ * whose turn had compacted was named from the handover brief — every such
+ * session in the sidebar reading "[Context carried over from the ea…". And
+ * the title can come from ChatGPT, which names a conversation after what is
+ * in it: a thread whose only content was the sentinel OnFlip asks for when an
+ * attachment cannot be read came back named "[attachment unreadable]".
+ *
+ * Both share a shape no real title has — the whole thing is one bracketed
+ * marker. A title that merely *starts* with a bracket ("[BUG] fix login") is
+ * someone's own words and is left alone.
+ */
+export function isPlaceholderTitle(title: string): boolean {
+  const text = title.trim();
+  if (!text) return true;
+  if (isSyntheticUserText(text)) return true;
+  return /^\[[^\]]*\]$/.test(text);
+}
+
 /** Derive a short title from the opening exchange, once, for the session list. */
 export function deriveTitle(session: StoredSession): string {
-  if (session.title) return session.title;
-  return firstUserLine(session.messages);
+  // A stored title is trusted unless it is a marker. Those were written to
+  // disk before this was fixed, so a session already in the list would
+  // otherwise keep its wrong name for good.
+  if (session.title && !isPlaceholderTitle(session.title)) return session.title;
+  // Archived first, and it is not an optimisation: compaction moves the whole
+  // transcript there and leaves the live history starting at the handover
+  // brief. A long session's opening request — the one worth naming it after —
+  // is in `archived` and nowhere else. Seen on a 48-message session whose
+  // 353 archived messages held the request, and which the list called
+  // "(empty session)" for looking only at what was live.
+  return firstUserLine([...(session.archived ?? []), ...session.messages]);
 }
 
 /** Human-friendly relative timestamp for the session picker. */

@@ -2,7 +2,7 @@ import { ChatMessage, ToolCall, ToolResult, SessionState } from "../types";
 import { listJobs, ToolRegistry } from "../tools";
 import { isTerminalTool, TerminalToolName, TERMINAL_TOOL_NAMES } from "../tools/terminal";
 import { Transport, SendOptions, TransportReply, ReplyMeta } from "../chatgpt/transport";
-import { newMessage, parseTurn, formatToolResult } from "./protocol";
+import { newMessage, parseTurn, formatToolResult, isUserRequest } from "./protocol";
 import {
   turnReminder,
   protocolCorrection,
@@ -1308,11 +1308,9 @@ export function detectFabrication(raw: string): boolean {
 export function lastUserRequest(history: ChatMessage[], limit = 2_000): string | null {
   for (let i = history.length - 1; i >= 0; i--) {
     const message = history[i];
-    if (message.role !== "user" || message.toolName) continue;
+    if (!isUserRequest(message)) continue;
     const text = message.content.trim();
     if (!text) continue;
-    if (text.startsWith("<onflip:result") || text.startsWith("[OnFlip")) continue;
-    if (text.startsWith("[Context carried over")) continue;
     return text.length > limit ? `${text.slice(0, limit)}\n\n… (request truncated)` : text;
   }
   return null;

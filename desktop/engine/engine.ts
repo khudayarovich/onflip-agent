@@ -98,6 +98,7 @@ import {
   latestSession,
   recentProjects,
   deriveTitle,
+  isPlaceholderTitle,
   snapshotContentsAvailable,
 } from "onflip/dist/agent/store";
 import { openLog, closeLog, logger, logFile } from "onflip/dist/log";
@@ -1294,7 +1295,11 @@ export class Engine {
           // A running send owns the page; skip rather than contend with it.
           if (this.busy || this.session.id !== sessionId || this.session.title) return;
           const title = await this.lookupConversationTitle(conversationId);
-          if (!title) return;
+          // ChatGPT names a thread after what is in it, which for a thread
+          // whose only content was OnFlip's own sentinel meant a session in
+          // the sidebar called "[attachment unreadable]". Better no stored
+          // title at all: the list then falls back to what the user asked.
+          if (!title || isPlaceholderTitle(title)) return;
           if (this.busy || this.session.id !== sessionId || this.session.title) return;
           this.session.title = title;
           this.saveNow();
@@ -2339,7 +2344,8 @@ export class Engine {
 
     this.saveNow();
     this.session = createSession(this.cwd, this.model);
-    this.session.title = title ?? "ChatGPT conversation";
+    this.session.title =
+      title && !isPlaceholderTitle(title) ? title : "ChatGPT conversation";
     this.session.chatId = id;
     this.history = this.session.messages;
     this.archived = this.session.archived ?? [];

@@ -37,6 +37,33 @@ export function newMessage(
   return { id: randomUUID(), role, content, createdAt: Date.now(), ...extra };
 }
 
+/**
+ * Is this the user talking, rather than OnFlip talking to itself?
+ *
+ * The `user` role carries three different things: what the person typed, tool
+ * output on its way back to the model, and OnFlip's own machinery — protocol
+ * nudges and the brief compaction leaves behind. Only the first is the user.
+ *
+ * Getting this wrong is visible: the sidebar titles a session from its first
+ * user message, and after a compaction that was "[Context carried over from
+ * the earlier part of this session]" — every compacted session in the list
+ * wearing the same meaningless name instead of what it was about.
+ */
+export function isUserRequest(message: ChatMessage): boolean {
+  if (message.role !== "user" || message.toolName) return false;
+  return !isSyntheticUserText(message.content);
+}
+
+/** The same test against bare text, for callers holding no message. */
+export function isSyntheticUserText(content: string): boolean {
+  const head = content.trimStart();
+  return (
+    head.startsWith("<onflip:result") ||
+    head.startsWith("[OnFlip") ||
+    head.startsWith("[Context carried over")
+  );
+}
+
 export interface ParsedTurn {
   /** Prose the model produced alongside any tool calls. */
   text: string;
