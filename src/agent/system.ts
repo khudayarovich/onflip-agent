@@ -334,10 +334,33 @@ export function backgroundJobLine(jobs?: JobSummary[]): string {
     .join(" ");
 }
 
+/**
+ * A sample of the user's own words, for the reminder to point at.
+ *
+ * "Write in the language the user writes in" is an instruction with no
+ * referent once a session has drifted: the model looks at the conversation,
+ * sees its own last twenty replies in the wrong language, and matches those.
+ * Live, on a Russian-locale machine, an English session answered in Russian
+ * from the compaction onward — the tool output was Russian, the username was
+ * Russian, and nothing in front of the model was still in English. Quoting
+ * the request restores the referent every turn, and quoting beats naming a
+ * language because it needs no detection to be right.
+ */
+export function languageAnchor(request?: string | null): string {
+  const line = (request ?? "")
+    .trim()
+    .split(/\r?\n/)
+    .find((l) => l.trim().length > 1);
+  if (!line) return "";
+  const sample = line.length > 120 ? `${line.slice(0, 120)}…` : line;
+  return `The user's latest message reads: "${sample}" — write your prose in that language, whatever language the rest of this conversation happens to be in.`;
+}
+
 export function turnReminder(
   shellEnabled: boolean,
   tools?: string[],
-  jobs?: JobSummary[]
+  jobs?: JobSummary[],
+  request?: string | null
 ): string {
   // Naming them matters. Describing only the syntax leaves a model that is
   // used to native function calling concluding that no tools are attached to
@@ -358,7 +381,8 @@ export function turnReminder(
     // block for as long as prose alone was allowed to end one.
     "Every reply ends with a block. When the whole request is finished and verified, end with `tool: done` and `summary: |` holding your final answer; when only the user can decide what happens next, end with `tool: ask_user` and `question: |`. There is no third way to end a reply: prose with no block is an error and comes back to you.",
     "Never end a reply by announcing what you are about to do (\"I'm verifying the build now\", \"next I'll implement…\") — put the tool block for that step in the same reply. Never send done while an item on your task list is still open, or right after a failed tool call: fix the failure and take the next step.",
-    "Write your prose in the language the user writes in. The onflip block itself never changes with the language: the fence, the `tool:` line, the tool names and the argument keys stay exactly as documented.",
+    languageAnchor(request) ||
+      "Write your prose in the language the user writes in. The onflip block itself never changes with the language: the fence, the `tool:` line, the tool names and the argument keys stay exactly as documented.",
     "Do not use your own python/analysis/browsing tools — they run on the wrong machine.",
     // Live: a coding request answered with a "Continue in ChatGPT Work" card
     // — the task handed to ChatGPT's own agent product, which cannot see

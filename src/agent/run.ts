@@ -700,7 +700,8 @@ async function sendWithRetry(
     reminder: turnReminder(
       opts.shellEnabled,
       opts.tools.list.map((t) => t.name),
-      listJobs()
+      listJobs(),
+      lastUserRequest(history, 200)
     ),
   };
 

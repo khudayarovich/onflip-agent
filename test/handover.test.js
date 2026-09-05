@@ -14,7 +14,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 
 const { lastUserRequest } = require("../dist/agent/run");
-const { backgroundJobLine, turnReminder } = require("../dist/agent/system");
+const { backgroundJobLine, languageAnchor, turnReminder } = require("../dist/agent/system");
 
 const said = (role, content, extra = {}) => ({ id: role + content, role, content, ...extra });
 
@@ -112,6 +112,45 @@ test("a long command is shortened so the reminder stays cheap", () => {
 
   assert.ok(line.length < 200, `reminder line was ${line.length} characters`);
   assert.match(line, /…/);
+});
+
+// --- which language to answer in -------------------------------------------
+
+test("the request is quoted back, so the instruction has something to point at", () => {
+  // "Write in the language the user writes in" has no referent once a session
+  // has drifted: the model looks at the conversation, sees its own last
+  // twenty replies in the wrong language, and matches those.
+  const line = languageAnchor("fix knife position with the dot cutting");
+
+  assert.match(line, /fix knife position with the dot cutting/);
+  assert.match(line, /that language/);
+});
+
+test("only the first line is quoted, and a long one is cut", () => {
+  const anchor = languageAnchor(`${"x".repeat(400)}\nsecond line`);
+
+  assert.ok(anchor.length < 300, `anchor was ${anchor.length} characters`);
+  assert.ok(!anchor.includes("second line"));
+});
+
+test("a request that opens with a blank line still finds its words", () => {
+  assert.match(languageAnchor("\n\n  сделай тёмную тему  "), /сделай тёмную тему/);
+});
+
+test("no request means the general instruction is used instead", () => {
+  assert.equal(languageAnchor(), "");
+  assert.equal(languageAnchor(null), "");
+  assert.equal(languageAnchor("   "), "");
+  // The reminder must still say something about language either way.
+  assert.match(turnReminder(true, ["bash"]), /language the user writes in/);
+});
+
+test("the reminder anchors on the request when there is one", () => {
+  const reminder = turnReminder(true, ["bash"], [], "make the cursor a knife");
+
+  assert.match(reminder, /make the cursor a knife/);
+  // Replaced, not added: two instructions about language is one too many.
+  assert.doesNotMatch(reminder, /language the user writes in/);
 });
 
 test("the reminder carries the jobs, and drops them when the shell is off", () => {
