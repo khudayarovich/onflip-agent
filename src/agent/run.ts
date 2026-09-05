@@ -1397,6 +1397,15 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<Chat
               ]
             : []),
           "",
+          // Live, straight after a compaction: three `multi_edit` calls in
+          // one reply, against three files, every `old_string` written from
+          // memory of a read that is no longer in this conversation. All
+          // three failed with "not found", and the turn spent a round trip
+          // re-reading what it had just been told it no longer had. The
+          // brief cannot carry the file contents — that is the whole point
+          // of it — so it has to carry the fact that they are gone.
+          "The file contents you saw earlier are NOT in this conversation any more. Before editing any file, read it again: an `old_string` written from memory will not match.",
+          "",
           "Continue from here. The tool protocol and every instruction above still applies.",
         ].join("\n")
       )
