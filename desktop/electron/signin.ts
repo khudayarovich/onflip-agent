@@ -95,6 +95,23 @@ export function isGoogleRefusal(url: string): boolean {
   );
 }
 
+/**
+ * What to do about that refusal, in the order the escape hatches actually work.
+ *
+ * "Try another way" first because it is the one that stays inside the window
+ * the user is already looking at. Google's own page offers it, and it exists
+ * precisely for this: the step being refused is usually a passkey or a
+ * device prompt, both of which want a platform authenticator this window does
+ * not have, and picking any other method walks straight past that. Password
+ * next, then handing over an existing session, which works but means leaving
+ * and coming back.
+ */
+export const GOOGLE_REFUSAL_HELP =
+  "Google would not accept this window as a browser. On Google's page choose “Try another way” " +
+  "and pick a method other than a passkey — that usually gets straight through. Failing that, sign in " +
+  "with your email and password, or use “Use my browser” to hand over the session from the browser " +
+  "you normally use.";
+
 /** Persisted so a signed-in profile stays signed in between launches. */
 const PARTITION = "persist:chatgpt-auth";
 const LOGIN_URL = "https://chatgpt.com/auth/login";
@@ -309,11 +326,7 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
 
     win.webContents.on("did-navigate", (_e, url) => {
       if (!isGoogleRefusal(url)) return;
-      finish({
-        ok: false,
-        reason:
-          "Google would not accept this window as a browser. Sign in with your email and password instead, or use \"Use my browser\" to hand over the session from the browser you normally use.",
-      });
+      finish({ ok: false, reason: GOOGLE_REFUSAL_HELP });
     });
 
     win.webContents.on("did-fail-load", (_e, code, description, url, isMainFrame) => {

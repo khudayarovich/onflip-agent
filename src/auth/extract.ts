@@ -10,15 +10,39 @@ export function lastBrowserFindings(): BrowserReport[] {
   return lastReport;
 }
 
-/** Turn the report into one sentence a user can act on. */
-function describeReport(report: BrowserReport[]): string {
+/**
+ * Turn the report into one sentence a user can act on.
+ *
+ * The "act on" half matters more than the diagnosis. Chrome 127 and later
+ * encrypt cookies so that only Chrome can read them — app-bound encryption,
+ * which is the point of it and not a fault here or a thing a future version
+ * will fix. Reported as a bare failure it reads as OnFlip being broken, and
+ * the obvious next move (signing in through the app's own window, which
+ * needs nothing at all) goes unmentioned. So when that is the only thing
+ * standing in the way, the sentence says so and says what to do instead.
+ */
+export function describeReport(report: BrowserReport[]): string {
   const parts = report.map((r) => {
-    if (r.outcome === "app-bound") return `${r.browser} encrypts its cookies so no other program can read them`;
+    if (r.outcome === "app-bound") return `${r.browser} encrypts its cookies so only ${r.browser} can read them`;
     if (r.outcome === "locked") return `${r.browser} is open — close it and try again`;
     if (r.outcome === "error") return `${r.browser} could not be read (${r.detail ?? "unknown"})`;
     return `${r.browser} has no ChatGPT session`;
   });
-  return parts.length ? `${parts.join("; ")}.` : "No supported browser was found on this machine.";
+  if (!parts.length) return "No supported browser was found on this machine.";
+
+  // Only when app-bound encryption is the whole story. If some other browser
+  // merely has no session, closing it or signing in there is still the
+  // shorter path and the advice would be wrong.
+  const blocked = report.some((r) => r.outcome === "app-bound");
+  const otherwiseFixable = report.some((r) => r.outcome === "locked" || r.outcome === "needs-access");
+  if (blocked && !otherwiseFixable) {
+    return (
+      `${parts.join("; ")}. ` +
+      "That is how those browsers are built, not a fault OnFlip can fix. " +
+      "Use “Sign in to ChatGPT” in the app instead — it opens its own window and needs nothing set up."
+    );
+  }
+  return `${parts.join("; ")}.`;
 }
 
 function workerPath(): string {

@@ -109,8 +109,13 @@ export function decryptChromiumCookieValue(
   if (prefix !== "v10" && prefix !== "v11") {
     if (prefix === "v20") {
       throw new CryptoError(
-        "This browser uses app-bound encryption (v20), which cannot be decrypted by OnFlip. " +
-          "Try Firefox, or sign in through the app's window."
+        // Not a limitation to work around: app-bound encryption ties the key
+        // to Chrome itself, so no other program is meant to read these and
+        // none can. Worth saying outright, because worded as a failure it
+        // sends people looking for a fix that does not exist.
+        "This browser uses app-bound encryption (v20): only the browser itself can read its cookies, " +
+          "so no other program can import them. Sign in through the app's own window instead — " +
+          "it needs nothing set up. (Firefox does not do this, if you would rather import.)"
       );
     }
     throw new CryptoError(`Unsupported cookie encryption version: ${prefix}`);

@@ -39,7 +39,6 @@ import {
   startUpdateWatch,
   type UpdateProgress,
 } from "./update-install";
-import { pairWithBrowser, extensionDir } from "./pairing";
 import {
   createSchedule,
   deleteSchedule,
@@ -1259,21 +1258,6 @@ function registerIpc(): void {
     return { started: true };
   });
 
-  // Load unpacked wants a folder, so the app has to be able to say which
-  // one and put it in front of the user. Shipped in resources, because
-  // nobody who ran the installer has a checkout to point at.
-  ipcMain.handle("extension-info", () => {
-    const dir = extensionDir();
-    return { dir, present: fs.existsSync(path.join(dir, "manifest.json")) };
-  });
-
-  ipcMain.handle("open-extension-folder", async () => {
-    const dir = extensionDir();
-    if (!fs.existsSync(dir)) return false;
-    await shell.openPath(dir);
-    return true;
-  });
-
   // The renderer decides when to offer an update; opening the page is the
   // one thing it cannot do for itself.
   ipcMain.handle("open-release", (_e, payload: { url: string }) => {
@@ -1325,27 +1309,6 @@ function registerIpc(): void {
         break;
     }
     return { maximized: ws.win.isDestroyed() ? false : ws.win.isMaximized() };
-  });
-
-  // Signing in happens in a normal browser window owned by the app (see
-  // signin.ts), never in the automation browser: the cookies it collects go
-  // straight to the engine, so they never pass through the renderer. The
-  // session lands in ~/.onflip, so other windows' engines pick it up when
-  // they next need it.
-  // The browser the user actually uses, asked rather than read. Runs the
-  // loopback handshake in `pairing.ts` and applies whatever comes back
-  // through the same path as every other sign-in.
-  ipcMain.handle("pair-browser", async (e) => {
-    const ws = wsOf(e);
-    const result = await pairWithBrowser();
-    if (result.ok && result.cookies?.length && ws?.peer) {
-      try {
-        await ws.peer.request("applySignIn", { cookies: result.cookies });
-      } catch (err) {
-        return { ok: false, reason: err instanceof Error ? err.message : String(err) };
-      }
-    }
-    return { ok: result.ok, reason: result.reason };
   });
 
   ipcMain.handle("sign-in", async (e) => {

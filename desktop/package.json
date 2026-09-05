@@ -71,16 +71,7 @@
       "allowToChangeInstallationDirectory": true,
       "artifactName": "OnFlip-Setup-${version}.${ext}",
       "shortcutName": "OnFlip"
-    },
-    "extraResources": [
-      {
-        "from": "../extension",
-        "to": "extension",
-        "filter": [
-          "**/*"
-        ]
-      }
-    ]
+    }
   },
   "dependencies": {
     "diff": "^7.0.0",
