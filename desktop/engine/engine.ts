@@ -100,7 +100,7 @@ import {
   snapshotContentsAvailable,
 } from "onflip/dist/agent/store";
 import { openLog, closeLog, logger, logFile } from "onflip/dist/log";
-import { isResumableFailure, cooldownRemainingMs } from "onflip/dist/chatgpt/backoff";
+import { isResumableFailure, cooldownRemainingMs, failureCodeOf } from "onflip/dist/chatgpt/backoff";
 import { lastBrowserReport } from "onflip/dist/auth/session";
 import type { ChatMessage, SessionState, ToolCall, ToolResult, ToolDisplay } from "onflip/dist/types";
 
@@ -1104,11 +1104,17 @@ export class Engine {
       }
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      const code = failureCodeOf(e);
       logger.error("session", "turn failed", {
         error: message,
+        code,
         stack: e instanceof Error ? e.stack : undefined,
       });
-      const resumable = isResumableFailure(message) && !this.abort.signal.aborted;
+      // A signed-out session is the one failure where carrying on by itself
+      // is pure harm: every automatic "continue" opens another chat that
+      // cannot work. The code says so directly now, rather than being
+      // guessed at from the sentence.
+      const resumable = isResumableFailure(message, code) && !this.abort.signal.aborted;
       this.peer.emit("item", {
         type: "error",
         id: randomUUID(),
@@ -1552,6 +1558,11 @@ export class Engine {
       sessionDeviceId: cookies.find((c) => c.name === "oai-did")?.value,
       // The whole jar, so a restart restores a chunked token intact.
       sessionCookies: cookies,
+      // The user has just told OnFlip which session to use, so this jar goes
+      // into the browser profile whatever that profile is already holding.
+      // Every *other* start leaves the profile's own session alone — see
+      // `sessionCookiesPending`, and the run it cost to learn the difference.
+      sessionCookiesPending: true,
       // Signing in lifts the suppression a previous sign-out put in place.
       signedOut: false,
     });

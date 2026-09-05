@@ -25,6 +25,84 @@ export type FailureKind =
   /** The account or device is being throttled. Stop, and wait. */
   | "cooldown";
 
+/**
+ * What went wrong, said in a word the code can match on.
+ *
+ * Until this existed the only thing a failure carried was its English
+ * sentence, and `classifyFailure` read that sentence — so the message was
+ * simultaneously the text shown to the user and the key that decided whether
+ * to retry. Three separate regressions came out of that: a composer stumble
+ * whose advice ended "run `onflip login`" was classified fatal by the word
+ * "login"; a send failure whose advice said "rate-limited" became a persisted
+ * five-minute cooldown; and the real 403 was missed because the wording it
+ * arrives with is nothing like the wording that was being matched. Each was
+ * fixed by adding another regex above the one that misfired, which is the
+ * shape of a taxonomy that cannot be got right.
+ *
+ * A code is set at the throw site, where what happened is actually known.
+ * The regex ladder stays as the fallback for the many `new Error(string)`
+ * throws that carry no code, so nothing has to be converted at once — but a
+ * coded failure never consults it, and its message is then free to say
+ * whatever is most useful to the person reading it.
+ */
+export type FailureCode =
+  /** The abuse check fired. Never retry. */
+  | "unusual-activity"
+  /** An explicit rate limit: HTTP 429, or the page's own throttle notice. */
+  | "throttled"
+  /** HTTP 403 with no more specific reading. */
+  | "refused"
+  /** The message went in but neither send button nor Enter would send it. */
+  | "composer-refused"
+  /** The message could not be typed into the composer at all. */
+  | "composer-entry"
+  /** Submitted, but the user's turn never appeared on the page. */
+  | "send-not-landed"
+  /** The page is anonymous and the stored session has not fixed it yet. */
+  | "anonymous"
+  /** The page lost the live thread; the transcript needs replaying. */
+  | "chat-lost"
+  /** No usable session at all. Only a sign-in fixes this. */
+  | "signed-out"
+  /** ChatGPT's own error page came back instead of a reply. */
+  | "service-error"
+  /** The user stopped it. */
+  | "interrupted";
+
+/** Default quiet period when the server does not name one. */
+const DEFAULT_COOLDOWN_SECONDS = 15 * 60;
+
+/** How each code is treated, when one is present. */
+const BY_CODE: Record<FailureCode, { kind: FailureKind; seconds: number }> = {
+  "unusual-activity": { kind: "cooldown", seconds: DEFAULT_COOLDOWN_SECONDS },
+  throttled: { kind: "cooldown", seconds: 5 * 60 },
+  refused: { kind: "cooldown", seconds: DEFAULT_COOLDOWN_SECONDS },
+  "composer-refused": { kind: "retry", seconds: 0 },
+  "composer-entry": { kind: "retry", seconds: 0 },
+  "send-not-landed": { kind: "retry", seconds: 0 },
+  anonymous: { kind: "retry", seconds: 0 },
+  "chat-lost": { kind: "retry", seconds: 0 },
+  "signed-out": { kind: "fatal", seconds: 0 },
+  "service-error": { kind: "retry", seconds: 0 },
+  interrupted: { kind: "fatal", seconds: 0 },
+};
+
+function isFailureCode(value: unknown): value is FailureCode {
+  return typeof value === "string" && Object.hasOwn(BY_CODE, value);
+}
+
+/**
+ * The code an error carries, if it carries one.
+ *
+ * Read by duck typing rather than by importing the error class: this module
+ * is imported by the transport that defines that class, and the classifier
+ * has no business depending on the thing it classifies.
+ */
+export function failureCodeOf(e: unknown): FailureCode | undefined {
+  const code = (e as { code?: unknown } | null)?.code;
+  return isFailureCode(code) ? code : undefined;
+}
+
 interface Classification {
   kind: FailureKind;
   /** How long to stay quiet, in seconds, for a cooldown. */
@@ -33,11 +111,20 @@ interface Classification {
   reason: string;
 }
 
-/** Default quiet period when the server does not name one. */
-const DEFAULT_COOLDOWN_SECONDS = 15 * 60;
-
-export function classifyFailure(message: string): Classification {
+export function classifyFailure(message: string, code?: FailureCode): Classification {
   const m = message || "";
+
+  // A failure that knows what it is does not get guessed at. The message is
+  // still what the user reads; it just no longer decides anything.
+  if (code) {
+    const { kind, seconds } = BY_CODE[code];
+    // A throttle may name its own delay, and honouring it beats a default.
+    if (code === "throttled") {
+      const after = /retry[- ]after[":\s]+(\d+)/i.exec(m);
+      if (after) return { kind, seconds: Math.min(3600, Number(after[1])), reason: m };
+    }
+    return { kind, seconds, reason: m };
+  }
 
   // The abuse check. This is the one that arrives when requests do not look
   // like they came from a browser, and it is emphatically not retryable.
@@ -123,11 +210,18 @@ export function classifyFailure(message: string): Classification {
  * one thing that deepens the block, and a stop the user asked for, where
  * resuming would undo their decision. Everything else is worth the turn.
  */
-export function isResumableFailure(message: string): boolean {
+export function isResumableFailure(message: string, code?: FailureCode): boolean {
   const m = message || "";
-  if (/\bInterrupted\b|\baborted\b/i.test(m)) return false;
+  if (code === "interrupted") return false;
+  // A session that is simply gone is not resumed by sending again: every
+  // attempt opens another chat against an account that will refuse it, which
+  // is the loop this used to produce — 41 identical re-injections over
+  // seventeen minutes on one measured session. Signing in is the only fix,
+  // and saying so beats trying.
+  if (code === "signed-out") return false;
+  if (!code && /\bInterrupted\b|\baborted\b/i.test(m)) return false;
   if (/Waiting out a ChatGPT cooldown/i.test(m)) return false;
-  return classifyFailure(m).kind !== "cooldown";
+  return classifyFailure(m, code).kind !== "cooldown";
 }
 /**
  * Is this ChatGPT talking, rather than the model answering?
@@ -230,23 +324,103 @@ export function describeWait(ms: number): string {
 const MIN_SEND_GAP_MS = 1_500;
 let lastSendAt = 0;
 
+/**
+ * Sleep, unless the turn is being stopped.
+ *
+ * The `abort` listener alone is not enough, and a test caught why: a signal
+ * that is *already* aborted will never fire the event, because the event has
+ * been and gone. Every pacing wait therefore ran to completion on an
+ * interrupted turn — 1.5 seconds for a send, and up to thirty for a paced
+ * conversation, spent sleeping on work the user had just cancelled. Checking
+ * the flag before arming the listener is the whole fix.
+ */
+function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener(
+      "abort",
+      () => {
+        clearTimeout(timer);
+        resolve();
+      },
+      { once: true }
+    );
+  });
+}
+
 export async function paceSend(signal?: AbortSignal): Promise<void> {
   const since = Date.now() - lastSendAt;
   const wait = MIN_SEND_GAP_MS - since;
-  if (lastSendAt && wait > 0) {
-    await new Promise<void>((resolve) => {
-      const timer = setTimeout(resolve, wait);
-      signal?.addEventListener(
-        "abort",
-        () => {
-          clearTimeout(timer);
-          resolve();
-        },
-        { once: true }
-      );
-    });
-  }
+  if (lastSendAt && wait > 0) await sleepUnlessAborted(wait, signal);
   lastSendAt = Date.now();
+}
+
+/**
+ * Smallest gap between two *new conversations*, which is a different limit.
+ *
+ * Opening a chat is the expensive request as far as ChatGPT's abuse controls
+ * are concerned, and OnFlip opens one far more eagerly than a person would:
+ * ten separate places drop the live thread (a refused composer reloads and
+ * starts again, a stalled generation starts again, a 401 re-injects and
+ * starts again, compaction starts again, an auto-resume starts again), and
+ * each of those then opens a chat on the next send. Measured in one session:
+ * 32 new chats for 55 replies, and the account was told it was sending too
+ * quickly. The message floor above does not help, because the burst is not
+ * messages — it is the recovery paths racing each other.
+ *
+ * So the gap here is wider, and it grows with how many chats have been opened
+ * in the last hour. Ten in an hour is already well past anything a person
+ * does, and by then a fresh chat waits fifteen seconds — long enough to break
+ * a recovery loop, short enough that a real session barely notices.
+ */
+const MIN_NEW_CHAT_GAP_MS = 3_000;
+const NEW_CHAT_WINDOW_MS = 60 * 60_000;
+/** Above this many chats in the window, the gap starts climbing. */
+const NEW_CHAT_SOFT_LIMIT = 10;
+const MAX_NEW_CHAT_GAP_MS = 30_000;
+
+let newChatTimes: number[] = [];
+
+/** How many conversations have been opened in the trailing hour. */
+export function newChatsInWindow(now = Date.now()): number {
+  newChatTimes = newChatTimes.filter((t) => now - t < NEW_CHAT_WINDOW_MS);
+  return newChatTimes.length;
+}
+
+/** The gap a new chat should wait for, given how many came before it. */
+export function newChatGapMs(now = Date.now()): number {
+  const recent = newChatsInWindow(now);
+  if (recent <= NEW_CHAT_SOFT_LIMIT) return MIN_NEW_CHAT_GAP_MS;
+  const over = recent - NEW_CHAT_SOFT_LIMIT;
+  return Math.min(MAX_NEW_CHAT_GAP_MS, MIN_NEW_CHAT_GAP_MS * (1 + over));
+}
+
+/**
+ * Wait, if need be, before opening a conversation — and record that one was.
+ *
+ * Deliberately not a throw: a chat that has to be opened has to be opened,
+ * and refusing would turn a slow recovery into a failed one. Slowing the
+ * burst is the whole point.
+ */
+export async function paceNewChat(signal?: AbortSignal): Promise<void> {
+  const now = Date.now();
+  const last = newChatTimes.length ? newChatTimes[newChatTimes.length - 1] : 0;
+  const wait = last ? newChatGapMs(now) - (now - last) : 0;
+  if (wait > 0) {
+    logger.info("transport", "pacing a new conversation", {
+      waitMs: wait,
+      openedInLastHour: newChatsInWindow(now),
+    });
+    await sleepUnlessAborted(wait, signal);
+  }
+  newChatTimes.push(Date.now());
+}
+
+/** For tests, which must not inherit another test's burst history. */
+export function __resetPacingForTest(): void {
+  newChatTimes = [];
+  lastSendAt = 0;
 }
 
 /** Throw rather than send while a cooldown is running. */

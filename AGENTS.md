@@ -15,6 +15,8 @@ shape, then read this before changing anything load-bearing.
 npm install         # installs and builds the engine
 npm run build       # tsc -> dist/
 npm run typecheck   # tsc --noEmit
+npm test            # build, then node --test over test/
+npm run test:only   # the suite alone, against the current dist/
 
 cd desktop
 npm install
@@ -23,8 +25,8 @@ npm run typecheck   # main, engine host and renderer
 npm run installer   # Windows installer into desktop/release/
 ```
 
-There is no test runner wired up. Behaviour is verified by driving the built
-modules directly — see "Testing" below.
+The suite covers pure logic and runs in a fifth of a second; anything it
+cannot reach is driven against the built modules by hand. See "Testing".
 
 ## Architecture
 
@@ -214,19 +216,23 @@ This split matters. An earlier version reference-counted raw mode alongside hand
 
 **A turn ends on a block, never on prose.** `runTurn` used to take any reply without a tool call as the final answer, and the lighter models ended turns that way constantly — "I'll verify the build now." as the whole reply, and the build never run. A bank of verb patterns tried to tell a plan from an answer, then the same patterns in Russian and Uzbek, and every session found a sentence they had not seen. The protocol now has two closing blocks, defined in `src/tools/terminal.ts` and listed with the other tools so the prompt documents them: `done` (`summary: |` is the final answer) and `ask_user` (`question: |`, optional `options:`), with the names other agent protocols use (`finish`, `attempt_completion`, `final_answer`, `ask_followup_question`) aliased onto them in the registry. A reply with no block at all is a protocol error, answered by `noBlockNudge` — an automated message modelled on Cline's — at most twice since the model last acted, after which the prose is accepted as the answer so nothing the model wrote is lost; a reply sent twice verbatim is accepted at once. A `done` with the agent's own task list still open is nudged once (`doneWithOpenTodosNudge`) and accepted the second time, because the list may be stale. Prose from nudged replies rides along in `pendingProse` and is joined into the final message by `composeFinal`, or shown as narration if the model goes on to act. The old detectors survive only inside `classifySlip`, which picks the paragraph a nudge carries — the tool roster for a denial, "approval is OnFlip's job" for a permission request, "that output is invented" for a fabrication — and none of them decides whether the turn is over. The one place the classifier still gates acceptance is the closing block itself: live, seven tool calls ran and then an `ask_user` asked the user to "reconnect/expose the OnFlip tools for this turn", and the loop, trusting the block, ended the turn with three items open. A closing block whose prose, summary or question classifies as a denial, a permission request or a hand-off is nudged like a block-less reply (`pickRefusal`, and `NudgeContext.closing` names the block in the nudge's first line); a genuine question or finish is accepted at once. Every turn ends with a `turn finished` log line (`endedBy`, `nudges`, `openTodos`, `acceptedVia`), which `scripts/turn-stats.js` reads; the baseline before the closing blocks was 116 user turns with 75 block-less replies.
 
-## Conventions
+**The browser profile owns the session; the stored jar only moves one into it.** This was backwards, and it cost a seventeen-minute loop. `resolveAuth` reads the user's Firefox cookies on *every* engine start, so on a machine with a signed-in Firefox the jar is never empty — and `injectCookies` clears the profile's own session family before writing it. The profile's copy is the one the server has been rotating all session; the jar's is however old the last import was. Measured in `~/.onflip/logs`: a run answered 161 turns, compacted, opened a fresh chat, and came up anonymous — a live session overwritten with a stale one — then logged "still logged out after re-injecting" 41 times across 13 failed turns, because every retry re-ran the same doomed write. What fixed it was the user importing from Firefox by hand, which is exactly "give the profile a newer jar". So `ensurePage` injects only when the profile has no session token of its own (`profileSessionCookies`) or when the user has just asked for one — an explicit sign-in or import sets `sessionCookiesPending`, because a user naming a session is not a guess and must beat whatever the profile holds. `storedJarSpent` closes the loop: once the jar has been put back and the page stayed anonymous, it is not the session the server accepts, and both injection sites stop trying and raise a `signed-out` failure that says what actually helps.
 
-- Two-space indent, double quotes, semicolons, trailing commas.
-- `strict` TypeScript. No `any` unless genuinely unavoidable; prefer `unknown` plus a narrowing check.
-- Tool arguments arrive from a language model, so validate before use — never trust a shape.
-- Comments explain *why*, not *what*. Prefer one paragraph above a subtle function over line-by-line narration.
-- Errors returned to the model should say what to do next, and *where* — not just what failed. "Whitespace must match exactly" was the old advice here and it was not enough; see the note above about naming the line.
-- Nothing user-facing goes through `console.log`; use the helpers in `ui/render.ts` so theming and width handling apply.
-- Persistence is always best-effort: a read-only home directory must never take down a live session.
+**A failure carries a code, and the code is what gets classified.** `classifyFailure` used to read the error's English sentence, so every message was simultaneously the text a user reads and the key deciding whether to retry — and rewording one silently changed behaviour. Three regressions came from that, each fixed by stacking another regex above the one that misfired: a composer stumble whose advice ended "run `onflip login`" was classified fatal by the word "login"; a send failure whose advice said "rate-limited" became a persisted five-minute cooldown; and the real 403 was missed because "unusual activity" is nothing like the wording being matched. `FailureCode` in `chatgpt/backoff.ts` is set at the throw site, where what happened is actually known, and `failureCodeOf` reads it by duck typing so the classifier never imports the thing it classifies. The regex ladder stays as the fallback for the many uncoded `new Error(string)` throws — a coded failure never consults it, and its message is then free to say whatever is most useful.
+
+**Opening a conversation is the request that draws a throttle, and nothing was pacing it.** There was a 1.5-second floor between messages and none at all between chats, while ten separate places drop the live thread — a refused composer, a stalled generation, a refused request, a compaction, an auto-resume — each of which opens a chat on the next send. Measured: 32 new chats for 55 replies in one session, ending in "you're sending messages too quickly". `paceNewChat` holds a three-second gap that widens once more than ten chats have been opened in the trailing hour, which is already well past what a person does. It waits rather than throwing: a chat that must be opened must be opened, and slowing the burst is the whole point.
 
 ## Testing
 
-Exercise the built modules directly with a scripted fake transport rather than a live ChatGPT session:
+There is a test suite now — `npm test` (build then run) or `npm run test:only`. It is `node --test` with no dependency and no config: files are `test/*.test.js` in plain CommonJS, requiring the built `dist/`, discovered automatically so the command works on Node 20 through 24. The whole suite runs in about a fifth of a second and is part of CI.
+
+It covers pure logic only — the failure taxonomy, the tool-call parser, the refusal detectors — because that is where this project's bugs actually live and because none of it needs a browser, an account or a network. Everything hard was already exported for exactly this and had simply never been called: `classifySlip`, `looksCutOff`, `parseTurn`, `classifyFailure`, `silenceVerdict`.
+
+Two real bugs surfaced in the first hour of having it, which is the argument for the suite in one line. `paceSend`'s abort handling only ever registered an `abort` *listener*, so a signal that was already aborted — the common case, since the turn is cancelled before the wait begins — never fired it and every pacing wait ran to completion on a cancelled turn. And `looksCutOff` called `straighten` before counting fences; `straighten` folds the backtick into an apostrophe, because Uzbek writes oʻ/gʻ with one, so the unclosed-fence half of that function had never fired once in its life.
+
+Write the false-positive half of a detector test, always. A detector firing on a real answer turns a finished turn into a pointless nudge, which is worse than the miss it was added to catch, and the accretion pattern in `run.ts` — an alternative per live incident, forty-six regexes over three languages — has nothing else holding it down.
+
+Beyond the suite, the older techniques still apply for anything the runner cannot reach. Exercise the built modules directly with a scripted fake transport rather than a live ChatGPT session:
 
 ```js
 const { runTurn } = require("./dist/agent/run");
@@ -240,6 +246,16 @@ Anything that draws — the composer, the full-screen frame, the spinner — is 
 The same TTY fake driving the *real* transport is worth keeping for anything timing-shaped — queueing, interruption, a rule firing mid-turn. Those depend on a backend that takes tens of seconds and occasionally retries, and a stub that returns instantly proves none of it. Assert by polling the captured output until a marker appears, with a generous deadline, never with a fixed sleep. Seed and unseed any config a live run touches, since it uses the real `~/.onflip`.
 
 A test harness that stubs `process.exit` must not then call anything that exits — `Repl.shutdown()` does — and should end with `process.reallyExit`.
+
+## Conventions
+
+- Two-space indent, double quotes, semicolons, trailing commas.
+- `strict` TypeScript. No `any` unless genuinely unavoidable; prefer `unknown` plus a narrowing check.
+- Tool arguments arrive from a language model, so validate before use — never trust a shape.
+- Comments explain *why*, not *what*. Prefer one paragraph above a subtle function over line-by-line narration.
+- Errors returned to the model should say what to do next, and *where* — not just what failed. "Whitespace must match exactly" was the old advice here and it was not enough; see the note above about naming the line.
+- Nothing user-facing goes through `console.log`; use the helpers in `ui/render.ts` so theming and width handling apply.
+- Persistence is always best-effort: a read-only home directory must never take down a live session.
 
 ## Gotchas
 

@@ -7,7 +7,9 @@ import { chromium, Browser, BrowserContext, Locator, Page } from "playwright";
 import type { ReplyMeta } from "./transport";
 import { SessionCookie } from "../auth/access";
 import { normalizeModel, thinkingDirective } from "../models";
-import { configDir, loadConfig } from "../config";
+import { configDir, loadConfig, saveConfig } from "../config";
+import type { FailureCode } from "./backoff";
+import { paceNewChat } from "./backoff";
 import { logger, shapeOf } from "../log";
 
 /**
@@ -65,6 +67,18 @@ let page: Page | null = null;
 let inConversation = false;
 /** The session last put into the profile, for a reload that has to put it back. */
 let injectedCookies: SessionCookie[] = [];
+/**
+ * The stored jar has been injected and the page was still anonymous.
+ *
+ * Once that has happened the jar is spent: it is not the session the server
+ * accepts, and putting the same bytes back a second time cannot make it one.
+ * Measured on a live session, the absence of this flag cost seventeen minutes
+ * — 41 identical re-injections across thirteen failed turns, each turn
+ * retrying three times and each retry re-running the same recovery, until the
+ * user gave up and re-imported by hand. What actually fixed it was a *newer*
+ * jar, so that is what the error now asks for.
+ */
+let storedJarSpent = false;
 /** How many assistant turns existed before the current send. */
 let priorTurnCount = 0;
 
@@ -648,6 +662,27 @@ async function injectCookies(
   });
 }
 
+/**
+ * How many session-token cookies the profile itself is holding.
+ *
+ * Only the token counts, not the `oai-*` client state that rides with it: a
+ * profile that has merely *visited* chatgpt.com has plenty of the latter and
+ * no session at all. A chunked token (`.0`/`.1`) counts as the chunks it has,
+ * since any of them is proof the profile has been signed in.
+ */
+async function profileSessionCookies(ctx: BrowserContext): Promise<number> {
+  try {
+    const jar = await ctx.cookies(["https://chatgpt.com/", "https://openai.com/"]);
+    return jar.filter(
+      (c) => /^__Secure-next-auth\.session-token(\.\d+)?$/i.test(c.name) && c.value.length >= 20
+    ).length;
+  } catch {
+    // A context that cannot be read is not evidence of anything; treating it
+    // as "no session" would inject over a profile that may well have one.
+    return -1;
+  }
+}
+
 /** ChatGPT's own session-state cookies: the token, its chunks, and the `oai-*` client state around it. */
 const SESSION_COOKIE_FAMILY_NAMES =
   /^(?:__Secure-next-auth\.|__Host-next-auth\.|oai-|unified_session_manifest$|_account$)/i;
@@ -839,8 +874,41 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
     });
   }
 
-  await injectCookies(context, cookies);
+  // The profile is the session's home, and the stored jar is only a way to
+  // move a session into it. Injecting unconditionally got that backwards.
+  //
+  // `resolveAuth` reads the user's Firefox cookies on every engine start, so
+  // on a machine with a signed-in Firefox the jar is never empty — and
+  // `injectCookies` clears the profile's own session family before writing
+  // it. The profile's copy is the one the server has been rotating all
+  // session; the jar's copy is however old the last import was. Measured: a
+  // run that had answered 161 turns compacted, opened a fresh chat, and came
+  // up anonymous, because the launch had overwritten a live session with a
+  // stale one. Nothing recovered it until the user imported from Firefox
+  // again, which is exactly "give the profile a newer jar".
+  //
+  // So a profile that already holds a session keeps it, and the jar is held
+  // back as the fallback for a profile that has none — or one whose session
+  // the server later stops accepting, which is what `recoverAnonymousPage`
+  // is for. An explicit sign-in or import still wins: it sets
+  // `sessionCookiesPending`, because the user asking for a session is not a
+  // guess and must beat whatever the profile is holding.
   injectedCookies = cookies;
+  const pending = loadConfig().sessionCookiesPending === true;
+  const profileSession = await profileSessionCookies(context);
+  if (cookies.length > 0 && (pending || profileSession === 0)) {
+    logger.info("browser", "putting the stored session into the profile", {
+      cookies: cookies.length,
+      why: pending ? "just signed in or imported" : "profile had no session",
+    });
+    await injectCookies(context, cookies);
+    if (pending) saveConfig({ sessionCookiesPending: undefined });
+  } else if (profileSession > 0) {
+    logger.info("browser", "profile already holds a session; leaving it alone", {
+      profileCookies: profileSession,
+      storedCookies: cookies.length,
+    });
+  }
 
   await context.addInitScript(() => {
     Object.defineProperty(navigator, "webdriver", { get: () => undefined });
@@ -880,7 +948,25 @@ async function anyVisible(p: Page, selectors: string[]): Promise<boolean> {
   return false;
 }
 
-export class ChatGPTBrowserError extends Error {}
+/**
+ * A transport failure that knows what it is.
+ *
+ * The `code` is what `classifyFailure` reads when it is present, so retry
+ * behaviour no longer depends on the wording of the sentence beside it — see
+ * `FailureCode` in `backoff.ts` for why that mattered. It is optional
+ * because most throw sites predate it and the regex ladder still covers them;
+ * anything new, and anything whose classification has ever been got wrong,
+ * should carry one.
+ */
+export class ChatGPTBrowserError extends Error {
+  constructor(
+    message: string,
+    readonly code?: FailureCode
+  ) {
+    super(message);
+    this.name = "ChatGPTBrowserError";
+  }
+}
 
 /**
  * What a signed-out profile looks like from inside the page.
@@ -945,7 +1031,14 @@ export function takeProjectWarning(): string | null {
   return w;
 }
 
-async function openNewChat(p: Page, model?: string): Promise<void> {
+async function openNewChat(p: Page, model?: string, signal?: AbortSignal): Promise<void> {
+  // Opening a conversation is the request ChatGPT's abuse controls care about,
+  // and OnFlip opens them in bursts it never means to: every recovery path
+  // drops the live thread, so a composer stumble, a stalled generation, a
+  // refused request and a compaction can each add a chat within seconds of
+  // each other. Measured, 32 chats for 55 replies in one session, ending in a
+  // throttle. The wait is small until the rate is unreasonable.
+  await paceNewChat(signal);
   // ChatGPT's model-preference cookies outrank the ?model= in the URL. The
   // injected session already leaves the other browser's copies behind (see
   // NOT_OURS_TO_REPLAY), but the automation browser earns its own as it
@@ -971,7 +1064,17 @@ async function openNewChat(p: Page, model?: string): Promise<void> {
   // recovery in `sendViaBrowser`, every step below ran first and failed
   // slowly: the model check, the conversation snapshot, three tries at an
   // access token. Checked here, it is one cheap reload before any of them.
-  if (injectedCookies.length > 0 && context && (await looksAnonymous(p).catch(() => false))) {
+  // `storedJarSpent` gates this the same way it gates `recoverAnonymousPage`:
+  // once the jar has been put back and the page stayed anonymous, this is
+  // the same doomed write, and running it on every new chat is half of what
+  // made the seventeen-minute loop. Leaving it alone lets the send path
+  // reach its one honest error instead.
+  if (
+    injectedCookies.length > 0 &&
+    !storedJarSpent &&
+    context &&
+    (await looksAnonymous(p).catch(() => false))
+  ) {
     logger.warn("browser", "new chat came up logged out; putting the session back and reloading", {
       url: p.url(),
     });
@@ -1768,7 +1871,8 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
   logger.warn("browser", "composer refused the message — page state", pageState ?? { unreadable: true });
 
   throw new ChatGPTBrowserError(
-    `The message could not be entered into the ChatGPT composer (${best?.check.gotLines ?? 0} of ${best?.check.wantLines ?? 0} lines arrived). The page layout may have changed — turn on "Show the ChatGPT browser window" in Settings to watch what happens.`
+    `The message could not be entered into the ChatGPT composer (${best?.check.gotLines ?? 0} of ${best?.check.wantLines ?? 0} lines arrived). The page layout may have changed — turn on "Show the ChatGPT browser window" in Settings to watch what happens.`,
+    "composer-entry"
   );
 }
 
@@ -2139,7 +2243,8 @@ async function submitMessage(
     logger.warn("browser", "chatgpt is throttling this account", { notice: throttle });
     throw new ChatGPTBrowserError(
       `ChatGPT is throttling this account — the page says "${throttle}" (too many requests, retry-after 180). ` +
-        "Waiting before sending again; retrying now would extend the block."
+        "Waiting before sending again; retrying now would extend the block.",
+      "throttled"
     );
   };
 
@@ -2182,7 +2287,8 @@ async function submitMessage(
   // text, and that phrase in this message once turned every composer stumble
   // into a persisted cooldown.
   throw new ChatGPTBrowserError(
-    "The message was typed but ChatGPT would not accept it — neither the send button nor Enter cleared the composer. ChatGPT may be throttling this account, or the send control has moved. Turn on \"Show the ChatGPT browser window\" in Settings to watch."
+    "The message was typed but ChatGPT would not accept it — neither the send button nor Enter cleared the composer. ChatGPT may be throttling this account, or the send control has moved. Turn on \"Show the ChatGPT browser window\" in Settings to watch.",
+    "composer-refused"
   );
 }
 
@@ -2385,6 +2491,17 @@ async function recoverAnonymousPage(
   if (cookies.length === 0 || !context) return;
   if (!(await looksAnonymous(p).catch(() => false))) return;
 
+  // The jar has already been tried against an anonymous page and lost. It is
+  // the same bytes it was a minute ago, so a second go is not a recovery —
+  // it is the loop this guard exists to end. Say what actually fixes it.
+  if (storedJarSpent) {
+    throw new ChatGPTBrowserError(
+      "ChatGPT is signed out and the stored session did not restore it. That session has expired — " +
+        "sign in again from the account menu, or use “Use my Firefox session” if you are signed in there.",
+      "signed-out"
+    );
+  }
+
   logger.warn("browser", "page came up logged out; re-injecting the session", {
     url: p.url(),
     cookies: cookies.length,
@@ -2410,10 +2527,20 @@ async function recoverAnonymousPage(
   // the final answer with the whole plan still open. Failing here costs a
   // retry, which re-runs this recovery and regularly succeeds.
   if (stillOut) {
+    // One retry is worth it — a page can be anonymous because it loaded
+    // before its cookies were in place, and the reload above fixes that.
+    // Beyond one, the jar is the problem rather than the timing, so it is
+    // marked spent and the next attempt says so instead of trying again.
+    storedJarSpent = true;
     throw new ChatGPTBrowserError(
-      "ChatGPT opened in anonymous mode and the session could not be restored to the page, so nothing was sent. This often heals on a retry; if it keeps happening, sign out and back in from the account menu."
+      "ChatGPT opened in anonymous mode and the session could not be restored to the page, so nothing was sent. This often heals on a retry; if it keeps happening, sign out and back in from the account menu.",
+      "anonymous"
     );
   }
+  // The profile is signed in again, so whatever is stored is at worst
+  // redundant and at best out of date. Clearing the flag lets a genuinely
+  // later failure have its own single retry rather than inheriting this one.
+  storedJarSpent = false;
   // A recovery that worked mid-conversation has still cost the conversation:
   // the reload above went to the new-chat URL, so the thread the transport
   // believes it is appending to is no longer in front of us. Left as it was,
@@ -2452,7 +2579,7 @@ export async function sendViaBrowser(
     await injectCookies(context, cookies);
   }
   if (!inConversation) {
-    await openNewChat(p, normalizeModel(opts?.model));
+    await openNewChat(p, normalizeModel(opts?.model), opts?.signal);
     inConversation = true;
   }
 
@@ -3053,11 +3180,13 @@ export async function waitForReply(
       (/\/uc\//.test(pageState.url) || /\bLog in\b[\s\S]{0,80}\bSign up\b/i.test(pageState.text))
     ) {
       throw new ChatGPTBrowserError(
-        "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. Sign in from the account menu (or sign in again from the account menu), then send again."
+        "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. Sign in from the account menu (or sign in again from the account menu), then send again.",
+        "signed-out"
       );
     }
     throw new ChatGPTBrowserError(
-      `The sent message never appeared in the conversation after ${secs}s — the send itself seems to have failed. Retrying.`
+      `The sent message never appeared in the conversation after ${secs}s — the send itself seems to have failed. Retrying.`,
+      "send-not-landed"
     );
   }
   if (sawGeneration) {
@@ -3634,7 +3763,7 @@ async function backendApi(
   // message it used to return by name was a ReferenceError that masked every
   // real diagnosis with a stack trace.
   const token = await pageAccessToken(p, init?.tokenAttempts ?? 5);
-  if (!token) throw new ChatGPTBrowserError(SIGNED_OUT_MESSAGE);
+  if (!token) throw new ChatGPTBrowserError(SIGNED_OUT_MESSAGE, "signed-out");
 
   const result = await p.evaluate(
     async (args: { path: string; method: string; body: string | null; token: string }) => {

@@ -15,6 +15,7 @@ import {
 import { logger } from "../log";
 import {
   classifyFailure,
+  failureCodeOf,
   startCooldown,
   clearCooldown,
   describeWait,
@@ -701,7 +702,10 @@ async function sendWithRetry(
       // hammering it, and retrying a throttle actively deepens it. An earlier
       // version matched on the wording and missed the real 403, then retried
       // it twice.
-      const failure = classifyFailure(message);
+      // The code, when the throw site set one. Only failures without one fall
+      // back to matching the sentence, which is how this used to misread its
+      // own advice text — see `FailureCode`.
+      const failure = classifyFailure(message, failureCodeOf(e));
       if (failure.kind === "cooldown") {
         startCooldown(failure.seconds, failure.reason);
         events.onNotice?.(
@@ -1017,10 +1021,18 @@ function pickRefusal(...variants: Array<SlipVariant | null>): SlipVariant | null
  * before any of this; this is for the transports that have no such flag.
  */
 export function looksCutOff(raw: string): boolean {
-  const text = straighten(raw).trim();
-  if (!text) return false;
-  const fenceLines = text.split("\n").filter((line) => /^\s*(`{3,}|~{3,})/.test(line)).length;
+  const original = raw.trim();
+  if (!original) return false;
+  // Fence parity is counted before `straighten`, and that ordering is the
+  // whole check. `straighten` folds the backtick into an apostrophe — it is
+  // one of the characters Uzbek writes oʻ/gʻ with — so counting fences on
+  // the straightened text looked for a character that had just been removed.
+  // The half of this function that catches a truncated code block had
+  // therefore never fired once; only the short-promise rule below was live.
+  // Found by a test, not in the field, which is the point of having one.
+  const fenceLines = original.split("\n").filter((line) => /^\s*(`{3,}|~{3,})/.test(line)).length;
   if (fenceLines % 2 === 1) return true;
+  const text = straighten(original);
   return (
     text.length < 100 &&
     /\b(i'?ll|i will|i'?m going to|let me)\s+\w{0,12}$/i.test(text) &&

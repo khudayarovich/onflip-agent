@@ -19,6 +19,18 @@ export interface OnFlipConfig {
    * stays for compatibility with sessions stored by older versions.
    */
   sessionCookies?: { name: string; value: string }[];
+  /**
+   * The jar above is a session the user just asked for, and must be injected.
+   *
+   * Normally the browser profile owns the session and the stored jar is only
+   * a fallback — the profile's copy is the one the server keeps rotating,
+   * and overwriting it with an older import is what used to sign a working
+   * session out mid-run. A sign-in or an explicit "use my Firefox session"
+   * is the exception: there the user is telling OnFlip which session to use,
+   * so it goes into the profile whatever the profile already holds. Cleared
+   * as soon as it has been applied.
+   */
+  sessionCookiesPending?: boolean;
   sessionDeviceId?: string;
   accessToken?: string;
   accessTokenExpiry?: number;

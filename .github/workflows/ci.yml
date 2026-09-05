@@ -39,6 +39,13 @@ jobs:
       - run: npm run typecheck
       - run: npm run build
 
+      # The first thing in this repository's history that runs a line of the
+      # code it ships. The suite is pure logic only — the failure taxonomy,
+      # the tool-call parser, the refusal detectors — so it needs no browser,
+      # no account and no network, and it runs in well under a second.
+      - name: run the test suite
+        run: npm run test:only
+
   desktop:
     name: desktop app
     runs-on: ubuntu-latest
