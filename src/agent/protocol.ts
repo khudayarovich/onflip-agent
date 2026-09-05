@@ -730,12 +730,36 @@ function replaceFences(
 
     const marker = open[1][0];
     const markerLength = open[1].length;
+    /**
+     * An `onflip` fence closed with two backticks still closes.
+     *
+     * Markdown wants the closing fence to be at least as long as the opener,
+     * and models miscount. Live, in one session, a block ended `` instead of
+     * ``` — the scan ran straight past it, swallowed the *next* block's
+     * opening fence into this body, and produced one call where the model had
+     * written two. No error, no `malformed`: the second call simply never
+     * happened, and had to be sent again on the following turn.
+     *
+     * Loosened only for fences we own, and only at column 0. An ordinary code
+     * fence keeps the strict rule, because a two-backtick line inside a
+     * Markdown sample is ordinary content. The indentation rule is what makes
+     * the short close safe even inside our own blocks: a `key: |` body is
+     * always indented, so an unindented `` can only be a fence — writing a
+     * file whose content contains a bare `` line would otherwise have closed
+     * the block early and truncated it.
+     */
+    const ours = wanted.has(info);
+    const closeRe = ours ? /^(`{2,}|~{2,})\s*$|^\s*(`{3,}|~{3,})\s*$/ : /^\s*(`{3,}|~{3,})\s*$/;
+    const minClose = ours ? 2 : markerLength;
     const body: string[] = [];
     let j = i + 1;
     let closed = false;
     for (; j < lines.length; j++) {
-      const close = lines[j].match(/^\s*(`{3,}|~{3,})\s*$/);
-      if (close && close[1][0] === marker && close[1].length >= markerLength) {
+      const close = lines[j].match(closeRe);
+      // Two alternatives when the fence is ours (unindented short, or the
+      // ordinary indented long one), so take whichever group matched.
+      const fence = close ? (close[1] ?? close[2]) : undefined;
+      if (fence && fence[0] === marker && fence.length >= minClose) {
         closed = true;
         break;
       }

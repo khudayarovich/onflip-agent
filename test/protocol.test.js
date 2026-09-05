@@ -83,6 +83,33 @@ test("a block whose newlines were flattened is recovered", () => {
   assert.match(r.calls[0].arguments.command, /echo hello/);
 });
 
+test("a block closed with two backticks does not swallow the next block", () => {
+  // Live: a reply closed one block with `` instead of ```, the scan ran past
+  // it and ate the *next* block's opening fence, and two calls became one.
+  // No error and no `malformed` — the second call simply never happened and
+  // had to be sent again on the following turn.
+  const r = parse(
+    "```onflip\ntool: read\npath: a.txt\n``\n\n```onflip\ntool: bash\ncommand: node -v\n```"
+  );
+  assert.equal(r.calls.length, 2, "both blocks should survive a short close");
+  assert.deepEqual(
+    r.calls.map((c) => c.tool),
+    ["read", "bash"]
+  );
+  assert.equal(r.calls[0].arguments.path, "a.txt");
+  assert.equal(r.calls[1].arguments.command, "node -v");
+});
+
+test("an indented two-backtick line inside a body is content, not a close", () => {
+  // The rule that makes the short close safe: a `key: |` body is always
+  // indented, so only an unindented `` can be a fence. Without this,
+  // writing a Markdown file containing a bare `` line truncated it.
+  const r = parse(
+    "```onflip\ntool: write\npath: doc.md\ncontent: |\n  Inline `` here:\n  ``\n  and continues here.\n```"
+  );
+  assert.match(r.calls[0].arguments.content, /and continues here/);
+});
+
 // ---------------------------------------------------------------------------
 // prose must never execute
 // ---------------------------------------------------------------------------
