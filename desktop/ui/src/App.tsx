@@ -562,6 +562,12 @@ export function App(): React.ReactElement {
       setApproval({ id, request: request as ApprovalRequestDTO });
     });
 
+    // Answered from Telegram: close the dialog here rather than leaving a
+    // prompt on screen that nothing is waiting for any more.
+    const offSettled = window.onflip.onApprovalSettled?.((id) => {
+      setApproval((current) => (current && current.id === id ? null : current));
+    });
+
     const offExit = window.onflip.onEngineExit(() => {
       setEngineDown(true);
       setConnect("error");
@@ -587,6 +593,7 @@ export function App(): React.ReactElement {
     return () => {
       offEvent();
       offApproval();
+      offSettled?.();
       offExit();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps

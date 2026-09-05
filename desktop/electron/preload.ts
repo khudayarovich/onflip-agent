@@ -10,6 +10,8 @@ export interface OnFlipBridge {
   call(method: string, params?: unknown): Promise<unknown>;
   onEvent(listener: (event: string, data: unknown) => void): () => void;
   onApproval(listener: (id: number, request: unknown) => void): () => void;
+  /** The prompt was answered somewhere else — from Telegram, or another window. */
+  onApprovalSettled(listener: (id: number) => void): () => void;
   respondApproval(id: number, decision: unknown): void;
   onEngineExit(listener: (code: number | null) => void): () => void;
   pickFolder(): Promise<string | null>;
@@ -130,6 +132,11 @@ const bridge: OnFlipBridge = {
       listener(payload.id, payload.request);
     ipcRenderer.on("approval-request", handler);
     return () => ipcRenderer.removeListener("approval-request", handler);
+  },
+  onApprovalSettled: (listener) => {
+    const handler = (_e: unknown, payload: { id: number }) => listener(payload.id);
+    ipcRenderer.on("approval-settled", handler);
+    return () => ipcRenderer.removeListener("approval-settled", handler);
   },
 
   respondApproval: (id, decision) => {

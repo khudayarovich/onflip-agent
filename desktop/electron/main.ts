@@ -48,6 +48,8 @@ import {
 import {
   saveTelegram,
   startTelegram,
+  telegramApprovalDone,
+  telegramAskApproval,
   telegramOnEvent,
   telegramPublic,
 } from "./telegram";
@@ -241,6 +243,24 @@ async function fireSchedule(schedule: StoredSchedule): Promise<FireResult> {
     });
   }
   return { status: reply?.queued ? "queued" : "sent" };
+}
+
+/**
+ * The window the Telegram bot is driving.
+ *
+ * Mirroring used to be gated on `ws === frontWorkspace()`, which dropped a
+ * turn's output the moment the window lost focus — including part-way
+ * through — and interleaved two windows' work when both were busy. The bot
+ * binds to whichever window it last acted on and stays there.
+ */
+let telegramWs: Workspace | null = null;
+
+function telegramTarget(): Workspace | null {
+  if (telegramWs && workspaces.has(telegramWs.win.id) && !telegramWs.win.isDestroyed()) {
+    return telegramWs;
+  }
+  telegramWs = frontWorkspace();
+  return telegramWs;
 }
 
 /** The workspace the user is looking at, or the likeliest one. */
@@ -576,7 +596,7 @@ function startEngine(ws: Workspace, requested?: string): void {
     }
     // The bot mirrors whichever window it is driving. Fire-and-forget:
     // a Telegram hiccup must never hold up the renderer's own update.
-    if (ws === frontWorkspace()) void telegramOnEvent(event, data);
+    if (ws === telegramTarget()) void telegramOnEvent(event, data);
     sendTo(ws, "engine-event", { event, data });
   };
 
@@ -608,6 +628,11 @@ function askRendererForApproval(ws: Workspace, request: unknown): Promise<Approv
   return new Promise<ApprovalDecisionDTO>((resolve) => {
     approvalWaiters.set(id, { ws, request, resolve });
     sendTo(ws, "approval-request", { id, request });
+    // Also to the phone, when the bot is driving this window. Without it a
+    // turn on "ask" simply stopped there, with no message and no way to
+    // answer — which made the remote usable only in full-auto, the least
+    // supervised mode there is.
+    if (ws === telegramTarget()) telegramAskApproval(id, request);
     // Judged before the window is brought forward: on Windows a background
     // window asked to focus usually only flashes in the taskbar, and the
     // toast is what actually reaches the person.
@@ -883,6 +908,11 @@ function registerIpc(): void {
   });
 
   ipcMain.on("approval-response", (_e, payload: { id: number; decision: ApprovalDecisionDTO }) => {
+    // Answered in the app: close the phone's copy so nobody is left holding
+    // live buttons for a settled question.
+    if (approvalWaiters.has(payload.id)) {
+      telegramApprovalDone(payload.id, payload.decision.allow ? "allowed here" : "denied here");
+    }
     const waiter = approvalWaiters.get(payload.id);
     if (!waiter) return;
     approvalWaiters.delete(payload.id);
@@ -1482,18 +1512,29 @@ if (!singleInstance) {
     // two ways to reach it.
     startTelegram({
       status: () => {
-        const ws = frontWorkspace();
+        const ws = telegramTarget();
         return { ...(ws?.lastStatus ?? {}), cwd: ws?.cwd };
       },
       call: async (method, params) => {
-        const ws = frontWorkspace();
+        const ws = telegramTarget();
         if (!ws?.peer || ws.engineExited) throw new Error("OnFlip is not running.");
+        telegramWs = ws;
         return (await ws.peer.request(method, params ?? {})) as never;
       },
       changed: () => {
         for (const ws of workspaces.values()) {
           if (!ws.win.isDestroyed()) sendTo(ws, "telegram-changed", {});
         }
+      },
+      answerApproval: (id, decision) => {
+        const waiter = approvalWaiters.get(id);
+        if (!waiter) return false;
+        approvalWaiters.delete(id);
+        waiter.resolve(decision);
+        // The app's own dialog is still on screen for this one; telling the
+        // renderer closes it rather than leaving a prompt nobody can answer.
+        sendTo(waiter.ws, "approval-settled", { id });
+        return true;
       },
     });
     registerIpc();

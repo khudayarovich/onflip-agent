@@ -18,6 +18,7 @@ import {
   parseAllowList,
   parseIncoming,
 } from "../shared/telegram-commands";
+import type { ApprovalMode } from "../shared/protocol";
 
 /**
  * Driving OnFlip from a phone.
@@ -67,6 +68,8 @@ export interface BotHost {
   call<T = unknown>(method: string, params?: unknown): Promise<T>;
   /** Told when something the settings screen shows has changed. */
   changed(): void;
+  /** Answer a permission prompt the app is waiting on. False if it is gone. */
+  answerApproval(id: number, decision: { allow: boolean; remember?: boolean; abort?: boolean }): boolean;
 }
 
 let settings: TelegramSettings = { enabled: false, token: "", allowedIds: "" };
@@ -77,8 +80,35 @@ let offset = 0;
 let state: TelegramPublic["state"] = "off";
 let detail: string | undefined;
 let username: string | undefined;
-/** Chats that have talked to us, so a turn's output knows where to go. */
+/**
+ * Chats that have talked to us, so a turn's output knows where to go.
+ *
+ * Saved, because Telegram will not let a bot open a conversation: an
+ * unremembered chat means that after every app restart nothing reaches the
+ * phone until somebody messages the bot again — which for a *scheduled*
+ * prompt firing at 3am is a message that is simply never delivered.
+ */
 const chats = new Set<number>();
+
+/**
+ * Everywhere a message should go.
+ *
+ * The allow-list is included, not just the chats that have spoken: in a
+ * private conversation Telegram's chat id *is* the user id, so an allowed id
+ * is already a valid destination. Relying on the remembered set alone left a
+ * hole nobody would guess at — this bot had been talked to, was connected,
+ * and still could not deliver a permission prompt, because the chat had been
+ * learned by a build that did not yet write it down. Seeding from the
+ * allow-list means the very first prompt after any upgrade or restart
+ * arrives, with nothing to set up.
+ *
+ * Sending to an id that has never pressed Start fails with "chat not found",
+ * which is logged and harmless — Telegram simply will not let a bot open a
+ * conversation, and no amount of bookkeeping here changes that.
+ */
+function targetChats(): number[] {
+  return [...new Set([...parseAllowList(settings.allowedIds), ...chats])];
+}
 /**
  * Buttons carry a ticket rather than their value.
  *
@@ -135,12 +165,15 @@ export function loadTelegram(): void {
       token?: string;
       tokenEnc?: string;
       allowedIds?: string;
+      chats?: number[];
     };
     settings = {
       enabled: Boolean(raw.enabled),
       token: decode(raw),
       allowedIds: raw.allowedIds ?? "",
     };
+    chats.clear();
+    for (const id of raw.chats ?? []) if (typeof id === "number") chats.add(id);
   } catch {
     settings = { enabled: false, token: "", allowedIds: "" };
   }
@@ -152,7 +185,12 @@ function persist(): void {
     fs.writeFileSync(
       file(),
       JSON.stringify(
-        { enabled: settings.enabled, allowedIds: settings.allowedIds, ...encode(settings.token) },
+        {
+          enabled: settings.enabled,
+          allowedIds: settings.allowedIds,
+          chats: [...chats],
+          ...encode(settings.token),
+        },
         null,
         2
       )
@@ -250,9 +288,30 @@ async function edit(chatId: number, messageId: number, html: string): Promise<vo
   }
 }
 
-/** Broadcast to every chat that has spoken to this bot. */
-async function broadcast(html: string): Promise<void> {
-  for (const chatId of chats) await say(chatId, html);
+/**
+ * To every chat that has spoken to this bot.
+ *
+ * Turn output used to go to `[...chats][chats.size - 1]` — literally whoever
+ * messaged last, which is the wrong person the moment more than one id is
+ * allowed. Only allowed users are ever added, so everyone here is entitled
+ * to see it.
+ */
+async function broadcastTargets(
+  html: string,
+  keyboard?: Keyboard
+): Promise<{ chatId: number; messageId: number }[]> {
+  const sent: { chatId: number; messageId: number }[] = [];
+  for (const chatId of targetChats()) {
+    const messageId = await say(chatId, html, keyboard);
+    // Paired as they are sent rather than zipped afterwards: one chat
+    // failing would otherwise shift every later message onto the wrong id.
+    if (messageId !== null) sent.push({ chatId, messageId });
+  }
+  return sent;
+}
+
+async function broadcast(html: string, keyboard?: Keyboard): Promise<void> {
+  await broadcastTargets(html, keyboard);
 }
 
 // ---------------------------------------------------------------------------
@@ -283,11 +342,19 @@ const THINKING = [
   { label: "High", value: "high" },
 ];
 
-const ACCESS = [
+/**
+ * The approval modes, spelled exactly as the engine names them.
+ *
+ * "full-access" is what the app's chip *says*; "full-auto" is what the
+ * engine *accepts*, and setApproval with the label silently does nothing —
+ * the picker looked like it worked and left the mode untouched. Taken from
+ * `ApprovalMode` in the shared protocol so the two cannot drift again.
+ */
+const ACCESS: { label: string; value: ApprovalMode }[] = [
   { label: "Read-only", value: "read-only" },
   { label: "Ask", value: "ask" },
   { label: "Auto-edit", value: "auto-edit" },
-  { label: "Full-access", value: "full-access" },
+  { label: "Full-access", value: "full-auto" },
 ];
 
 async function sendModelPicker(chatId: number): Promise<void> {
@@ -372,7 +439,10 @@ async function handleMessage(chatId: number, userId: number | undefined, text: s
     return;
   }
 
-  chats.add(chatId);
+  if (!chats.has(chatId)) {
+    chats.add(chatId);
+    persist();
+  }
 
   if (parsed.kind === "empty") return;
   if (parsed.kind === "prompt") {
@@ -448,6 +518,33 @@ async function handleCallback(
     return;
   }
 
+  // Answered before anything else: a permission prompt is the one thing on
+  // the other end of these buttons that somebody is actively waiting on.
+  if (decoded.action.startsWith("approve") || decoded.action.startsWith("deny")) {
+    const approvalId = Number(decoded.value);
+    const decision = {
+      allow: decoded.action.startsWith("approve"),
+      remember: decoded.action === "approve-always",
+      abort: decoded.action === "deny-stop",
+    };
+    const settled = host!.answerApproval(approvalId, decision);
+    if (!settled) {
+      await answer("Already answered.");
+      telegramApprovalDone(approvalId, "already answered");
+      return;
+    }
+    const said = decision.allow
+      ? decision.remember
+        ? "always allowed"
+        : "allowed"
+      : decision.abort
+        ? "denied, turn stopped"
+        : "denied";
+    await answer(said);
+    telegramApprovalDone(approvalId, said);
+    return;
+  }
+
   try {
     switch (decoded.action) {
       case "open":
@@ -490,11 +587,109 @@ async function handleCallback(
 }
 
 // ---------------------------------------------------------------------------
+// permission prompts
+// ---------------------------------------------------------------------------
+
+interface ApprovalLike {
+  kind?: string;
+  tool?: string;
+  subject?: string;
+  reason?: string;
+  dangerous?: boolean;
+  detail?: string[];
+  rememberLabel?: string;
+}
+
+/** Prompts offered to Telegram, so the message can be closed when answered. */
+const pendingApprovals = new Map<number, { chatId: number; messageId: number }[]>();
+
+const KIND_ICON: Record<string, string> = {
+  read: "📄",
+  write: "✏️",
+  command: "⚡",
+  network: "🌐",
+};
+
+function approvalCard(request: ApprovalLike): string {
+  const rows = [
+    `${request.dangerous ? "🚨" : "🔐"} <b>Permission needed</b>`,
+    "",
+    `${KIND_ICON[request.kind ?? ""] ?? "⚙️"} <b>${escapeHtml(request.tool ?? "action")}</b>`,
+  ];
+  if (request.subject) rows.push(`<code>${escapeHtml(oneLine(request.subject, 200))}</code>`);
+  if (request.reason) rows.push("", escapeHtml(oneLine(request.reason, 200)));
+  for (const line of (request.detail ?? []).slice(0, 6)) {
+    rows.push(`• ${escapeHtml(oneLine(line, 120))}`);
+  }
+  if (request.dangerous) rows.push("", "<b>This one is flagged as dangerous.</b>");
+  return rows.join("\n");
+}
+
+/**
+ * Offer a permission prompt to Telegram.
+ *
+ * Without this the bot only worked in full-auto: on "ask", the agent hit a
+ * prompt and, from the phone, the turn simply stopped with no message and no
+ * way to answer. Which meant the remote pushed people towards the least
+ * supervised mode — the opposite of what a remote should do.
+ */
+export function telegramAskApproval(id: number, request: unknown): void {
+  if (!polling || !targetChats().length) return;
+  const ask = (request ?? {}) as ApprovalLike;
+  const buttons: Keyboard["inline_keyboard"] = [
+    [
+      { text: "✅ Allow", callback_data: tickets.put("approve", String(id)) },
+      { text: "⛔ Deny", callback_data: tickets.put("deny", String(id)) },
+    ],
+  ];
+  if (ask.rememberLabel) {
+    buttons.push([
+      {
+        text: `✅ Always allow ${oneLine(ask.rememberLabel, 24)}`,
+        callback_data: tickets.put("approve-always", String(id)),
+      },
+    ]);
+  }
+  buttons.push([{ text: "⛔ Deny and stop the turn", callback_data: tickets.put("deny-stop", String(id)) }]);
+
+  void (async () => {
+    pendingApprovals.set(
+      id,
+      await broadcastTargets(approvalCard(ask), { inline_keyboard: buttons })
+    );
+  })();
+}
+
+/**
+ * Close a prompt's message once it has been answered.
+ *
+ * Called however it was answered — including from the app's own dialog, so a
+ * phone is never left holding live buttons for a question that is settled.
+ */
+export function telegramApprovalDone(id: number, outcome: string): void {
+  const where = pendingApprovals.get(id);
+  pendingApprovals.delete(id);
+  if (!where) return;
+  for (const { chatId, messageId } of where) {
+    void edit(chatId, messageId, `🔐 <b>Permission</b> — ${escapeHtml(outcome)}`);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // what the turn says back
 // ---------------------------------------------------------------------------
 
-/** The live "working" message, rewritten as the turn goes on. */
-let activity: { chatId: number; messageId: number; lines: string[]; lastEdit: number } | null = null;
+/**
+ * The live "working" message — one per chat, all rewritten together.
+ *
+ * Every allowed chat gets its own copy because Telegram messages belong to a
+ * conversation; a single message id cannot be shown in two of them.
+ */
+let activity: {
+  targets: { chatId: number; messageId: number }[];
+  lines: string[];
+  lastEdit: number;
+} | null = null;
 let turnStartedAt = 0;
 
 function activityHtml(): string {
@@ -508,6 +703,11 @@ function activityHtml(): string {
   ].join("\n");
 }
 
+async function editAll(html: string): Promise<void> {
+  if (!activity) return;
+  for (const { chatId, messageId } of activity.targets) await edit(chatId, messageId, html);
+}
+
 async function pushActivity(text: string, force = false): Promise<void> {
   if (!activity) return;
   activity.lines.push(text);
@@ -516,7 +716,7 @@ async function pushActivity(text: string, force = false): Promise<void> {
   // otherwise spend its time being throttled rather than working.
   if (!force && now - activity.lastEdit < EDIT_EVERY_MS) return;
   activity.lastEdit = now;
-  await edit(activity.chatId, activity.messageId, activityHtml());
+  await editAll(activityHtml());
 }
 
 /**
@@ -527,27 +727,22 @@ async function pushActivity(text: string, force = false): Promise<void> {
  * own, because the answer is the thing somebody opened their phone for.
  */
 export async function telegramOnEvent(event: string, data: unknown): Promise<void> {
-  if (!polling || !chats.size) return;
-  const chatId = [...chats][chats.size - 1];
+  if (!polling || !targetChats().length) return;
 
   if (event === "turn") {
     const turn = data as { state?: string; error?: string; interrupted?: boolean };
     if (turn.state === "start") {
       turnStartedAt = Date.now();
-      const messageId = await say(chatId, "⚙️ <b>Working…</b>");
-      activity = messageId ? { chatId, messageId, lines: [], lastEdit: 0 } : null;
+      const targets = await broadcastTargets("⚙️ <b>Working…</b>");
+      activity = targets.length ? { targets, lines: [], lastEdit: 0 } : null;
     } else if (turn.state === "end") {
       const took = turnStartedAt ? elapsedLine(Date.now() - turnStartedAt) : "";
       if (activity) {
         const done = turn.interrupted ? "⏹ <b>Stopped</b>" : "✅ <b>Done</b>";
-        await edit(
-          activity.chatId,
-          activity.messageId,
-          [done, took, "", ...activity.lines.slice(-6)].filter(Boolean).join("\n")
-        );
+        await editAll([done, took, "", ...activity.lines.slice(-6)].filter(Boolean).join("\n"));
         activity = null;
       }
-      if (turn.error) await say(chatId, errorMessage(turn.error));
+      if (turn.error) await broadcast(errorMessage(turn.error));
     }
     return;
   }
@@ -568,12 +763,12 @@ export async function telegramOnEvent(event: string, data: unknown): Promise<voi
     const prefix = item.type === "question" ? "❓ <b>OnFlip is asking</b>\n\n" : "";
     const parts = answerMessages(item.text ?? "");
     for (const [i, part] of parts.entries()) {
-      await say(chatId, i === 0 ? prefix + part : part);
+      await broadcast(i === 0 ? prefix + part : part);
     }
     return;
   }
   if (item.type === "error") {
-    await say(chatId, errorMessage(item.text ?? ""));
+    await broadcast(errorMessage(item.text ?? ""));
   }
 }
 
@@ -648,7 +843,6 @@ export function startTelegram(bot: BotHost): void {
 function restart(): void {
   stopping = true;
   polling = false;
-  chats.clear();
   tickets.clear();
   offset = 0;
   activity = null;
