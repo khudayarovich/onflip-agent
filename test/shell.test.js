@@ -17,7 +17,7 @@ const path = require("node:path");
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { bashTool, killAllJobs, parseProbe } = require("../dist/tools/shell");
+const { bashTool, killAllJobs, listJobs, parseProbe } = require("../dist/tools/shell");
 
 const windows = process.platform === "win32";
 
@@ -197,16 +197,27 @@ test("a background command that finishes at once says that too", async () => {
 });
 
 test("a real long-running command is still reported as started", async () => {
-  // The check must not cost the feature it is protecting.
+  // The check must not cost the feature it is protecting: something that is
+  // genuinely still running has to come back as started.
+  //
+  // Deliberately a timer rather than a real server. An earlier version bound
+  // a port and fetched it, which proved nothing extra about this code and
+  // made the test depend on a free port and a working loopback stack — it
+  // failed on a CI runner for reasons that had nothing to do with the
+  // behaviour under test. "Still alive after the settle window" is the whole
+  // property, and a sleep demonstrates it without touching the network.
   const w = workspace();
-  const port = 8730 + Math.floor(Math.random() * 40);
-  const server = `require('http').createServer((q,s)=>s.end('ok')).listen(${port},'127.0.0.1')`;
-  const r = await w.run(`node -e "${server}"`, { background: true });
-  assert.ok(!r.error, `a real server should start:\n${r.output}`);
+  const r = await w.run(
+    windows ? "Start-Sleep -Seconds 30" : "sleep 30",
+    { background: true }
+  );
+  assert.ok(!r.error, `a long-running command should start:\n${r.output}`);
   assert.match(r.output, /Started in the background as job_/);
 
-  const body = await fetch(`http://127.0.0.1:${port}/`)
-    .then((x) => x.text())
-    .catch((e) => `FAILED: ${e.message}`);
-  assert.equal(body, "ok", "the server it reported as started should actually answer");
+  // And it must really still be running, not merely reported as such.
+  assert.ok(
+    listJobs().some((j) => j.running),
+    "the job it reported as started should still be alive"
+  );
+  killAllJobs();
 });
