@@ -1404,6 +1404,9 @@ async function resolveConversationId(p: Page): Promise<string | null> {
 
 /** Conversations already filed, so a multi-turn chat is only moved once. */
 let filedConversation: string | null = null;
+/** Filing tries this often per chat before leaving it to the sweep. */
+const MAX_FILING_ATTEMPTS = 2;
+let filingAttempts = 0;
 
 /**
  * Forget everything that belonged to the chat this page was on.
@@ -1418,6 +1421,7 @@ let filedConversation: string | null = null;
 function forgetChat(): void {
   priorTurnCount = 0;
   filedConversation = null;
+  filingAttempts = 0;
   conversationsBeforeChat = null;
   lastConversationId = null;
   projectWarningShown = false;
@@ -1478,6 +1482,19 @@ const sweptConversations = new Set<string>();
  * ids are remembered per process — steady state is one read per chat,
  * once, and a 429 ends the pass early rather than hammering a throttle.
  */
+/**
+ * Is this failure the browser having gone away?
+ *
+ * Distinct from a request that failed: nothing after it can succeed either,
+ * so the only correct response is to stop rather than to work through the
+ * rest of the list.
+ */
+function isPageGone(message: string): boolean {
+  return /Target (page|closed)|context or browser has been closed|Browser has been closed|has been closed/i.test(
+    message
+  );
+}
+
 export async function sweepConversationsIntoProject(ids: string[]): Promise<void> {
   if (!activeProject || !page || page.isClosed()) return;
   const project = activeProject;
@@ -1514,6 +1531,16 @@ export async function sweepConversationsIntoProject(ids: string[]): Promise<void
         sweptConversations.add(id);
         continue;
       }
+      // A closed page will not reopen partway through a loop, so every id
+      // after this one would fail identically. Measured: 24 of these in one
+      // session, all "Target page, context or browser has been closed",
+      // every one of them an attempted request against an account that
+      // ChatGPT was already throttling. Filing is best-effort tidying and
+      // is never worth a doomed request, let alone a list of them.
+      if (isPageGone(message)) {
+        logger.info("browser", "stopped sweeping: the browser is gone", { remaining: true });
+        return;
+      }
       logger.warn("browser", "could not sweep chat into the project", {
         conversation: id,
         error: message.replace(/\s+/g, " ").slice(0, 160),
@@ -1539,6 +1566,14 @@ async function groupInProject(p: Page): Promise<string | null> {
     return fromUrl;
   }
   if (filedConversation) return filedConversation;
+  // Filing costs two or three backend requests, and it runs after every
+  // reply. Once it has failed for this chat it tends to keep failing — the
+  // id could not be resolved, the account is being throttled — and retrying
+  // it per turn quietly triples the request count for a piece of sidebar
+  // tidying. The stray-chat sweep exists precisely so a skipped chat is
+  // picked up later, in one pass, rather than by hammering here.
+  if (filingAttempts >= MAX_FILING_ATTEMPTS) return null;
+  filingAttempts += 1;
 
   try {
     const conversationId = await resolveConversationId(p);
