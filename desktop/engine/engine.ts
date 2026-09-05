@@ -101,6 +101,7 @@ import {
 } from "onflip/dist/agent/store";
 import { openLog, closeLog, logger, logFile } from "onflip/dist/log";
 import { isResumableFailure, cooldownRemainingMs, failureCodeOf } from "onflip/dist/chatgpt/backoff";
+import { runDoctor, type DoctorReport } from "onflip/dist/chatgpt/doctor";
 import { lastBrowserReport } from "onflip/dist/auth/session";
 import type { ChatMessage, SessionState, ToolCall, ToolResult, ToolDisplay } from "onflip/dist/types";
 
@@ -2030,7 +2031,27 @@ export class Engine {
       }
     }
 
+    // The checks go at the top of the paste, before the state dump. A bug
+    // report that opens with "session: fail — sign in again" is one nobody
+    // has to read the rest of.
+    const health = runDoctor();
+    lines.unshift(
+      ...health.checks.map((c) => `  ${c.status.toUpperCase().padEnd(4)} ${c.title.padEnd(18)} ${c.message}`),
+      ""
+    );
+    lines.unshift(`health checks: ${health.status}`, "");
+
     return { text: lines.join("\n") };
+  }
+
+  /**
+   * The health checks on their own, typed, for a UI that wants to draw them.
+   *
+   * `diagnostics()` embeds the same report in its text blob for pasting into
+   * an issue; this is the same data before it was flattened.
+   */
+  doctor(): DoctorReport {
+    return runDoctor();
   }
 
   setConfigValue(key: string, value: unknown): ConfigView {

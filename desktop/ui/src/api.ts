@@ -72,6 +72,11 @@ export const api = {
 
   /** One paste-ready block about this install, for bug reports. */
   diagnostics: () => call<{ text: string }>("diagnostics"),
+  doctor: () =>
+    call<{
+      status: "ok" | "warn" | "fail";
+      checks: { id: string; title: string; status: "ok" | "warn" | "fail"; message: string }[];
+    }>("doctor"),
 
   compact: () => call<{ ok: boolean }>("compact"),
   sessionDiff: () => call<FileDiff[]>("sessionDiff"),

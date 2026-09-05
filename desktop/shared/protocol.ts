@@ -365,6 +365,14 @@ export interface EngineMethods {
 
   /** One paste-ready block describing this install, for bug reports. */
   diagnostics: { params: Record<string, never>; result: { text: string } };
+  /** Health checks that are run rather than printed; see src/chatgpt/doctor.ts. */
+  doctor: {
+    params: Record<string, never>;
+    result: {
+      status: "ok" | "warn" | "fail";
+      checks: { id: string; title: string; status: "ok" | "warn" | "fail"; message: string }[];
+    };
+  };
 
   status: { params: Record<string, never>; result: EngineStatus };
 }

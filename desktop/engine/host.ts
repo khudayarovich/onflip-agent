@@ -193,6 +193,9 @@ peer.onRequest = async (method, rawParams) => {
     case "diagnostics":
       return engine.diagnostics();
 
+    case "doctor":
+      return engine.doctor();
+
     case "status":
       return engine.statusPayload();
 
