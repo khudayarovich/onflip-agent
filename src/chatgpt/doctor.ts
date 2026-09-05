@@ -262,6 +262,43 @@ function profileHasSession(): boolean {
   }
 }
 
+/**
+ * The offline checks, plus the one that needs the page.
+ *
+ * Kept separate because it costs a browser launch and a page load, and a
+ * health check nobody runs because it is slow is worse than no health check.
+ * The live half is read-only — no message, no chat, nothing against the
+ * account — and runs on a throwaway page, so it cannot disturb a live
+ * conversation. See `checkSelectorsLive`.
+ */
+export async function runDeepDoctor(
+  checkLive: () => Promise<{ ok: boolean; matches: Record<string, number>; detail: string }>
+): Promise<DoctorReport> {
+  const base = runDoctor();
+  let live: Check;
+  try {
+    const result = await checkLive();
+    live = {
+      id: "selectors",
+      title: "ChatGPT page",
+      // A check that could not run is not a check that failed: no network,
+      // or a signed-out page, says nothing about whether the selectors are
+      // still right.
+      status: result.ok ? "ok" : Object.keys(result.matches).length ? "fail" : "warn",
+      message: result.detail,
+    };
+  } catch (e) {
+    live = {
+      id: "selectors",
+      title: "ChatGPT page",
+      status: "warn",
+      message: `The page could not be checked: ${e instanceof Error ? e.message.slice(0, 160) : String(e)}`,
+    };
+  }
+  const checks = [...base.checks, live];
+  return { checks, status: checks.reduce((s, c) => worst(s, c.status), "ok" as CheckStatus) };
+}
+
 export function runDoctor(): DoctorReport {
   const report = runChecks(inspectEnvironment());
   logger.info("doctor", "ran health checks", {

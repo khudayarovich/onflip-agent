@@ -53,6 +53,7 @@ import {
   sweepConversationsIntoProject,
   pageSessionUser,
   deleteConversations,
+  checkSelectorsLive,
   RemoteProject,
 } from "onflip/dist/chatgpt/browser-client";
 import {
@@ -101,7 +102,7 @@ import {
 } from "onflip/dist/agent/store";
 import { openLog, closeLog, logger, logFile } from "onflip/dist/log";
 import { isResumableFailure, cooldownRemainingMs, failureCodeOf } from "onflip/dist/chatgpt/backoff";
-import { runDoctor, type DoctorReport } from "onflip/dist/chatgpt/doctor";
+import { runDoctor, runDeepDoctor, type DoctorReport } from "onflip/dist/chatgpt/doctor";
 import { lastBrowserReport } from "onflip/dist/auth/session";
 import type { ChatMessage, SessionState, ToolCall, ToolResult, ToolDisplay } from "onflip/dist/types";
 
@@ -2052,6 +2053,33 @@ export class Engine {
    */
   doctor(): DoctorReport {
     return runDoctor();
+  }
+
+  /**
+   * The checks, plus the one that asks ChatGPT's own page whether the
+   * selectors still match it.
+   *
+   * Refused mid-turn: the live half is read-only and runs on a throwaway
+   * page, but starting a browser launch underneath a running turn is a
+   * needless way to make one fail.
+   */
+  async deepDoctor(): Promise<DoctorReport> {
+    if (this.busy) {
+      const base = runDoctor();
+      return {
+        checks: [
+          ...base.checks,
+          {
+            id: "selectors",
+            title: "ChatGPT page",
+            status: "warn" as const,
+            message: "Skipped while a turn is running — try again once it has finished.",
+          },
+        ],
+        status: base.status === "fail" ? "fail" : "warn",
+      };
+    }
+    return runDeepDoctor(() => checkSelectorsLive(this.auth?.cookies ?? []));
   }
 
   setConfigValue(key: string, value: unknown): ConfigView {

@@ -373,6 +373,14 @@ export interface EngineMethods {
       checks: { id: string; title: string; status: "ok" | "warn" | "fail"; message: string }[];
     };
   };
+  /** The same checks plus a read-only look at ChatGPT's live page. */
+  deepDoctor: {
+    params: Record<string, never>;
+    result: {
+      status: "ok" | "warn" | "fail";
+      checks: { id: string; title: string; status: "ok" | "warn" | "fail"; message: string }[];
+    };
+  };
 
   status: { params: Record<string, never>; result: EngineStatus };
 }

@@ -77,6 +77,11 @@ export const api = {
       status: "ok" | "warn" | "fail";
       checks: { id: string; title: string; status: "ok" | "warn" | "fail"; message: string }[];
     }>("doctor"),
+  deepDoctor: () =>
+    call<{
+      status: "ok" | "warn" | "fail";
+      checks: { id: string; title: string; status: "ok" | "warn" | "fail"; message: string }[];
+    }>("deepDoctor"),
 
   compact: () => call<{ ok: boolean }>("compact"),
   sessionDiff: () => call<FileDiff[]>("sessionDiff"),

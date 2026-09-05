@@ -3958,6 +3958,80 @@ async function tokenViaScratchPage(): Promise<string> {
   }
 }
 
+/**
+ * Do the selectors still match the page ChatGPT is serving today?
+ *
+ * The one question nothing else here can answer. Everything else about UI
+ * drift is inferred after the fact, from a turn that already failed — which
+ * is how "the layout may have changed" came to be diagnosed blind three
+ * sessions running.
+ *
+ * Read-only, and deliberately so: it sends no message, creates no chat and
+ * costs nothing against the account, so it is safe to offer as a button. It
+ * runs on a *throwaway page in the existing context* for the reason
+ * `tokenViaScratchPage` documents — a conversation only opens on a page's
+ * first navigation, so navigating the live page to check on it would throw
+ * away the conversation it was checking.
+ *
+ * A composer and a send control are the two that must be there on a fresh
+ * chat; the thread selectors legitimately match nothing until a chat has
+ * turns in it, so their absence is not a fault and is reported as a count
+ * rather than judged.
+ */
+export async function checkSelectorsLive(
+  cookies: SessionCookie[]
+): Promise<{ ok: boolean; matches: Record<string, number>; detail: string }> {
+  const unavailable = (detail: string) => ({ ok: false, matches: {}, detail });
+  let scratch: Page | null = null;
+  try {
+    await ensurePage(cookies);
+    if (!context) return unavailable("The browser could not be started.");
+    scratch = await context.newPage();
+    await scratch.goto(`${CHAT_URL}/`, { waitUntil: "domcontentloaded", timeout: 45_000 });
+    // The composer mounts after the shell, so a census taken the instant the
+    // DOM is ready reports a drift that is really a race.
+    await firstVisible(scratch, COMPOSER_SELECTORS, 20_000);
+    const state = await capturePageState(scratch);
+    if (!state) return unavailable("The page could not be read.");
+
+    const missing: string[] = [];
+    if (!state.matches.composer) missing.push("the message box");
+    if (!state.matches.send && !state.matches.stop) missing.push("the send control");
+    const signedOut = /\bLog in\b[\s\S]{0,120}\bSign up\b/i.test(state.text);
+
+    logger.info("browser", "checked the selectors against the live page", {
+      matches: state.matches,
+      signedOut,
+    });
+
+    if (signedOut) {
+      return {
+        ok: false,
+        matches: state.matches,
+        detail: "The page came up signed out, so the selectors could not be checked. Sign in and run this again.",
+      };
+    }
+    if (missing.length) {
+      return {
+        ok: false,
+        matches: state.matches,
+        detail: `ChatGPT's page no longer matches: ${missing.join(" and ")} could not be found. This is UI drift — the selectors in chatgpt/selectors.ts need updating.`,
+      };
+    }
+    return {
+      ok: true,
+      matches: state.matches,
+      detail: "The message box and send control were both found where OnFlip expects them.",
+    };
+  } catch (e) {
+    return unavailable(
+      `The check could not run: ${e instanceof Error ? e.message.slice(0, 160) : String(e)}`
+    );
+  } finally {
+    await scratch?.close().catch(() => {});
+  }
+}
+
 async function warmSession(): Promise<boolean> {
   if (!context) return false;
   const scratch = await context.newPage().catch(() => null);

@@ -17,7 +17,7 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
-const { runChecks } = require("../dist/chatgpt/doctor");
+const { runChecks, runDeepDoctor } = require("../dist/chatgpt/doctor");
 
 /** A machine where everything is fine; each test breaks one thing. */
 const healthy = (over = {}) => ({
@@ -129,6 +129,59 @@ test("a filesystem that cannot report free space is not a fault", () => {
 // ---------------------------------------------------------------------------
 // overall status
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// the deep check — the only thing that can see UI drift
+// ---------------------------------------------------------------------------
+
+test("a live page that matches passes", async () => {
+  const report = await runDeepDoctor(async () => ({
+    ok: true,
+    matches: { composer: 1, send: 1 },
+    detail: "The message box and send control were both found where OnFlip expects them.",
+  }));
+  const check = report.checks.find((c) => c.id === "selectors");
+  assert.equal(check.status, "ok");
+});
+
+test("a page missing the composer is a failure, because that is what drift is", async () => {
+  const report = await runDeepDoctor(async () => ({
+    ok: false,
+    matches: { composer: 0, send: 0, assistant: 3 },
+    detail: "ChatGPT's page no longer matches: the message box could not be found.",
+  }));
+  const check = report.checks.find((c) => c.id === "selectors");
+  assert.equal(check.status, "fail");
+  assert.equal(report.status, "fail");
+});
+
+test("a check that could not run is a warning, not a failure", async () => {
+  // No network, or a signed-out page, says nothing about whether the
+  // selectors are still right — and crying drift over it would train the
+  // user to ignore the one check that matters.
+  const report = await runDeepDoctor(async () => ({
+    ok: false,
+    matches: {},
+    detail: "The page came up signed out, so the selectors could not be checked.",
+  }));
+  assert.equal(report.checks.find((c) => c.id === "selectors").status, "warn");
+});
+
+test("a thrown error is caught and reported, never propagated", async () => {
+  const report = await runDeepDoctor(async () => {
+    throw new Error("browser would not start");
+  });
+  const check = report.checks.find((c) => c.id === "selectors");
+  assert.equal(check.status, "warn");
+  assert.match(check.message, /browser would not start/);
+});
+
+test("the deep report still contains every offline check", async () => {
+  const report = await runDeepDoctor(async () => ({ ok: true, matches: { composer: 1 }, detail: "fine" }));
+  for (const id of ["session", "cooldown", "cookie-reader", "storage", "plan"]) {
+    assert.ok(report.checks.some((c) => c.id === id), `the deep report dropped ${id}`);
+  }
+});
 
 test("the overall status is the worst single check", () => {
   assert.equal(runChecks(healthy()).status, "ok");
