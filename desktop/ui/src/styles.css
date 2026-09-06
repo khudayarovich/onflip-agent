@@ -390,6 +390,7 @@ a:hover {
   gap: 2px;
   width: 100%;
   min-width: 0;
+  margin-bottom: 6px;
   text-align: left;
   /* Right padding keeps long text from running under the ✕ / spinner. */
   padding: 8px 28px 8px 10px;
@@ -448,8 +449,15 @@ a:hover {
   color: var(--red);
 }
 /* project groups in the session list */
+/* Cards need air between them. Without it the folder row and the session
+   card under it read as one control with a line through it — reported from a
+   screenshot of exactly that. One value everywhere between cards, and more
+   between one project's block and the next. */
 .project-group {
-  margin-bottom: 4px;
+  margin-bottom: 14px;
+}
+.project-group-head {
+  margin-bottom: 6px;
 }
 .project-group-head {
   display: flex;
