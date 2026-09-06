@@ -119,11 +119,16 @@ test("an app-wide setting saved on DeepSeek is seen by ChatGPT too", () => {
 
 // --- and the two symptoms that were reported --------------------------------
 
-test("the model picker offers DeepSeek's one model, not ChatGPT's", () => {
+test("the model picker offers DeepSeek's own modes, not ChatGPT's models", () => {
+  // Instant, Expert and Vision — the radio group above DeepSeek's composer,
+  // which is the nearest thing it has to a model list. An earlier version of
+  // this test expected a single "deepseek-chat" entry, which was my reading
+  // of the page before seeing the modes.
   write({ ...EXISTING, provider: "deepseek" });
   const slugs = allModels().map((m) => m.slug);
-  assert.deepEqual(slugs, ["deepseek-chat"]);
-  assert.equal(defaultModel(), "deepseek-chat");
+  assert.deepEqual(slugs, ["deepseek-instant", "deepseek-expert", "deepseek-vision"]);
+  assert.equal(defaultModel(), "deepseek-instant");
+  assert.ok(!slugs.some((s) => s.startsWith("gpt-")), "and nothing of ChatGPT's");
 });
 
 test("and ChatGPT's picker is unaffected", () => {

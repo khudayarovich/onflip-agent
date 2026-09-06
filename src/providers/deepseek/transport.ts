@@ -2,7 +2,15 @@ import { ChatMessage } from "../../types";
 import { buildTurnPrompt } from "../../agent/protocol";
 import { logger } from "../../log";
 import type { SendOptions, Transport, TransportReply } from "../../chatgpt/transport";
-import { newChat, sendTurn, currentConversationId, setDeepThink, wantsDeepThink } from "./browser";
+import {
+  newChat,
+  sendTurn,
+  currentConversationId,
+  setDeepThink,
+  wantsDeepThink,
+  setMode,
+  modeFor,
+} from "./browser";
 
 /**
  * Talking to DeepSeek as the agent's transport.
@@ -32,6 +40,12 @@ export class DeepSeekTransport implements Transport {
       includeSystem: this.sentThrough === 0,
     });
     const body = [turn, opts.reminder].filter((s) => s && s.trim()).join("\n\n");
+
+    // The mode — Instant, Expert or Vision — can only be chosen while a chat
+    // is still empty; the control disappears once anything has been sent. So
+    // it is applied on the first turn of a thread and not attempted after,
+    // where it would fail every time for a reason that is not a fault.
+    if (this.sentThrough === 0) await setMode(modeFor(opts.model));
 
     // The reasoning toggle is part of the page, not of the request, so it is
     // set before each turn rather than carried with one — and a turn sent at

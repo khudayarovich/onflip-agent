@@ -40,6 +40,18 @@ export function SignInModal({
   const [reason, setReason] = useState<string | null>(null);
   const [checking, setChecking] = useState(false);
   const [report, setReport] = useState<BrowserReport[]>([]);
+  /**
+   * Which service this is signing in to.
+   *
+   * The wording follows it. Every string here used to name ChatGPT, so on
+   * DeepSeek the window said "Sign in to ChatGPT" while opening DeepSeek's
+   * login — and the import button offered a Firefox session that could not
+   * help, since DeepSeek keeps no cookie to import.
+   */
+  const [provider, setProvider] = useState<{ id: string; label: string }>({
+    id: "chatgpt",
+    label: "ChatGPT",
+  });
   const live = useRef(true);
   useEffect(
     () => () => {
@@ -47,6 +59,17 @@ export function SignInModal({
     },
     []
   );
+
+  useEffect(() => {
+    void window.onflip
+      .providerGet?.()
+      .then((p) => {
+        if (live.current) setProvider({ id: p.id, label: p.label });
+      })
+      .catch(() => {
+        /* older main process: the ChatGPT default stands */
+      });
+  }, []);
 
   useEffect(() => {
     void api
@@ -113,11 +136,16 @@ export function SignInModal({
   };
 
   const name = browser?.name ?? "your browser";
+  const service = provider.label;
+  // Importing reads a cookie out of Firefox or Safari, and DeepSeek keeps its
+  // session in localStorage instead — there is nothing there to find, so the
+  // button is not offered rather than offered and useless.
+  const canImport = provider.id !== "deepseek";
   const busy = phase !== "idle";
 
   return (
     <Modal
-      title={t("signInTitle")}
+      title={t("signInTitle", { service })}
       onClose={() => {
         if (busy) cancel();
         onClose();
@@ -136,9 +164,11 @@ export function SignInModal({
           </>
         ) : (
           <>
-            <button className="btn" disabled={checking} onClick={importSession}>
-              {checking ? t("signInChecking") : t("signInImport")}
-            </button>
+            {canImport && (
+              <button className="btn" disabled={checking} onClick={importSession}>
+                {checking ? t("signInChecking") : t("signInImport")}
+              </button>
+            )}
             <button className="btn primary" disabled={!browser} onClick={start}>
               {t("signInOpen", { browser: name })}
             </button>
@@ -146,13 +176,13 @@ export function SignInModal({
         )
       }
     >
-      <p className="modal-note">{t("signInLead")}</p>
+      <p className="modal-note">{t("signInLead", { service })}</p>
       {browser === null ? (
         <p className="modal-note" style={{ color: "var(--yellow)" }}>
           {t("signInNoBrowser")}
         </p>
       ) : (
-        <p className="modal-note">{t("signInHow", { browser: name })}</p>
+        <p className="modal-note">{t("signInHow", { browser: name, service })}</p>
       )}
 
       {phase === "waiting" && (
@@ -181,9 +211,11 @@ export function SignInModal({
       )}
       {!busy && (
         <>
-          <p className="modal-note dim" style={{ marginTop: 14 }}>
-            {t("signInImportHint")}
-          </p>
+          {canImport && (
+            <p className="modal-note dim" style={{ marginTop: 14 }}>
+              {t("signInImportHint")}
+            </p>
+          )}
           {report.length > 0 && (
             <table className="signin-report">
               <tbody>

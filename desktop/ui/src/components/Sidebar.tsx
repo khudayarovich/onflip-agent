@@ -1,4 +1,4 @@
-import React, { useRef, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type {
   ConnectState,
   EngineStatus,
@@ -6,7 +6,7 @@ import type {
   SessionSummaryDTO,
 } from "../../../shared/protocol";
 import { Menu, useMenu, relativeTime, baseName } from "./common";
-import { ChevronDown, Clock, Close, Folder, Plus } from "./icons";
+import { ChatGptMark, ChevronDown, Clock, Close, DeepSeekMark, Folder, Plus } from "./icons";
 import { useT } from "../i18n";
 
 export function Sidebar({
@@ -341,6 +341,51 @@ const popIconProps = {
   "aria-hidden": true,
 };
 
+/**
+ * Switch to the other service, from the menu.
+ *
+ * Named for where it goes rather than where it is — "Switch to DeepSeek"
+ * says what the click does, which a label naming the current service would
+ * not. The icon is the destination's, for the same reason.
+ *
+ * There are two of these now: this and the picker in Settings. That is not a
+ * duplicate so much as an admission — a switch is a thing people reach for
+ * often enough that burying it under seven settings sections was the wrong
+ * call, and the menu is where the rest of the account lives.
+ *
+ * Nothing is shown until the provider is known, and nothing at all on a main
+ * process too old to answer: a switch that cannot work is worse than a menu
+ * with one fewer item.
+ */
+function ProviderSwitchItem({
+  provider,
+  onDone,
+}: {
+  provider: ReturnType<typeof useProvider>;
+  onDone: () => void;
+}): React.ReactElement | null {
+  const t = useT();
+  const other = provider?.all.find((p) => p.id !== provider.id);
+  if (!provider || !other || !window.onflip.providerSet) return null;
+
+  const Mark = other.id === "deepseek" ? DeepSeekMark : ChatGptMark;
+  return (
+    <button
+      className="pop-item"
+      title={t("menuSwitchProviderHint", { service: other.label })}
+      onClick={() => {
+        onDone();
+        void window.onflip.providerSet?.(other.id).catch(() => {});
+      }}
+    >
+      <span className="pop-icon">
+        <Mark size={15} />
+      </span>{" "}
+      {t("menuSwitchProvider", { service: other.label })}
+    </button>
+  );
+}
+
 function SkillsIcon(): React.ReactElement {
   return (
     <svg {...popIconProps}>
@@ -375,6 +420,36 @@ function AboutIcon(): React.ReactElement {
  * Clicking it opens the account panel — identity, locally counted usage, and
  * the settings entry (moved here from the old standalone gear).
  */
+/**
+ * Which service is running, for the labels that name it.
+ *
+ * Asked once per mount and never refreshed: a provider cannot change without
+ * the app restarting, so there is nothing to watch. Falls back to ChatGPT on
+ * a main process too old to answer, which is what such an install is running.
+ */
+function useProvider(): { id: string; label: string; all: { id: string; label: string }[] } | null {
+  const [state, setState] = useState<{
+    id: string;
+    label: string;
+    all: { id: string; label: string }[];
+  } | null>(null);
+  useEffect(() => {
+    let live = true;
+    void window.onflip
+      .providerGet?.()
+      .then((p) => {
+        if (live) setState(p);
+      })
+      .catch(() => {
+        /* older main process */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+  return state;
+}
+
 function AccountBar({
   status,
   connect,
@@ -400,6 +475,8 @@ function AccountBar({
 }): React.ReactElement {
   const t = useT();
   const [open, setOpen] = useState(false);
+  const provider = useProvider();
+  const providerName = provider?.label ?? "ChatGPT";
   const account = status?.account ?? null;
   const usage = status?.usage;
   const displayName = account?.name || account?.email || t("chatgptAccount");
@@ -466,10 +543,11 @@ function AccountBar({
                   <line x1="15" y1="12" x2="3" y2="12" />
                 </svg>
               </span>{" "}
-              {t("menuSignIn")}
+              {t("menuSignIn", { service: providerName })}
             </button>
               </>
             )}
+            <ProviderSwitchItem provider={provider} onDone={() => setOpen(false)} />
             <button
               className="pop-item"
               onClick={() => {

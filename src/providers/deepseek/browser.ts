@@ -153,6 +153,15 @@ export interface SendResult {
 const COMPOSER = "textarea";
 const SETTLE_POLLS = 3;
 const POLL_MS = 1_200;
+/** How long the page may show nothing new before the send is called failed. */
+const SILENCE_MS = 90_000;
+
+/** The last assistant reply, and how many are mounted, in one read. */
+async function readLast(page: Page): Promise<{ text: string; count: number }> {
+  const nodes = (await page.evaluate(EXTRACT_REPLY_SCRIPT).catch(() => null)) as unknown;
+  const count = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
+  return { text: nodes ? toMarkdown(nodes as never) : "", count };
+}
 
 export async function sendTurn(
   text: string,
@@ -165,7 +174,13 @@ export async function sendTurn(
     await page.goto(DEEPSEEK_CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
     await page.waitForTimeout(2_000);
   }
-  const before = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
+  // Both signals, because neither is sufficient alone. The node count is not
+  // monotonic — DeepSeek renders the transcript into a virtual list and
+  // unmounts what scrolls out of view, measured at four visible nodes after
+  // five turns — so waiting for it to grow hangs forever on a long
+  // conversation. The last reply's text catches that; the count catches the
+  // rarer case of a model repeating itself word for word.
+  const before = await readLast(page);
 
   await page.click(COMPOSER);
   // A string rather than a callback: this package is built without the DOM
@@ -194,17 +209,27 @@ export async function sendTurn(
   let last: string | null = null;
   let quiet = 0;
   let recovered = false;
+  let lastChange = Date.now();
   while (Date.now() < deadline) {
     try {
       await page.waitForTimeout(POLL_MS);
-      const count = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
-      if (count <= before) continue;
-      const now = await page.evaluate(EXTRACT_REPLY_SCRIPT).catch(() => null);
-      const text = now ? toMarkdown(now as never) : "";
-      if (!text) continue;
-      if (text === last) quiet++;
+      const now = await readLast(page);
+      const fresh = now.count > before.count || now.text !== before.text;
+      if (!fresh || !now.text) {
+        // Nothing has moved. A reply that has not started at all within the
+        // silence window is a failure worth reporting, not something to sit
+        // on until the ten-minute deadline while the UI says "working".
+        if (Date.now() - lastChange > SILENCE_MS) {
+          throw new Error(
+            "DeepSeek did not start answering. The page may have signed out, or the send did not land."
+          );
+        }
+        continue;
+      }
+      lastChange = Date.now();
+      if (now.text === last) quiet++;
       else quiet = 0;
-      last = text;
+      last = now.text;
       if (quiet >= SETTLE_POLLS) break;
     } catch (e) {
       // A renderer that died mid-answer, seen once on a long conversation.
@@ -354,6 +379,81 @@ export async function setDeepThink(on: boolean): Promise<boolean> {
     return ok;
   } catch (e) {
     logger.warn("deepseek", "could not set deep thinking", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  }
+}
+
+/**
+ * DeepSeek's three modes: Instant, Expert and Vision.
+ *
+ * A real radio group above the composer, and the closest thing DeepSeek has
+ * to a model picker — so that is what OnFlip presents them as. Identified by
+ * `data-model-type`, which is a stable attribute rather than one of the
+ * hashed class names everywhere else on that page, with the current choice in
+ * `aria-checked`.
+ *
+ * The catch that shapes the whole design: the group only exists before a
+ * conversation's first message. Once anything has been sent it is gone, and
+ * the mode is fixed for that thread. So a mode is applied at the start of a
+ * chat and never mid-conversation, and changing it starts a new one — which
+ * is what the engine already does when the model changes.
+ */
+export const DEEPSEEK_MODES = {
+  "deepseek-instant": "default",
+  "deepseek-expert": "expert",
+  "deepseek-vision": "vision",
+} as const;
+
+export type DeepSeekModel = keyof typeof DEEPSEEK_MODES;
+
+/** The page's mode for a model slug, defaulting to Instant. */
+export function modeFor(slug: string | undefined): string {
+  return DEEPSEEK_MODES[(slug ?? "") as DeepSeekModel] ?? "default";
+}
+
+/**
+ * Choose a mode, if there is still a chat young enough to choose one for.
+ *
+ * Answers false when the group is absent, which is the ordinary case
+ * mid-conversation rather than a fault — the caller only asks on a fresh
+ * chat, and a thread that has already started keeps the mode it was born with.
+ */
+export async function setMode(mode: string): Promise<boolean> {
+  try {
+    const page = await chatPage();
+    const script = (want: string) => `(() => {
+      const radios = Array.from(document.querySelectorAll("[role=radio][data-model-type]"));
+      if (!radios.length) return { present: false, current: null };
+      const el = radios.find((r) => r.getAttribute("data-model-type") === ${JSON.stringify(want)});
+      const current = (radios.find((r) => r.getAttribute("aria-checked") === "true") || {})
+        .getAttribute ? radios.find((r) => r.getAttribute("aria-checked") === "true").getAttribute("data-model-type") : null;
+      if (!el) return { present: true, current, missing: true };
+      if (current !== ${JSON.stringify(want)}) {
+        const b = el.getBoundingClientRect();
+        (document.elementFromPoint(b.x + b.width / 2, b.y + b.height / 2) || el).click();
+      }
+      return { present: true, current };
+    })()`;
+    const before = (await page.evaluate(script(mode))) as {
+      present: boolean;
+      current: string | null;
+      missing?: boolean;
+    };
+    if (!before.present) return false;
+    if (before.missing) {
+      logger.warn("deepseek", "that mode is not offered on this account", { mode });
+      return false;
+    }
+    if (before.current === mode) return true;
+    await page.waitForTimeout(700);
+    const after = (await page.evaluate(script(mode))) as { current: string | null };
+    const ok = after.current === mode;
+    logger.info("deepseek", "mode", { wanted: mode, applied: ok, was: before.current });
+    return ok;
+  } catch (e) {
+    logger.warn("deepseek", "could not set the mode", {
       error: e instanceof Error ? e.message : String(e),
     });
     return false;

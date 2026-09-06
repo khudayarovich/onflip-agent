@@ -75,20 +75,24 @@ function isExcludedSlug(slug: string): boolean {
 }
 
 /**
- * What DeepSeek offers, which is not a list of models.
+ * What DeepSeek offers instead of models: Instant, Expert and Vision.
  *
- * Its web chat has one model and two toggles beside the composer — deep
- * thinking and search — rather than a picker. So the honest answer is a
- * single entry: something has to fill the chip, and offering ChatGPT's list
- * there is worse than offering one true row. Reported on the first switch:
- * the picker still showed GPT-5.6 Luna and Sol on DeepSeek, neither of which
- * exists there.
+ * A radio group above its composer, and the nearest thing it has to a model
+ * picker, so that is what these are presented as. The slugs map to the page's
+ * own `data-model-type` values in `DEEPSEEK_MODES`.
  *
- * `discoveredModels` cannot help: it is whatever ChatGPT's account last
- * reported, and it is stored per install rather than per provider.
+ * One constraint travels with them: the group only exists before a chat's
+ * first message, so a mode is chosen when a thread starts and fixed for its
+ * life. Changing the picker therefore starts a new conversation — which is
+ * already what the engine does when the model changes.
+ *
+ * `discoveredModels` cannot help here: it is whatever ChatGPT's account last
+ * reported.
  */
 const DEEPSEEK_MODELS: ModelInfo[] = [
-  { slug: "deepseek-chat", label: "DeepSeek", description: "unlimited text chat" },
+  { slug: "deepseek-instant", label: "Instant", description: "fast answers — DeepSeek's default" },
+  { slug: "deepseek-expert", label: "Expert", description: "slower and more careful on hard problems" },
+  { slug: "deepseek-vision", label: "Vision", description: "reads images as well as text" },
 ];
 
 export function allModels(): ModelInfo[] {
