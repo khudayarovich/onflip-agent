@@ -1,6 +1,7 @@
 import { app, safeStorage } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import {
   answerMessages,
   elapsedLine,
@@ -19,6 +20,7 @@ import {
   parseAllowList,
   parseIncoming,
 } from "../shared/telegram-commands";
+import { arrivalPrompt, inboxTarget, TELEGRAM_DOWNLOAD_MAX } from "../shared/inbox";
 import type { ApprovalMode } from "../shared/protocol";
 
 /**
@@ -40,6 +42,8 @@ import type { ApprovalMode } from "../shared/protocol";
  */
 
 const API = "https://api.telegram.org/bot";
+/** Where a file itself is fetched from, as opposed to the JSON API. */
+const FILE_API = "https://api.telegram.org/file/bot";
 /** Long-poll length. Telegram holds the request open until something happens. */
 const POLL_SECONDS = 25;
 /** How often the live activity message may be rewritten, per Telegram's limits. */
@@ -429,6 +433,138 @@ export async function telegramSendFile(
     ok: true,
     detail: `Sent ${name} (${kb} KB) to Telegram${sent > 1 ? ` (${sent} chats)` : ""}.`,
   };
+}
+
+/**
+ * Files arriving the other way: sent to the bot, saved on this machine.
+ *
+ * The bot could hand a file over and could not take one. Sending a contract
+ * to it and asking "summarise this" did nothing at all — the message had no
+ * text, so nothing happened, and the file stayed in Telegram.
+ *
+ * They land in one folder, `~/.onflip/inbox`, rather than in whatever project
+ * happens to be open: incoming files are not part of anyone's repository, and
+ * a folder that appears inside a git checkout because somebody sent a photo
+ * is a surprise in the wrong place. The agent is told the absolute path and
+ * reads it from there.
+ */
+function inboxRoot(): string {
+  return path.join(os.homedir(), ".onflip", "inbox");
+}
+
+/** The one attachment on a message, largest photo size first. */
+function attachmentOf(message: {
+  document?: TelegramFile;
+  photo?: TelegramFile[];
+  video?: TelegramFile;
+  audio?: TelegramFile;
+  voice?: TelegramFile;
+  video_note?: TelegramFile;
+}): { file: TelegramFile; kind: string; extension: string } | null {
+  if (message.document) return { file: message.document, kind: "file", extension: "bin" };
+  if (message.photo?.length) {
+    // Telegram sends every thumbnail it made; the last is the full one.
+    return { file: message.photo[message.photo.length - 1], kind: "photo", extension: "jpg" };
+  }
+  if (message.video) return { file: message.video, kind: "video", extension: "mp4" };
+  if (message.audio) return { file: message.audio, kind: "audio", extension: "mp3" };
+  if (message.voice) return { file: message.voice, kind: "voice note", extension: "ogg" };
+  if (message.video_note) return { file: message.video_note, kind: "video note", extension: "mp4" };
+  return null;
+}
+
+const IMAGE_NAME = /\.(png|jpe?g|gif|webp|bmp|avif|heic)$/i;
+
+async function handleIncomingFile(message: {
+  chat: { id: number };
+  from?: { id: number };
+  caption?: string;
+  document?: TelegramFile;
+  photo?: TelegramFile[];
+  video?: TelegramFile;
+  audio?: TelegramFile;
+  voice?: TelegramFile;
+  video_note?: TelegramFile;
+}): Promise<void> {
+  const chatId = message.chat.id;
+  const found = attachmentOf(message);
+  if (!found) return;
+
+  // The same gate every other message goes through. A file is a stronger
+  // reason to check than a message is: this one gets written to disk.
+  if (!isAllowed(message.from?.id, parseAllowList(settings.allowedIds))) {
+    await say(
+      chatId,
+      "\u{1F512} <b>Not allowed</b>\n\nThis OnFlip only answers to its owner. Send /id to see your Telegram id."
+    );
+    return;
+  }
+  if (!chats.has(chatId)) {
+    chats.add(chatId);
+    persist();
+  }
+
+  const size = found.file.file_size ?? 0;
+  if (size > TELEGRAM_DOWNLOAD_MAX) {
+    await say(
+      chatId,
+      `\u{1F4CE} <b>Too big.</b> Telegram only lets a bot download files up to 20 MB; that one is ${(
+        size /
+        (1024 * 1024)
+      ).toFixed(1)} MB.`
+    );
+    return;
+  }
+
+  let saved: string;
+  try {
+    const meta = await api<{ file_path?: string }>("getFile", { file_id: found.file.file_id });
+    if (!meta?.file_path) throw new Error("Telegram gave no path for the file");
+    const response = await fetch(`${FILE_API}${settings.token}/${meta.file_path}`);
+    if (!response.ok) throw new Error(`download failed with ${response.status}`);
+    const bytes = Buffer.from(await response.arrayBuffer());
+
+    fs.mkdirSync(inboxRoot(), { recursive: true });
+    // The name Telegram sends is the sender's own text and is about to become
+    // a path; `inboxTarget` is where that is made safe and made unique.
+    saved = inboxTarget(
+      inboxRoot(),
+      found.file.file_name ?? path.basename(meta.file_path),
+      found.extension,
+      fs.existsSync
+    );
+    fs.writeFileSync(saved, bytes);
+  } catch (e) {
+    await say(
+      chatId,
+      `\u{1F4CE} <b>Could not save it.</b> ${escapeHtml(
+        oneLine(e instanceof Error ? e.message : String(e), 200)
+      )}`
+    );
+    return;
+  }
+
+  const caption = (message.caption ?? "").trim();
+  const shown = `\u{1F4CE} <b>${escapeHtml(path.basename(saved))}</b>\n<code>${escapeHtml(saved)}</code>`;
+
+  if (!caption) {
+    // No instruction, so no turn: a bare upload is somebody putting a file
+    // within reach, and spending a model turn guessing what to do with it is
+    // worse than waiting to be told.
+    await say(chatId, `${shown}\n\nSaved. Say what to do with it.`);
+    return;
+  }
+
+  await say(chatId, shown);
+  // An image goes up as an attachment as well as a path: "what is in this
+  // picture" is a question for the model's eyes, and everything else is a
+  // question for the file tools on this machine.
+  const attachments = IMAGE_NAME.test(saved) ? [saved] : undefined;
+  const reply = await host!.call<{ queued?: boolean }>("send", {
+    text: arrivalPrompt(caption, [saved]),
+    attachments,
+  });
+  if (reply?.queued) await say(chatId, "⏳ <i>Queued behind the turn already running.</i>");
 }
 
 // ---------------------------------------------------------------------------
@@ -927,9 +1063,28 @@ export async function telegramOnEvent(event: string, data: unknown): Promise<voi
 // the polling loop
 // ---------------------------------------------------------------------------
 
+interface TelegramFile {
+  file_id: string;
+  file_name?: string;
+  file_size?: number;
+  mime_type?: string;
+}
+
 interface Update {
   update_id: number;
-  message?: { chat: { id: number }; from?: { id: number }; text?: string };
+  message?: {
+    chat: { id: number };
+    from?: { id: number };
+    text?: string;
+    caption?: string;
+    document?: TelegramFile;
+    /** Several sizes of the same picture, smallest first. */
+    photo?: TelegramFile[];
+    video?: TelegramFile;
+    audio?: TelegramFile;
+    voice?: TelegramFile;
+    video_note?: TelegramFile;
+  };
   callback_query?: {
     id: string;
     from?: { id: number };
@@ -949,7 +1104,9 @@ async function loop(): Promise<void> {
       for (const update of updates ?? []) {
         offset = Math.max(offset, update.update_id + 1);
         try {
-          if (update.message?.text) {
+          if (update.message && attachmentOf(update.message)) {
+            await handleIncomingFile(update.message);
+          } else if (update.message?.text) {
             await handleMessage(
               update.message.chat.id,
               update.message.from?.id,
