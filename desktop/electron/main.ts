@@ -19,6 +19,7 @@ import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Peer } from "../shared/wire";
 import { runSignIn, clearSignIn } from "./signin";
+import { guardWebContents } from "./chrome-identity";
 import {
   embeddedEnv,
   enableEmbeddedBrowser,
@@ -1538,6 +1539,12 @@ if (!singleInstance) {
   // Windows shows toasts only for an app with an AppUserModelID; the
   // installer gives the shortcut this one, and a dev checkout needs it set.
   if (process.platform === "win32") app.setAppUserModelId("com.onflip.desktop");
+
+  // Every web-facing window, popups included, introduces itself as Chrome.
+  // Registered before the app is ready so no window can be created ahead of
+  // it — a sign-in popup that slips through is exactly the case this exists
+  // for.
+  guardWebContents();
 
   void app.whenReady().then(() => {
     // No menu bar on Windows and Linux: the window draws its own chrome, and

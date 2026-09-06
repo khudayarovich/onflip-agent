@@ -1,4 +1,4 @@
-import type { WebContents } from "electron";
+import { app, session, type WebContents } from "electron";
 import { Brand, fallbackBrands, renderBrands, withGoogleChrome } from "../shared/chrome-brands";
 
 /**
@@ -187,4 +187,47 @@ export async function installChromeBrands(contents: WebContents): Promise<Chrome
     /* the override is a bonus; the header still carries the brands */
   }
   return identity;
+}
+
+/**
+ * The partitions that face the open web, and so have to look like a browser.
+ *
+ * Named rather than inferred, because the app's own renderer must not be
+ * touched: attaching a debugger to the UI buys nothing and puts a second
+ * client on a target the app already drives.
+ */
+const WEB_FACING = ["persist:chatgpt-auth", "persist:onflip-agent-browser"];
+
+/**
+ * Apply the treatment to every web-facing window, including the ones nobody
+ * calls a constructor for.
+ *
+ * A sign-in with Google does not happen in the window that starts it. The
+ * provider opens a popup, `setWindowOpenHandler` allows it, and Electron
+ * builds a fresh `WebContents` for it — one that never passed through the
+ * code that lowers the automation flag or installs the brand list. So the
+ * window Google actually judges was still announcing `webdriver: true` and a
+ * Chromium-only brand list, while the parent window beside it looked perfect.
+ *
+ * That is why fixing the two named windows was not enough, and why this is
+ * hooked at the point every `WebContents` passes through rather than at each
+ * place one is made. Popups of popups are covered by the same rule, and so is
+ * any window a future provider's flow decides to open.
+ */
+export function guardWebContents(): void {
+  app.on("web-contents-created", (_event, contents) => {
+    let ours = false;
+    for (const name of WEB_FACING) {
+      try {
+        if (contents.session === session.fromPartition(name)) ours = true;
+      } catch {
+        /* a partition that does not exist yet is not this one */
+      }
+    }
+    if (!ours) return;
+    hideAutomation(contents);
+    contents.on("dom-ready", () => {
+      void installChromeBrands(contents);
+    });
+  });
 }
