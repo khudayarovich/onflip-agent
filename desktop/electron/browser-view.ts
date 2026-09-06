@@ -1,7 +1,14 @@
-import { app, BrowserWindow, WebContentsView, type WebContents } from "electron";
+import { app, BrowserWindow, WebContentsView } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
+import {
+  hideAutomation,
+  installChromeBrands,
+  headerFor,
+  type ChromeIdentity,
+} from "./chrome-identity";
+import { fallbackBrands, renderBrands } from "../shared/chrome-brands";
 
 /**
  * The agent's browser, embedded in the window.
@@ -146,73 +153,21 @@ export function chromeUserAgent(electronUserAgent: string): string {
  * since 89 sends one — an absence is as clear a signal as a wrong value, so
  * the header is supplied.
  *
- * It says Chromium, not Google Chrome. Claiming Chrome here is what the
- * previous version did, on the reasoning that the UA string names Chrome and
- * the hints should agree with it. That was the wrong half to change: there is
- * no Electron API for the *JavaScript* brand list, so `navigator.userAgentData`
- * went on reporting Chromium while the header claimed Chrome, and a page that
- * reads both — which is exactly what a bot check does — saw a browser
- * contradicting itself. Measured on a running build: header
- * `"Google Chrome";v="130"…`, JS `[{Not?A_Brand 99},{Chromium 130}]`.
+ * It names Google Chrome. Two earlier versions of this got it wrong in
+ * opposite directions, and both were half-right. Claiming Chrome here while
+ * `navigator.userAgentData` still said Chromium was the contradiction
+ * Cloudflare looks for. Saying Chromium in both was consistent, and Google
+ * refused it — the "browser or app may not be secure" page that ends a
+ * sign-in with Google. Neither could be fixed alone, because the header and
+ * the JavaScript were being set by different mechanisms.
  *
- * Matching Chromium is also simply honest, and it is what every
- * Chromium-derived browser reports: a UA string containing `Chrome/130`
- * beside hints that say Chromium is the normal, unremarkable combination.
+ * `presentAsChrome` sets both from one list, so the two agree *and* say
+ * Chrome. This is the fallback wording for when the override could not read
+ * Chromium's real brands; normally the header is written from the very list
+ * the page reports.
  */
 export function brandHeader(version: string): string {
-  return `"Chromium";v="${version}", "Not?A_Brand";v="99"`;
-}
-
-/**
- * Turn off the flag that says a machine is driving this.
- *
- * `navigator.webdriver` is the first thing an anti-bot check reads, and
- * Chromium sets it whenever a remote debugging port is open — which, since
- * the browser panel became a real browser view, is always: the port is how
- * the agent drives the page at all. Measured on a running build, over raw CDP
- * with no automation library attached, so it is the port and not the client.
- *
- * That made the whole feature look automated to every site that checks.
- * Reported from the field twice: Cloudflare asking for verification, the page
- * reloading, and asking again, with no way through — on pages a person was
- * sitting in front of and driving by hand.
- *
- * The flag is not what makes the browser honest or dishonest; it describes
- * how the window was opened, and this window is one a person opened and is
- * looking at.
- *
- * Done by redefining the getter before any page script runs, because that is
- * what works. `Emulation.setAutomationOverride { enabled: false }` is the
- * obvious candidate and it is a lie: measured on this Chromium it returns
- * success and changes nothing, before or after a reload — it can raise the
- * flag but not lower one the command line has already set.
- *
- * On `Navigator.prototype` rather than on `navigator`, since an own property
- * where the platform puts an inherited one is itself a tell, and returning
- * false rather than deleting the getter, because in a real Chrome
- * `navigator.webdriver` is `false` and `"webdriver" in navigator` is true.
- *
- * The script rides the debugger session, so the session stays attached for
- * the life of the view; detaching would take it with it.
- */
-async function presentAsHandDriven(contents: WebContents): Promise<void> {
-  try {
-    if (!contents.debugger.isAttached()) contents.debugger.attach("1.3");
-  } catch {
-    // Another client owns the target. The view still works; it just keeps
-    // the flag, which is the behaviour before this existed.
-    return;
-  }
-  try {
-    await contents.debugger.sendCommand("Page.enable");
-    await contents.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", {
-      source:
-        "Object.defineProperty(Navigator.prototype, 'webdriver', " +
-        "{ get: () => false, configurable: true });",
-    });
-  } catch {
-    /* the target went away, or this build has no such command */
-  }
+  return renderBrands(fallbackBrands(version));
 }
 
 /** The major Chrome version out of a UA string, or "" when it has none. */
@@ -272,6 +227,9 @@ export function ensureView(win: BrowserWindow): WebContentsView | null {
   view.webContents.setUserAgent(ua);
   const partition = view.webContents.session;
   partition.setUserAgent(ua);
+  // Filled in once the view reports what Chromium really claims; until then
+  // the header falls back to the versions in the user agent.
+  let identity: ChromeIdentity | null = null;
   if (major) {
     partition.webRequest.onBeforeSendHeaders((details, done) => {
       const headers = details.requestHeaders;
@@ -287,7 +245,7 @@ export function ensureView(win: BrowserWindow): WebContentsView | null {
             delete headers[key];
           }
         }
-        headers["sec-ch-ua"] = brandHeader(major);
+        headers["sec-ch-ua"] = headerFor(identity, ua);
         headers["sec-ch-ua-mobile"] = "?0";
         headers["sec-ch-ua-platform"] = `"${platformHint()}"`;
       }
@@ -298,7 +256,16 @@ export function ensureView(win: BrowserWindow): WebContentsView | null {
   // Before anything is loaded, so the first real page already has it. Once
   // only: the script is registered against the target and runs for every
   // document after it, and re-registering per navigation would stack copies.
-  void presentAsHandDriven(view.webContents);
+  hideAutomation(view.webContents);
+  // The brand list needs a live document to read the real one from, so it
+  // waits for the first one — and re-reads after a cross-origin navigation,
+  // which swaps the execution context out from under the override.
+  const brandOnce = () => {
+    void installChromeBrands(view.webContents).then((installed) => {
+      if (installed) identity = installed;
+    });
+  };
+  view.webContents.on("dom-ready", brandOnce);
 
   view.setBackgroundColor("#00000000");
   win.contentView.addChildView(view);

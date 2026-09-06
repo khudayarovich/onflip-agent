@@ -152,18 +152,23 @@ test("the platform hint names this machine", { skip: needsBuild }, () => {
 
 // --- what the brands may claim ---------------------------------------------
 
-test("the hints say Chromium, because the JavaScript brand list cannot be changed", { skip: needsBuild }, () => {
-  // The previous version claimed "Google Chrome" here, reasoning that the UA
-  // string names Chrome and the hints should agree. That was the wrong half
-  // to change: Electron exposes no way to alter navigator.userAgentData, so
-  // the header claimed Chrome while page JavaScript went on reporting
-  // Chromium — and reading both is exactly what a bot check does. Measured on
-  // a running build before this: header `"Google Chrome";v="130"…`, JS
-  // `[{Not?A_Brand 99},{Chromium 130}]`.
+test("the hints name Google Chrome, and so does the JavaScript", { skip: needsBuild }, () => {
+  // This assertion has been both ways round, and each way was half right.
+  //
+  // Claiming Chrome in the header while `navigator.userAgentData` still said
+  // Chromium was the contradiction Cloudflare looks for. Saying Chromium in
+  // both was consistent and Google refused it outright — measured against
+  // Google's own endpoint, same session, back to back: Chromium landed on
+  // `/signin/rejected` with no login form, Google Chrome landed on
+  // `/signin/identifier` with the form present.
+  //
+  // They were only in conflict while the two were set separately.
+  // `installChromeBrands` puts the same list into the page, so the header can
+  // say Chrome without lying about what the JavaScript will report.
   const { brandHeader } = load();
   const header = brandHeader("130");
 
-  assert.doesNotMatch(header, /Google Chrome/);
+  assert.match(header, /"Google Chrome";v="130"/);
   assert.match(header, /"Chromium";v="130"/);
   // The GREASE entry every Chrome sends; its absence is its own signal.
   assert.match(header, /Not\?A_Brand/);
@@ -177,5 +182,6 @@ test("the version in the hints is the one in the user agent", { skip: needsBuild
   const major = chromeMajor(ua);
 
   assert.equal(major, "130");
+  assert.match(brandHeader(major), new RegExp(`"Google Chrome";v="${major}"`));
   assert.match(brandHeader(major), new RegExp(`"Chromium";v="${major}"`));
 });

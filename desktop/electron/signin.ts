@@ -1,4 +1,6 @@
 import { app, BrowserWindow, session, shell, Session } from "electron";
+import { hideAutomation, installChromeBrands } from "./chrome-identity";
+import { parseBrands, renderBrands, withGoogleChrome } from "../shared/chrome-brands";
 
 /**
  * Signing in to ChatGPT, in a browser ChatGPT will actually accept.
@@ -52,9 +54,10 @@ function browserUserAgent(): string {
  * reads brands rather than the user agent — Google's does — went on refusing
  * the window as an embedded browser.
  *
- * What is left is Chromium, which is what is actually rendering the page. No
- * brand is added: the window does not claim to be Google Chrome, it stops
- * claiming to be an app.
+ * What is left is Chromium, which is what is actually rendering the page.
+ * This function only removes; `honestClientHints` below then adds the Google
+ * Chrome entry that Google requires — see there for why removing alone was
+ * not enough.
  */
 export function stripEmbedderBrands(value: string): string {
   const appToken = app.getName().toLowerCase();
@@ -68,14 +71,32 @@ export function stripEmbedderBrands(value: string): string {
   return brands.join(", ");
 }
 
-/** Apply it to every request the sign-in partition makes. */
+/**
+ * Apply it to every request the sign-in partition makes.
+ *
+ * Stripping Electron out was necessary and turned out not to be sufficient.
+ * What is left after the strip says "Chromium", and Google reads a
+ * Chromium-only brand list as a browser it will not accept a sign-in from —
+ * the "browser or app may not be secure" page, which is where signing in with
+ * Google dead-ended. Measured against Google's own endpoint, same session,
+ * back to back: Chromium landed on `/signin/rejected` with no login form,
+ * Google Chrome landed on `/signin/identifier` with the form present.
+ *
+ * So the brand is added rather than merely cleaned, and `presentAsChrome`
+ * puts the same list into `navigator.userAgentData` — a header claiming
+ * Chrome over JavaScript still saying Chromium is the contradiction the other
+ * kind of check looks for, and fixing one at a time is how this bounced
+ * between the two.
+ */
 function honestClientHints(ses: Session): void {
   ses.webRequest.onBeforeSendHeaders((details, callback) => {
     const headers = { ...details.requestHeaders };
     for (const name of Object.keys(headers)) {
       if (!/^sec-ch-ua(-full-version-list)?$/i.test(name)) continue;
       const value = headers[name];
-      if (typeof value === "string") headers[name] = stripEmbedderBrands(value);
+      if (typeof value !== "string") continue;
+      const stripped = stripEmbedderBrands(value);
+      headers[name] = renderBrands(withGoogleChrome(parseBrands(stripped)));
     }
     callback({ requestHeaders: headers });
   });
@@ -364,6 +385,16 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
       return { action: "deny" };
     });
 
+    // Before the first navigation, so the login page sees a browser that
+    // agrees with itself: the Google Chrome brand in `navigator.userAgentData`
+    // to match the header, and the automation flag down. The flag is on in
+    // every window of this app — Chromium raises it whenever a remote
+    // debugging port is open, and the agent's browser needs one — which is
+    // not something a sign-in window should be advertising.
+    hideAutomation(win.webContents);
+    win.webContents.on("dom-ready", () => {
+      void installChromeBrands(win.webContents);
+    });
     void win.loadURL(LOGIN_URL).catch((e: unknown) => {
       finish({ ok: false, reason: e instanceof Error ? e.message : String(e) });
     });
