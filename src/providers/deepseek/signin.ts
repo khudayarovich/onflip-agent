@@ -31,6 +31,20 @@ import { DEEPSEEK_SIGN_IN_URL, deepseekProfileDir } from "./session";
 
 let child: ChildProcess | null = null;
 let cancelled = false;
+/** Resolved when the user says they are done, whatever the window is doing. */
+let declareFinished: (() => void) | null = null;
+
+/**
+ * Below this, the process exiting is Chrome handing off, not a user finishing.
+ *
+ * On Windows the `chrome.exe` that is started does not always become the
+ * browser: with a `--user-data-dir` of its own it can spawn the real browser
+ * process and exit at once, and the window it opened stays on screen. Treating
+ * that exit as "the user closed the window" checked the profile a second after
+ * it was created, found nothing, and told someone who was still typing their
+ * password that there was no session.
+ */
+const HANDOFF_MS = 8_000;
 
 export type SignInProgress = "waiting" | "verifying";
 
@@ -46,17 +60,19 @@ export interface DeepSeekSignInResult {
 const DEADLINE_MS = 15 * 60_000;
 
 export function signInRunning(): boolean {
-  return child !== null;
+  return child !== null || declareFinished !== null;
 }
 
 /** The user says they are done; stop waiting and check the profile. */
 export function finishSignIn(): void {
   closeWindow();
+  declareFinished?.();
 }
 
 export function cancelSignIn(): void {
   cancelled = true;
   closeWindow();
+  declareFinished?.();
 }
 
 function closeWindow(): void {
@@ -116,17 +132,32 @@ export async function signInWithRealBrowser(
     };
   }
   child = started;
+  const startedAt = Date.now();
   logger.info("deepseek", "sign-in window opened", { channel: pick.channel });
   onProgress?.("waiting");
 
-  const exited = new Promise<void>((resolve) => {
-    started.once("exit", () => resolve());
-    started.once("error", () => resolve());
+  const finished = new Promise<"finished">((resolve) => {
+    declareFinished = () => resolve("finished");
+  });
+  const exited = new Promise<"closed">((resolve) => {
+    const done = () => {
+      const openFor = Date.now() - startedAt;
+      child = null;
+      if (openFor >= HANDOFF_MS) return resolve("closed");
+      // Chrome handed the window to another process and this one is finished.
+      // The window is still on screen, so keep waiting for the person at it.
+      logger.info("deepseek", "the launcher exited immediately; the window is another process", {
+        afterMs: openFor,
+      });
+    };
+    started.once("exit", done);
+    started.once("error", done);
   });
   const deadline = new Promise<"timeout">((resolve) =>
     setTimeout(() => resolve("timeout"), DEADLINE_MS)
   );
-  const outcome = await Promise.race([exited.then(() => "closed" as const), deadline]);
+  const outcome = await Promise.race([exited, finished, deadline]);
+  declareFinished = null;
   child = null;
   if (outcome === "timeout") {
     closeWindow();
@@ -137,15 +168,27 @@ export async function signInWithRealBrowser(
   }
   if (cancelled) return { ok: false, reason: "cancelled" };
 
-  // The window is gone, so the profile is free to open and ask.
+  // The window is done with, so the profile can be opened and asked — after a
+  // moment, because Chrome flushes its localStorage on the way out and the
+  // directory is locked until it has.
   onProgress?.("verifying");
-  const check = await checkSignedIn();
+  await new Promise((r) => setTimeout(r, 1_500));
+  const check = await checkSignedIn({ tries: 5 });
   await closeBrowser();
+  if (check.error) {
+    // Not the same as being signed out, and saying so saves the user from
+    // signing in again to fix something a sign-in cannot fix.
+    logger.warn("deepseek", "the profile could not be read after sign-in", { error: check.error });
+    return {
+      ok: false,
+      reason: `OnFlip could not open the DeepSeek profile to check the session (${check.error.split("\n")[0].slice(0, 140)}). Close any Chrome window still using it and try again.`,
+    };
+  }
   if (!check.signedIn) {
     return {
       ok: false,
       reason:
-        "The window closed without a DeepSeek session. If you did sign in, try again and leave the chat open for a moment before closing it.",
+        "The window closed without a DeepSeek session. If you did sign in, open the sign-in again and use the button in OnFlip to finish rather than closing the window yourself.",
     };
   }
   logger.info("deepseek", "signed in", { account: check.account ?? "unknown" });

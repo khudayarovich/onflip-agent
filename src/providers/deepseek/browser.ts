@@ -63,6 +63,13 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
     headless: !opts.headed,
     viewport: null,
     args: ["--no-first-run", "--no-default-browser-check"],
+    // Shorter than the 90-second default, because failing here is normal and
+    // recoverable: the first launch on a profile a real Chrome has just
+    // created loses its pipe when Chrome relaunches itself, and the caller
+    // retries. Measured — two attempts at the default spent three minutes
+    // before answering, which is why signing in on a new machine reported no
+    // session and worked on the next start.
+    timeout: 30_000,
   });
   context.on("close", () => {
     context = null;
@@ -108,6 +115,16 @@ export interface SignedInCheck {
   account?: string;
   /** As DeepSeek gives it, which is already masked: `fas*****98@gmail.com`. */
   email?: string;
+  /**
+   * Why the profile could not be read, when that is what happened.
+   *
+   * "Not signed in" and "could not look" are different answers, and this
+   * check used to give the first for both: a profile still held by a Chrome
+   * that had not finished exiting threw, the throw was logged and swallowed,
+   * and the user was told there was no session — after signing in. Reported
+   * from a new machine, where the sign-in window and the read race hardest.
+   */
+  error?: string;
 }
 
 /**
@@ -157,24 +174,46 @@ async function readProfile(page: Page): Promise<{ name?: string; email?: string 
  * LevelDB that is locked while any browser has the profile open, and reading
  * it any other way is guesswork about a format nobody promised.
  */
-export async function checkSignedIn(opts: OpenOptions = {}): Promise<SignedInCheck> {
-  try {
-    const page = await chatPage(opts);
-    // The app writes its session after the first paint, so a check the
-    // instant the document exists can read an empty store on a good profile.
-    await page.waitForTimeout(2_500);
-    const storage = await readStorage(page);
-    const ok = isSignedIn(storage);
-    logger.info("deepseek", "checked the session", { signedIn: ok });
-    if (!ok) return { signedIn: false };
-    const profile = await readProfile(page);
-    return { signedIn: true, account: profile.name, email: profile.email };
-  } catch (e) {
-    logger.warn("deepseek", "could not check the session", {
-      error: e instanceof Error ? e.message : String(e),
-    });
-    return { signedIn: false };
+export async function checkSignedIn(opts: OpenOptions & { tries?: number } = {}): Promise<SignedInCheck> {
+  // Tried more than once because both ways of failing are transient. The
+  // profile can still be held by a Chrome that has not finished exiting —
+  // seconds, on a cold machine — and the token is written after the app
+  // hydrates, so the first read of a good profile can come back empty.
+  const tries = Math.max(1, opts.tries ?? 1);
+  let lastError: string | undefined;
+  for (let attempt = 1; attempt <= tries; attempt++) {
+    try {
+      const page = await chatPage(opts);
+      // The app writes its session after the first paint, so a check the
+      // instant the document exists can read an empty store on a good profile.
+      await page.waitForTimeout(2_500);
+      const storage = await readStorage(page);
+      const ok = isSignedIn(storage);
+      if (ok) {
+        logger.info("deepseek", "checked the session", { signedIn: true, attempt });
+        const profile = await readProfile(page);
+        return { signedIn: true, account: profile.name, email: profile.email };
+      }
+      // An empty store on the last attempt is the answer; before that it may
+      // just be early, so give the page another moment and look again.
+      if (attempt === tries) {
+        logger.info("deepseek", "checked the session", { signedIn: false, attempt });
+        return { signedIn: false };
+      }
+      lastError = undefined;
+      await page.waitForTimeout(2_000);
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+      logger.warn("deepseek", "could not check the session", { attempt, tries, error: lastError });
+      // A failed launch leaves nothing to reuse; drop it so the next attempt
+      // opens the profile again rather than reusing a dead context.
+      await closeBrowser().catch(() => {});
+      if (attempt < tries) await new Promise((r) => setTimeout(r, 2_000));
+    }
   }
+  // Every attempt threw: say so rather than reporting a session that was
+  // never looked for.
+  return { signedIn: false, error: lastError };
 }
 
 /**

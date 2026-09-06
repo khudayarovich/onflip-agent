@@ -345,6 +345,21 @@ export function backgroundJobLine(jobs?: JobSummary[]): string {
  * Russian, and nothing in front of the model was still in English. Quoting
  * the request restores the referent every turn, and quoting beats naming a
  * language because it needs no detection to be right.
+ *
+ * Quoting alone turned out not to be enough. Reported, and reproduced on a
+ * *fresh* session with no drift to blame: one English sentence in, a Russian
+ * answer out, on the first reply. Nothing in the conversation was Russian, so
+ * the pull was coming from outside it — the account's own language preference,
+ * which reaches the model before OnFlip's prompt does and which OnFlip cannot
+ * read or set. Against a standing preference, "that language" is soft enough
+ * to satisfy both readings.
+ *
+ * So the anchor now says what the message is *not*. Script is the one thing
+ * that can be decided here without guessing: Cyrillic is present or it is not,
+ * and a message without it is not Russian whatever else it may be. That rules
+ * out the wrong answer without pretending to identify the right one — English
+ * and Uzbek both pass through as "that language", which is what the quote is
+ * for.
  */
 export function languageAnchor(request?: string | null): string {
   const line = (request ?? "")
@@ -353,7 +368,11 @@ export function languageAnchor(request?: string | null): string {
     .find((l) => l.trim().length > 1);
   if (!line) return "";
   const sample = line.length > 120 ? `${line.slice(0, 120)}…` : line;
-  return `The user's latest message reads: "${sample}" — write your prose in that language, whatever language the rest of this conversation happens to be in.`;
+  const cyrillic = /[Ѐ-ӿ]/.test(line);
+  const ruling = cyrillic
+    ? "It is in Russian, so answer in Russian."
+    : "It contains no Cyrillic at all, so it is not Russian: do not answer in Russian, whatever language your account or this machine prefers.";
+  return `The user's latest message reads: "${sample}" — write your prose in that language, whatever language the rest of this conversation happens to be in. ${ruling}`;
 }
 
 export function turnReminder(

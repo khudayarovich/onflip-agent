@@ -129,8 +129,37 @@ test("the request is quoted back, so the instruction has something to point at",
 test("only the first line is quoted, and a long one is cut", () => {
   const anchor = languageAnchor(`${"x".repeat(400)}\nsecond line`);
 
-  assert.ok(anchor.length < 300, `anchor was ${anchor.length} characters`);
+  // The quote is what a long request can blow up, so that is what is capped.
+  const quoted = /"([^"]*)"/.exec(anchor)?.[1] ?? "";
+  assert.ok(quoted.length <= 121, `quote was ${quoted.length} characters`);
+  assert.ok(anchor.length < 450, `anchor was ${anchor.length} characters`);
   assert.ok(!anchor.includes("second line"));
+});
+
+test("a message with no Cyrillic rules Russian out by name", () => {
+  // Quoting alone lost to the account's own language preference: reproduced
+  // on a fresh session, one English sentence in and a Russian answer out.
+  const anchor = languageAnchor("can you check my pc storage?");
+
+  assert.match(anchor, /not Russian/);
+  assert.match(anchor, /do not answer in Russian/);
+});
+
+test("and a Russian one is told to stay in Russian", () => {
+  const anchor = languageAnchor("проверь моё хранилище");
+
+  assert.match(anchor, /answer in Russian/);
+  assert.ok(!/do not answer in Russian/.test(anchor));
+});
+
+test("Uzbek is not mistaken for English, only ruled out of Russian", () => {
+  // Script is all that can be decided without guessing. Latin covers both
+  // English and Uzbek, so the quote carries the rest.
+  const anchor = languageAnchor("kompyuterimdagi joyni tekshirib bera olasanmi?");
+
+  assert.match(anchor, /kompyuterimdagi/);
+  assert.match(anchor, /not Russian/);
+  assert.ok(!/English/.test(anchor), "it must not claim the message is English");
 });
 
 test("a request that opens with a blank line still finds its words", () => {
