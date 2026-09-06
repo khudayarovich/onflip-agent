@@ -152,8 +152,27 @@ export interface SendResult {
 }
 
 const COMPOSER = "textarea";
-const SETTLE_POLLS = 3;
-const POLL_MS = 1_200;
+/**
+ * How the end of an answer is recognised, and what it costs.
+ *
+ * There is no signal to subscribe to — no disabled composer, no labelled stop
+ * control, nothing semantic that changes while DeepSeek writes — so the end
+ * is "the text stopped growing". The only question is how finely to look.
+ *
+ * It used to look every 1.2 seconds and wait for three unchanged reads, which
+ * put 3.6 seconds of dead time after every answer: a two-character reply took
+ * 7.8 seconds, and the app felt slower than the same chat in a browser for a
+ * reason that was entirely OnFlip's. Reading the page costs 1–8ms, measured
+ * during a live generation, so looking often is free and the coarse interval
+ * bought nothing.
+ *
+ * 350ms with six unchanged reads keeps a 2.1-second stillness window — still
+ * long enough to ride out a pause mid-stream — while cutting about a second
+ * and a half off every turn and tripling how often the answer updates on
+ * screen as it arrives.
+ */
+const SETTLE_POLLS = 6;
+const POLL_MS = 350;
 /** How long the page may show nothing new before the send is called failed. */
 const SILENCE_MS = 90_000;
 
