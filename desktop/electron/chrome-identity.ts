@@ -1,5 +1,6 @@
 import { app, session, type WebContents } from "electron";
 import { Brand, fallbackBrands, renderBrands, withGoogleChrome } from "../shared/chrome-brands";
+import { BROWSER_SHIM } from "./browser-shim";
 
 /**
  * Make a window introduce itself as the Chrome it is running.
@@ -120,11 +121,12 @@ export async function presentAsChrome(contents: WebContents): Promise<ChromeIden
 }
 
 /**
- * Attach, and lower the automation flag.
+ * Attach, and install the document-start shim.
  *
  * Safe to call the moment a window exists: registering a document-start
  * script needs no live page, which is the whole reason it is done this way
- * rather than by evaluating something.
+ * rather than by evaluating something. See `BROWSER_SHIM` for what it hides —
+ * the automation flag and the empty `window.chrome` — and why each matters.
  */
 export function hideAutomation(contents: WebContents): boolean {
   try {
@@ -137,9 +139,7 @@ export function hideAutomation(contents: WebContents): boolean {
     .sendCommand("Page.enable")
     .then(() =>
       contents.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", {
-        source:
-          "Object.defineProperty(Navigator.prototype, 'webdriver', " +
-          "{ get: () => false, configurable: true });",
+        source: BROWSER_SHIM,
       })
     )
     .catch(() => {

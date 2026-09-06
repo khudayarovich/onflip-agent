@@ -185,3 +185,24 @@ test("the version in the hints is the one in the user agent", { skip: needsBuild
   assert.match(brandHeader(major), new RegExp(`"Google Chrome";v="${major}"`));
   assert.match(brandHeader(major), new RegExp(`"Chromium";v="${major}"`));
 });
+
+// --- when a provider refuses the window -------------------------------------
+
+test("Google's refusal pages are recognised, ordinary ones are not", { skip: needsBuild }, () => {
+  // Four fingerprint fixes went into this window — the user agent, the brand
+  // list, navigator.webdriver, an empty window.chrome — and each corrected a
+  // real tell without changing Google's answer, because the refusal is
+  // decided server-side at the OAuth consent step. So the panel stops trying
+  // to look acceptable and says what will work instead; this is what decides
+  // when to say it.
+  const { isSignInRefusal } = load();
+
+  assert.equal(isSignInRefusal("https://accounts.google.com/v3/signin/rejected?app_domain=x"), true);
+  assert.equal(isSignInRefusal("https://accounts.google.com/signin/rejected?disallowed_useragent=1"), true);
+  assert.equal(isSignInRefusal("https://accounts.google.com/x/deniedsigninrejected"), true);
+
+  // The step before the refusal is a working login form, not a dead end.
+  assert.equal(isSignInRefusal("https://accounts.google.com/v3/signin/identifier"), false);
+  assert.equal(isSignInRefusal("https://chat.deepseek.com/sign_in"), false);
+  assert.equal(isSignInRefusal("https://example.com/"), false);
+});

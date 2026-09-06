@@ -407,6 +407,33 @@ export interface ViewChrome {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  /**
+   * The page is a provider refusing this window for a sign-in.
+   *
+   * Only Google does this today, and it is not something the panel can be
+   * fixed into passing: Google blocks OAuth in embedded browsers on purpose,
+   * as their enforcement of RFC 8252, and maintains the check against exactly
+   * the kind of work that would defeat it. Four separate fingerprint fixes
+   * here — the user agent, the brand list, `navigator.webdriver`, an empty
+   * `window.chrome` — each corrected a real tell and none of them changed the
+   * answer, because the refusal is decided server-side at the consent step.
+   *
+   * So the panel stops pretending it might work and offers the way that does.
+   */
+  signInBlocked?: boolean;
+}
+
+/**
+ * Is this page a provider turning the embedded window away from a sign-in?
+ *
+ * Matches the page Google lands on, not the attempt: the flow reaches
+ * `/signin/rejected` and stops there, which is the moment there is something
+ * useful to say.
+ */
+export function isSignInRefusal(url: string): boolean {
+  return /accounts\.google\.com\/.*(signin\/rejected|disallowed_?useragent|deniedsigninrejected)/i.test(
+    url
+  );
 }
 
 export function viewChrome(win: BrowserWindow): ViewChrome | null {
@@ -422,6 +449,7 @@ export function viewChrome(win: BrowserWindow): ViewChrome | null {
     loading: wc.isLoading(),
     canGoBack: nav ? nav.canGoBack() : Boolean(wc.canGoBack?.()),
     canGoForward: nav ? nav.canGoForward() : Boolean(wc.canGoForward?.()),
+    signInBlocked: isSignInRefusal(url) || undefined,
   };
 }
 

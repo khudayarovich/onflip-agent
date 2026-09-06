@@ -119,6 +119,10 @@ const en = {
   browserReload: "Reload",
   browserStop: "Stop loading",
   browserOpenExternal: "Open in your browser",
+  signInBlockedTitle: "Google will not accept a sign-in from inside an app",
+  signInBlockedBody:
+    "This is Google's own rule for embedded browsers, not a fault here. Sign in with an email and password instead, or open the page in your own browser and sign in there.",
+  signInBlockedAction: "Open in my browser",
   browserUrlPlaceholder: "Address, or something to search for",
   setIndicator: "Indicator",
   setIndicatorIntro: "A small square that floats above your other windows and shows what OnFlip is doing, so you can tell without switching to it. Drag it anywhere.",
@@ -446,6 +450,10 @@ const ru: Partial<Record<StringKey, string>> = {
   browserReload: "Обновить",
   browserStop: "Остановить загрузку",
   browserOpenExternal: "Открыть в своём браузере",
+  signInBlockedTitle: "Google не принимает вход из встроенного браузера",
+  signInBlockedBody:
+    "Это правило самого Google для встроенных браузеров, а не ошибка приложения. Войдите по адресу электронной почты и паролю или откройте страницу в своём браузере и войдите там.",
+  signInBlockedAction: "Открыть в моём браузере",
   browserUrlPlaceholder: "Адрес или поисковый запрос",
   setIndicator: "Индикатор",
   setIndicatorIntro: "Небольшой квадрат поверх других окон показывает, чем занят OnFlip, — не нужно переключаться. Перетаскивается куда угодно.",
@@ -764,6 +772,10 @@ const uz: Partial<Record<StringKey, string>> = {
   browserReload: "Yangilash",
   browserStop: "Yuklashni to'xtatish",
   browserOpenExternal: "O'z brauzeringizda ochish",
+  signInBlockedTitle: "Google ilova ichidagi brauzerdan kirishni qabul qilmaydi",
+  signInBlockedBody:
+    "Bu Google'ning o'z qoidasi, ilovadagi xato emas. Elektron pochta va parol bilan kiring yoki sahifani o'z brauzeringizda ochib, o'sha yerda kiring.",
+  signInBlockedAction: "Brauzerimda ochish",
   browserUrlPlaceholder: "Manzil yoki qidiruv so'rovi",
   setIndicator: "Indikator",
   setIndicatorIntro: "Boshqa oynalar ustida turadigan kichik kvadrat OnFlip nima qilayotganini ko'rsatadi — oynani ochish shart emas. Xohlagan joyga suring.",

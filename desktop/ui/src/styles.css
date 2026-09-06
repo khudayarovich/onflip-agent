@@ -3831,3 +3831,40 @@ a:hover {
 .indicator-legend .dot.waiting {
   background: #e6b332;
 }
+
+/*
+ * The bar shown when a provider refuses the embedded window for a sign-in.
+ *
+ * Between the toolbar and the page, not floating over it: the page underneath
+ * is Google's own refusal notice, and covering that would hide the thing the
+ * bar is explaining. Yellow rather than red — nothing has gone wrong, there
+ * is simply a different door.
+ */
+.browser-blocked {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-raised);
+}
+.browser-blocked-text {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+  flex: 1;
+}
+.browser-blocked-text strong {
+  color: var(--yellow);
+  font-size: 12px;
+  font-weight: 600;
+}
+.browser-blocked-text span {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+.browser-blocked .btn {
+  flex-shrink: 0;
+}

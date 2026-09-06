@@ -85,6 +85,7 @@ export function BrowserPanel({
     loading: boolean;
     canGoBack: boolean;
     canGoForward: boolean;
+    signInBlocked?: boolean;
   } | null>(null);
   /** What is typed in the address bar, which is not where the view is. */
   const [typed, setTyped] = useState<string | null>(null);
@@ -338,6 +339,21 @@ export function BrowserPanel({
               ↗
             </button>
           )}
+        </div>
+      )}
+
+      {chrome?.signInBlocked && (
+        <div className="browser-blocked">
+          <div className="browser-blocked-text">
+            <strong>{t("signInBlockedTitle")}</strong>
+            <span>{t("signInBlockedBody")}</span>
+          </div>
+          <button
+            className="btn primary"
+            onClick={() => void window.onflip.browserViewExternal?.()}
+          >
+            {t("signInBlockedAction")}
+          </button>
         </div>
       )}
 

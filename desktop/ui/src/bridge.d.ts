@@ -60,6 +60,8 @@ interface OnFlipBridge {
     loading: boolean;
     canGoBack: boolean;
     canGoForward: boolean;
+    /** A provider refused this window for a sign-in; offer the way out. */
+    signInBlocked?: boolean;
   } | null>;
   browserViewAct?(action: "back" | "forward" | "reload" | "stop"): Promise<boolean>;
   browserViewGo?(url: string): Promise<boolean>;
