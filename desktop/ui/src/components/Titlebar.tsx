@@ -165,7 +165,11 @@ function ProviderBadge(): React.ReactElement | null {
           either sits to the ×, which is what makes the pairing read as
           "OnFlip × DeepSeek" rather than three separate items. */}
       <span className="brand-service">
-        <Mark size={14} />
+        {/* 20px, matching the OnFlip mark beside it: the pairing reads as two
+            logos of equal standing rather than a logo and a footnote. The
+            artwork rounds its own corners at the same proportion the OnFlip
+            mark is rounded, so no radius is applied here. */}
+        <Mark size={20} />
         {provider.label}
       </span>
     </span>
