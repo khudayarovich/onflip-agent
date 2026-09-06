@@ -479,7 +479,11 @@ function AccountBar({
   const providerName = provider?.label ?? "ChatGPT";
   const account = status?.account ?? null;
   const usage = status?.usage;
-  const displayName = account?.name || account?.email || t("chatgptAccount");
+  // Named after whichever service is answering. It said "ChatGPT account"
+  // under a DeepSeek session — the placeholder was written when there was
+  // only one service to be an account on.
+  const displayName =
+    account?.name || account?.email || t("providerAccount", { provider: providerName });
 
   return (
     <div className="bottom account-bar">

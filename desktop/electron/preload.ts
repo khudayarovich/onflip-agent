@@ -20,6 +20,8 @@ export interface OnFlipBridge {
   saveFile(suggestedName: string, content: string): Promise<string | null>;
   saveArtifact(path: string, suggestedName: string): Promise<string | null>;
   openArtifact(path: string): Promise<boolean>;
+  /** Show a file in Explorer or Finder, selected, rather than opening it. */
+  revealFile(path: string): Promise<boolean>;
   newWindow(): Promise<boolean>;
   restartEngine(cwd?: string): Promise<boolean>;
   appInfo(): Promise<{ version: string; platform: string }>;
@@ -176,6 +178,7 @@ const bridge: OnFlipBridge = {
   saveArtifact: (path, suggestedName) =>
     ipcRenderer.invoke("save-artifact", { path, suggestedName }),
   openArtifact: (path) => ipcRenderer.invoke("open-artifact", { path }),
+  revealFile: (path) => ipcRenderer.invoke("reveal-file", { path }),
   newWindow: () => ipcRenderer.invoke("new-window"),
   restartEngine: (cwd) => ipcRenderer.invoke("restart-engine", { cwd }),
   appInfo: () => ipcRenderer.invoke("app-info"),

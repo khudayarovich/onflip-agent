@@ -5,7 +5,7 @@ import { ToolCard } from "./ToolCard";
 import logo from "../assets/logo.svg";
 import { LangContext, useT } from "../i18n";
 import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/skills";
-import { ChevronDown, Close, Info } from "./icons";
+import { ChevronDown, Close, Info, fileGlyph } from "./icons";
 import { CopyButton } from "./CopyButton";
 
 export interface StreamingState {
@@ -256,6 +256,7 @@ export function Transcript({
               key={entry.item.id}
               id={entry.item.id}
               text={entry.item.text}
+              attachments={entry.item.attachments}
               delivery={deliveries[entry.item.id]}
               onRevise={onRevise}
             />
@@ -312,14 +313,42 @@ function highlightCtor(): (new (...ranges: Range[]) => unknown) | null {
  * A user message: the bubble, hover actions to edit or resend it, and a
  * delivery badge so "did ChatGPT actually receive this?" is never a guess.
  */
+/**
+ * One file that went out with a message.
+ *
+ * Named, iconed by what it is, and a button rather than a label: the thing
+ * people want from an attachment they sent an hour ago is to find it again,
+ * so a click shows it in Explorer or Finder. It opens the folder with the
+ * file selected rather than opening the file itself — the smaller step, and
+ * the one that cannot launch something unexpected.
+ */
+function AttachmentChip({ file }: { file: string }): React.ReactElement {
+  const t = useT();
+  const name = file.split(/[\\/]/).pop() ?? file;
+  const Glyph = fileGlyph(name);
+  return (
+    <button
+      className="attach-chip attach-reveal"
+      title={`${file}\n${t("revealInFolder")}`}
+      onClick={() => void window.onflip.revealFile(file)}
+    >
+      <Glyph size={12} />
+      <span className="attach-name">{name}</span>
+    </button>
+  );
+}
+
 function UserMessage({
   id,
   text,
+  attachments,
   delivery,
   onRevise,
 }: {
   id: string;
   text: string;
+  /** Files sent with this message, so it is visible that they were. */
+  attachments?: string[];
   delivery?: DeliveryState;
   onRevise?: (id: string, mode: "edit" | "resend") => void;
 }): React.ReactElement {
@@ -346,6 +375,19 @@ function UserMessage({
 
   return (
     <div className="msg-user-wrap">
+      {/*
+        Above the bubble, the way the composer stacked them before the send.
+        Without this a message that carried a screenshot looked exactly like
+        one that did not, which is how an attachment that failed to upload
+        goes unnoticed — reported that way.
+      */}
+      {attachments && attachments.length > 0 && (
+        <div className="msg-attachments">
+          {attachments.map((file) => (
+            <AttachmentChip key={file} file={file} />
+          ))}
+        </div>
+      )}
       <div className="msg-user-row">
         {onRevise && (
           <div className="msg-actions">

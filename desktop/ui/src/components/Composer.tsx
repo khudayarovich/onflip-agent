@@ -8,32 +8,11 @@ import type {
 import { Menu, useMenu } from "./common";
 import { useT, StringKey, LangContext } from "../i18n";
 import { SKILLS, canonicaliseSkillMentions, findSkillMention } from "../../../shared/skills";
-import { ChevronDown, Close } from "./icons";
+import { ChevronDown, Close, fileGlyph } from "./icons";
 
-export interface SlashCommand {
-  name: string;
-  args?: string;
-  description: string;
-}
-
-export const SLASH_COMMANDS: SlashCommand[] = [
-  { name: "/new", description: "start a fresh session" },
-  { name: "/open", description: "open a different project folder" },
-  { name: "/cwd", args: "<dir>", description: "move within this project (keeps the session)" },
-  { name: "/sessions", description: "list and resume earlier sessions" },
-  { name: "/chats", description: "continue one of your ChatGPT conversations" },
-  { name: "/project", description: "keep new chats inside a ChatGPT project" },
-  { name: "/model", args: "<slug>", description: "switch model" },
-  { name: "/thinking", args: "<level>", description: "reasoning effort: off · low · medium · high" },
-  { name: "/approve", args: "<mode>", description: "approval mode: read-only · ask · auto-edit · full-auto · yolo" },
-  { name: "/shell", args: "on|off", description: "allow or block the shell entirely" },
-  { name: "/compact", description: "summarise the transcript to free up context" },
-  { name: "/diff", description: "what changed this session" },
-  { name: "/undo", description: "revert the last file change" },
-  { name: "/export", description: "write the transcript to Markdown" },
-  { name: "/init", description: "write an AGENTS.md describing this project" },
-  { name: "/settings", description: "open settings" },
-];
+export { SLASH_COMMANDS, slashCommands } from "../../../shared/commands";
+import { slashCommands, type SlashCommand } from "../../../shared/commands";
+export type { SlashCommand };
 
 const THINKING_LEVELS: { level: ThinkingLevel | null; label: StringKey; hint: StringKey }[] = [
   { level: null, label: "thinkDefault", hint: "thinkDefaultHint" },
@@ -253,11 +232,12 @@ export function Composer({
   const approvalMenu = useMenu();
   const contextMenu = useMenu();
 
+  const commands = useMemo(() => slashCommands(status?.provider), [status?.provider]);
   const slashMatches = useMemo(() => {
     if (!text.startsWith("/") || text.includes("\n")) return [];
     const [head] = text.split(/\s/, 1);
-    return SLASH_COMMANDS.filter((c) => c.name.startsWith(head.toLowerCase()));
-  }, [text]);
+    return commands.filter((c) => c.name.startsWith(head.toLowerCase()));
+  }, [text, commands]);
   const slashOpen = slashMatches.length > 0 && !text.includes(" ");
 
   // ---- @skill picker, Codex-style ----------------------------------------
@@ -318,7 +298,7 @@ export function Composer({
       const name = (space < 0 ? value : value.slice(0, space)).toLowerCase();
       const arg = space < 0 ? "" : value.slice(space + 1).trim();
       // A unique prefix works, the way it does in the CLI.
-      const matches = SLASH_COMMANDS.filter((c) => c.name.startsWith(name));
+      const matches = commands.filter((c) => c.name.startsWith(name));
       if (matches.length === 1) {
         clear();
         onCommand(matches[0].name, arg);
@@ -494,10 +474,15 @@ export function Composer({
 
         {attached.length > 0 && (
           <div className="attach-strip">
-            {attached.map((file) => (
+            {attached.map((file) => {
+              const name = fileName(file);
+              // The same glyph the chip above the sent message will use, so
+              // what was staged and what went out read as one object.
+              const Glyph = fileGlyph(name);
+              return (
               <span className="attach-chip" key={file} title={file}>
-                <PaperclipIcon />
-                <span className="attach-name">{fileName(file)}</span>
+                <Glyph size={12} />
+                <span className="attach-name">{name}</span>
                 <button
                   className="attach-x"
                   title={t("attachRemove")}
@@ -506,7 +491,8 @@ export function Composer({
                   <Close size={12} />
                 </button>
               </span>
-            ))}
+              );
+            })}
           </div>
         )}
 

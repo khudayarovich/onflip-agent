@@ -8,7 +8,6 @@ import {
   DEEPSEEK_CHAT_URL,
   TOKEN_KEY,
   USER_KEY,
-  accountId,
   deepseekProfileDir,
   isSignedIn,
 } from "./session";
@@ -36,6 +35,9 @@ import {
 
 /** Where an assistant reply lives; user messages have no markdown node. */
 const ASSISTANT_SELECTOR = ".ds-markdown.ds-assistant-message-main-content";
+
+/** Send, and — while an answer is being written — stop. The same control. */
+const STOP_BUTTON = ".ds-button--primary";
 
 let context: BrowserContext | null = null;
 
@@ -102,7 +104,50 @@ export async function readStorage(page: Page): Promise<Record<string, string | n
 
 export interface SignedInCheck {
   signedIn: boolean;
+  /** A name a person recognises, when the account has one. Never the id. */
   account?: string;
+  /** As DeepSeek gives it, which is already masked: `fas*****98@gmail.com`. */
+  email?: string;
+}
+
+/**
+ * The name on the account, asked of DeepSeek's own endpoint.
+ *
+ * localStorage holds an id and nothing else — a bare UUID, which is what the
+ * sidebar was showing where a name belongs. `/api/v0/users/current` has the
+ * rest, behind the same token the page uses, and returns the masked email
+ * DeepSeek chooses to show plus the name from whichever identity provider the
+ * account was created with.
+ *
+ * Asked from inside the page so the request carries the session the way the
+ * app's own do, and treated as cosmetic throughout: any failure returns
+ * nothing and the sidebar falls back to "DeepSeek account". The token is used
+ * for the one request and never stored or logged.
+ */
+async function readProfile(page: Page): Promise<{ name?: string; email?: string }> {
+  try {
+    const raw = (await Promise.race([
+      page.evaluate(`(async () => {
+        let token = localStorage.getItem(${JSON.stringify(TOKEN_KEY)}) || "";
+        try { token = JSON.parse(token).value || token; } catch (e) {}
+        if (!token) return null;
+        const res = await fetch("/api/v0/users/current", {
+          credentials: "include",
+          headers: { authorization: "Bearer " + token },
+        });
+        if (!res.ok) return null;
+        const body = await res.json();
+        const user = body && body.data && body.data.biz_data;
+        if (!user) return null;
+        return { name: (user.id_profile || {}).name || "", email: user.email || "" };
+      })()`),
+      new Promise((resolve) => setTimeout(() => resolve(null), 8_000)),
+    ])) as { name?: string; email?: string } | null;
+    if (!raw) return {};
+    return { name: raw.name?.trim() || undefined, email: raw.email?.trim() || undefined };
+  } catch {
+    return {};
+  }
 }
 
 /**
@@ -121,7 +166,9 @@ export async function checkSignedIn(opts: OpenOptions = {}): Promise<SignedInChe
     const storage = await readStorage(page);
     const ok = isSignedIn(storage);
     logger.info("deepseek", "checked the session", { signedIn: ok });
-    return { signedIn: ok, account: accountId(storage) ?? undefined };
+    if (!ok) return { signedIn: false };
+    const profile = await readProfile(page);
+    return { signedIn: true, account: profile.name, email: profile.email };
   } catch (e) {
     logger.warn("deepseek", "could not check the session", {
       error: e instanceof Error ? e.message : String(e),
@@ -181,6 +228,42 @@ async function readLast(page: Page): Promise<{ text: string; count: number }> {
   const nodes = (await page.evaluate(EXTRACT_REPLY_SCRIPT).catch(() => null)) as unknown;
   const count = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
   return { text: nodes ? toMarkdown(nodes as never) : "", count };
+}
+
+/**
+ * Press DeepSeek's own stop button.
+ *
+ * While it writes, the send control becomes a stop control — same element,
+ * `ds-button--primary`, with a rounded square where the arrow was. Clicking
+ * it is what actually halts generation; abandoning the poll loop only stops
+ * OnFlip watching, and leaves the page writing an answer nobody will read
+ * into a thread the next turn will append to.
+ *
+ * Best-effort by design. If the button has gone the generation has already
+ * finished, which is the outcome being asked for.
+ */
+async function stopGenerating(page: Page): Promise<void> {
+  // Logged either way, because the two outcomes look identical from outside:
+  // a turn that stopped, and a turn OnFlip stopped watching while the page
+  // wrote on. This line is the difference, and a silent failure here is the
+  // second one wearing the first one's clothes.
+  try {
+    // Playwright's own click, not a synthetic one dispatched from inside the
+    // page. The first version called `.click()` on whatever sits under the
+    // button's centre, which is the icon — an SVGElement, which has no
+    // `click()` method. It threw on every stop, the throw was swallowed, and
+    // the result was precisely the failure above: the turn ended in the app
+    // while DeepSeek carried on writing. A real input event has no such gap,
+    // and it lands on the icon or the button equally.
+    await page.click(STOP_BUTTON, { timeout: 3_000 });
+    logger.info("deepseek", "stop pressed", { clicked: true });
+  } catch (e) {
+    // Not necessarily a failure: the button is gone the moment the answer
+    // finishes, which is the outcome being asked for.
+    logger.info("deepseek", "stop not pressed", {
+      why: e instanceof Error ? e.message.split("\n")[0].slice(0, 120) : String(e).slice(0, 120),
+    });
+  }
 }
 
 export async function sendTurn(
@@ -247,6 +330,14 @@ export async function sendTurn(
   let lastChange = Date.now();
   while (Date.now() < deadline) {
     try {
+      // Stop means stop. Without this the signal was accepted and ignored:
+      // the UI showed the turn ended while the loop kept polling and the page
+      // kept generating, so the next turn began behind an answer still being
+      // written.
+      if (opts.signal?.aborted) {
+        await stopGenerating(page);
+        throw new Error("interrupted");
+      }
       await page.waitForTimeout(POLL_MS);
       const now = await readLast(page);
       const fresh = now.count > before.count || now.text !== before.text;
@@ -532,26 +623,45 @@ async function attachPending(page: Page): Promise<void> {
     });
     return;
   }
-  await input.setInputFiles(files);
-
   // Wait for the page to show them. Sending before the upload finishes is how
   // a turn arrives describing an image that is not there — the failure this
   // whole path exists to avoid, and it is silent.
+  //
+  // Two signals, because an image and a document appear differently. An image
+  // gets a thumbnail: a `blob:` <img> in the composer, up within about half a
+  // second. Anything else gets a card with its name on it. The first version
+  // of this check looked only for the name, which is the one thing an image
+  // never shows — and OnFlip saves a pasted screenshot under a UUID — so it
+  // waited its full minute on every send and then went out anyway.
   const names = files.map((f) => path.basename(f));
-  // A polled read rather than waitForFunction: this package builds without
-  // the DOM library, so nothing here may name `document` in a callback.
+  const probe = `(() => {
+    const imgs = Array.prototype.filter.call(
+      document.querySelectorAll('img'),
+      function (i) { return /^blob:|^data:/.test(i.src); }
+    ).length;
+    const text = document.body ? document.body.innerText : "";
+    const named = ${JSON.stringify(names)}.filter(function (n) {
+      return text.indexOf(n) !== -1;
+    }).length;
+    return { imgs: imgs, named: named };
+  })()`;
+  const look = () =>
+    page.evaluate(probe).catch(() => ({ imgs: 0, named: 0 })) as Promise<{
+      imgs: number;
+      named: number;
+    }>;
+
+  const before = await look();
+  await input.setInputFiles(files);
+
   let ok = false;
-  for (let i = 0; i < 50 && !ok; i++) {
-    await page.waitForTimeout(1_200);
-    const seen = (await page
-      .evaluate("document.body ? document.body.innerText : ''")
-      .catch(() => "")) as string;
-    ok = names.every((n) => seen.includes(n));
+  for (let i = 0; i < 30 && !ok; i++) {
+    await page.waitForTimeout(300);
+    const now = await look();
+    ok = now.imgs > before.imgs || now.named > before.named;
   }
   logger.info("deepseek", "attached files", { count: files.length, confirmed: ok });
-  if (!ok) {
-    logger.warn("deepseek", "the page never showed the attachments; sending anyway", { names });
-  }
-  // A moment for the upload to finish server-side after the chip appears.
-  await page.waitForTimeout(1_200);
+  if (!ok) logger.warn("deepseek", "nothing appeared in the composer; sending anyway", { names });
+  // A moment for the upload to finish behind the thumbnail.
+  await page.waitForTimeout(800);
 }

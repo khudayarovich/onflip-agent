@@ -3931,3 +3931,31 @@ a:hover {
 .chip.chip-on svg {
   opacity: 1;
 }
+
+/* Files sent with a message, above its bubble and aligned with it.
+   The chip is the composer's, so what you attached and what was sent look
+   like the same object — the wrap already spaces and right-aligns them. */
+.msg-attachments {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.msg-attachments .attach-chip {
+  padding: 3px 8px;
+  font-size: 11.5px;
+}
+/* A sent attachment is a button: it finds the file again. */
+.attach-reveal {
+  cursor: pointer;
+  transition: border-color 0.12s, background 0.12s, color 0.12s;
+}
+.attach-reveal:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.attach-reveal svg {
+  flex: none;
+  opacity: 0.85;
+}

@@ -121,21 +121,30 @@ test("an app-wide setting saved on DeepSeek is seen by ChatGPT too", () => {
 
 test("ChatGPT's session is never written into another service's room", () => {
   // Found on a real install: the whole ChatGPT session — token, access token,
-  // cookie name, account, discovered models — sitting inside
-  // `providers.deepseek`, because a ChatGPT code path wrote it while DeepSeek
-  // was the active service and the split filed it by who was running.
+  // cookie name — sitting inside `providers.deepseek`, because a ChatGPT code
+  // path wrote it while DeepSeek was the active service and the split filed
+  // it by who was running rather than by whose it was.
   write({ ...EXISTING, provider: "deepseek" });
   saveConfig({
     sessionToken: "fresh-chatgpt-secret",
     sessionCookieName: "__Secure-next-auth.session-token.0",
-    accountEmail: "me@example.com",
-    discoveredModels: [{ slug: "gpt-5-6", title: "GPT-5.6 Sol", description: "" }],
+    accessToken: "fresh-access",
   });
   const raw = read();
   assert.equal(raw.providers.deepseek.sessionToken, undefined, "not in DeepSeek's room");
-  assert.equal(raw.providers.deepseek.accountEmail, undefined);
-  assert.equal(raw.providers.deepseek.discoveredModels, undefined);
+  assert.equal(raw.providers.deepseek.accessToken, undefined);
   assert.equal(raw.sessionToken, "fresh-chatgpt-secret", "filed where ChatGPT reads it");
+});
+
+test("but each service keeps its own account and plan", () => {
+  // Identity is not the session: DeepSeek has an account too, and its name in
+  // the sidebar must not become ChatGPT's or overwrite it.
+  write({ ...EXISTING, provider: "deepseek" });
+  saveConfig({ accountName: "DeepSeek User", accountEmail: "ds@example.com" });
+  const raw = read();
+  assert.equal(raw.providers.deepseek.accountName, "DeepSeek User");
+  assert.equal(raw.accountEmail, "me@example.com", "ChatGPT's is untouched");
+  assert.equal(loadConfig().accountName, "DeepSeek User", "and read back on DeepSeek");
 });
 
 test("and one an older version already misfiled is not read back", () => {
@@ -143,11 +152,10 @@ test("and one an older version already misfiled is not read back", () => {
   write({
     ...EXISTING,
     provider: "deepseek",
-    providers: { deepseek: { model: "deepseek-vision", sessionToken: "leaked", accountEmail: "me@example.com" } },
+    providers: { deepseek: { model: "deepseek-vision", sessionToken: "leaked" } },
   });
   const c = loadConfig();
   assert.equal(c.sessionToken, undefined, "a stray copy is still not DeepSeek's session");
-  assert.equal(c.accountEmail, undefined);
   assert.equal(c.model, "deepseek-vision", "its own settings still come through");
 });
 

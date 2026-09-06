@@ -70,7 +70,7 @@ export interface ToolResultDTO {
 }
 
 export type ChatItem =
-  | { type: "user"; id: string; text: string }
+  | { type: "user"; id: string; text: string; attachments?: string[] }
   | { type: "assistant"; id: string; text: string }
   /** The agent ended its turn with a question only the user can settle. */
   | { type: "question"; id: string; text: string; options?: string[] }

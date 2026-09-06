@@ -224,38 +224,39 @@ const PROVIDER_SETTINGS = [
   "thinking",
   "browserChannel",
   "signedOut",
+  "planType",
+  "discoveredModels",
+  "accountName",
+  "accountEmail",
 ] as const satisfies readonly (keyof OnFlipConfig)[];
 
 /**
- * ChatGPT's account, which no other service can produce.
+ * ChatGPT's session, which no other service can produce.
  *
- * A session token, an access token, the plan and the discovered model list
- * come from one place: a signed-in ChatGPT. DeepSeek keeps its session in its
- * browser profile's localStorage and writes none of these, so a copy of them
- * inside `providers.deepseek` is always something misfiled — and it was, on
- * this machine: the whole ChatGPT session, duplicated into DeepSeek's room by
- * a ChatGPT code path that happened to run while DeepSeek was the active
- * service. `saveConfig` files them by who they belong to rather than by who
- * is running, and drops any that a previous version left in the wrong room.
+ * A `__Secure-next-auth` cookie and the access token it buys come from one
+ * place: a signed-in ChatGPT. DeepSeek keeps its session in its browser
+ * profile's localStorage and writes none of these, so a copy of them inside
+ * `providers.deepseek` is always something misfiled — and it was, on this
+ * machine: the whole ChatGPT session, duplicated into DeepSeek's room by a
+ * ChatGPT code path that ran while DeepSeek was the active service, and read
+ * straight back out as "connected" on an account nobody had signed in to.
  *
- * They stay in the hidden set either way: what DeepSeek must not see is the
- * point of scoping, and that has not changed.
+ * So these are filed by whose they are rather than by who is running, and any
+ * a previous version left in the wrong room are dropped on read and cleaned
+ * out of the file on the next save. An account's name and plan are not in
+ * this group: both services have those, and each keeps its own.
  */
-const CHATGPT_ACCOUNT = [
-  "planType",
-  "discoveredModels",
+const CHATGPT_SESSION = [
   "sessionToken",
   "sessionCookies",
   "sessionCookieName",
   "sessionDeviceId",
   "accessToken",
   "accessTokenExpiry",
-  "accountName",
-  "accountEmail",
 ] as const satisfies readonly (keyof OnFlipConfig)[];
 
 /** Everything another service must not read out of ChatGPT's top level. */
-const PROVIDER_SCOPED = [...PROVIDER_SETTINGS, ...CHATGPT_ACCOUNT] as const;
+const PROVIDER_SCOPED = [...PROVIDER_SETTINGS, ...CHATGPT_SESSION] as const;
 
 /**
  * ChatGPT keeps the top level, everything else gets a room of its own.
@@ -369,7 +370,7 @@ export function loadConfig(): OnFlipConfig {
     // there was misfiled by an earlier version, and reading it back is the
     // reported symptom itself: DeepSeek announcing a connected account on a
     // service that had never been signed in to.
-    for (const key of CHATGPT_ACCOUNT) delete config[key];
+    for (const key of CHATGPT_SESSION) delete config[key];
   }
 
   // `sandbox` used to mean "shell allowed". Keep old configs working.
@@ -429,7 +430,7 @@ export function saveConfig(patch: OnFlipConfig): void {
     return;
   }
   // Split the patch three ways: this service's own settings go in its room,
-  // ChatGPT's account goes to ChatGPT's room whoever is running, and the rest
+  // ChatGPT's session goes to ChatGPT's room whoever is running, and the rest
   // stays at the top level where both services read it.
   const scoped: OnFlipConfig = {};
   const shared: OnFlipConfig = {};
@@ -439,7 +440,7 @@ export function saveConfig(patch: OnFlipConfig): void {
   }
   const providers = { ...(stored.providers ?? {}) };
   const room: OnFlipConfig = { ...(providers[scope] ?? {}), ...scoped };
-  for (const key of CHATGPT_ACCOUNT) delete room[key];
+  for (const key of CHATGPT_SESSION) delete room[key];
   providers[scope] = room;
   writeConfig({ ...stored, ...shared, providers }, "saving config");
 }

@@ -1109,7 +1109,15 @@ export class Engine {
     }
     // The item carries the history message's id so edit/resend can find it,
     // and delivery events can attach to it.
-    this.peer.emit("item", { type: "user", id: userMessage.id, text } satisfies ChatItem);
+    // The attachments ride along so the transcript can show them. Without
+    // this the chat showed the words and nothing else, and a picture that had
+    // been sent looked exactly like one that had not.
+    this.peer.emit("item", {
+      type: "user",
+      id: userMessage.id,
+      text,
+      attachments: attachments?.length ? attachments : undefined,
+    } satisfies ChatItem);
     logger.info("session", "user turn", { text });
     this.history.push(userMessage);
     this.pendingDelivery = userMessage.id;
@@ -1649,7 +1657,7 @@ export class Engine {
     }
     this.probeSignedIn = true;
     this.emitConnect("ready");
-    this.notice("Signed in to ChatGPT — the session is saved and ready to use.");
+    this.notice(`Signed in to ${providerLabel()} — the session is saved and ready to use.`);
     this.pushStatus();
     return { ok: true };
   }
@@ -1729,7 +1737,7 @@ export class Engine {
 
     this.emitConnect(
       "signed-out",
-      'Signed out of ChatGPT. Use "Sign in to ChatGPT" in the account menu when you want to work again.'
+      `Signed out of ${providerLabel()}. Use "Sign in to ${providerLabel()}" in the account menu when you want to work again.`
     );
     this.notice("Signed out — the stored session and the browser profile have been cleared.");
     this.pushStatus();
@@ -1781,7 +1789,7 @@ export class Engine {
     this.maybeIdentifyAccount();
     this.emitConnect("ready");
     this.notice(
-      `Signed in to ChatGPT with ${result.browser.name}. The session lives in OnFlip's own browser profile and is kept between launches.`
+      `Signed in to ${providerLabel()} with ${result.browser.name}. The session lives in OnFlip's own browser profile and is kept between launches.`
     );
     this.pushStatus();
     return { ok: true, browser: result.browser.name };

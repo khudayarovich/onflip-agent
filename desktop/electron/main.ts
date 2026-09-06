@@ -1203,6 +1203,16 @@ function registerIpc(): void {
     return error === "";
   });
 
+  // Show it where it lives rather than opening it. A chip in the transcript
+  // names a file that was sent; the useful thing to do with it is find it
+  // again, and opening an unknown file with its default application is a
+  // bigger step than the click implies.
+  ipcMain.handle("reveal-file", (_e, payload: { path: string }) => {
+    if (!payload?.path || !fs.existsSync(payload.path)) return false;
+    shell.showItemInFolder(path.resolve(payload.path));
+    return true;
+  });
+
   ipcMain.handle("restart-engine", async (e, payload: { cwd?: string }) => {
     const ws = wsOf(e);
     if (!ws) return false;

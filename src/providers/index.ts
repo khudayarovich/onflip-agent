@@ -174,7 +174,10 @@ export async function pageSessionUser(
 ): Promise<{ name?: string; email?: string } | null> {
   if (!onDeepSeek()) return chatgpt.pageSessionUser(cookies);
   const check = await ds.checkSignedIn();
-  return check.signedIn ? { name: check.account } : null;
+  // No name rather than the account id: a bare UUID in the sidebar where a
+  // person's name goes is worse than the honest fallback, "DeepSeek account".
+  if (!check.signedIn || (!check.account && !check.email)) return null;
+  return { name: check.account, email: check.email };
 }
 
 export function takeReplyImages(): chatgpt.ReplyImage[] {

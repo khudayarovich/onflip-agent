@@ -140,6 +140,79 @@ export const ListIcon = (p: IconProps = {}): React.ReactElement =>
     p
   );
 
+/** A file rode along with this message. */
+export const Paperclip = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <path d="M21 12.5 12.5 21a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.7 3.7 0 0 1 5.2 5.2l-8.5 8.5a1.8 1.8 0 0 1-2.6-2.6l7.9-7.8" />,
+    p
+  );
+
+export const FileImage = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <circle cx="8.8" cy="9.6" r="1.6" />
+      <path d="M4 16.5 9 12l3.4 3.1L15.8 12l4.2 4.2" />
+    </>,
+    p
+  );
+
+export const FileCode = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 3 14 8 19 8" />
+      <polyline points="10.3 12.8 8.6 14.8 10.3 16.8" />
+      <polyline points="13.7 12.8 15.4 14.8 13.7 16.8" />
+    </>,
+    p
+  );
+
+export const FileTable = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+      <line x1="3.5" y1="9.5" x2="20.5" y2="9.5" />
+      <line x1="9.5" y1="9.5" x2="9.5" y2="19.5" />
+      <line x1="3.5" y1="14.5" x2="20.5" y2="14.5" />
+    </>,
+    p
+  );
+
+export const FileArchive = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
+      <polyline points="14 3 14 8 19 8" />
+      <path d="M9.4 4v2M11.2 6v2M9.4 8v2M11.2 10v2" />
+      <rect x="9" y="13.6" width="2.6" height="3.4" rx="0.8" />
+    </>,
+    p
+  );
+
+const BY_EXTENSION: [RegExp, (p?: IconProps) => React.ReactElement][] = [
+  [/\.(png|jpe?g|gif|webp|bmp|avif|heic|svg|ico|tiff?)$/i, FileImage],
+  [/\.(csv|tsv|xlsx?|ods)$/i, FileTable],
+  [/\.(zip|rar|7z|tar|gz|tgz|bz2|xz)$/i, FileArchive],
+  [
+    /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|rs|go|java|kt|swift|c|h|cpp|hpp|cs|php|sh|ps1|bat|sql|json|ya?ml|toml|xml|html?|css|scss)$/i,
+    FileCode,
+  ],
+];
+
+/**
+ * The icon for a file, chosen by its name.
+ *
+ * A paperclip on every chip said only "this is a file", which the chip
+ * already says. The shape is what makes a screenshot findable among six
+ * attachments at a glance. Anything unrecognised gets the page, which is
+ * true of it: it is a file, and nothing more specific is known.
+ */
+export function fileGlyph(name: string): (p?: IconProps) => React.ReactElement {
+  for (const [pattern, icon] of BY_EXTENSION) if (pattern.test(name)) return icon;
+  return FileText;
+}
+
 export const Search = (p: IconProps = {}): React.ReactElement =>
   svg(
     <>
