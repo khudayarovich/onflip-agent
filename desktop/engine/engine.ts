@@ -607,6 +607,11 @@ export class Engine {
           this.peer.emit("tool-progress", { id: this.runningToolId, chunk });
         }
       },
+      // The bot lives in the app, not in here, so the tool asks the app to
+      // carry the file and waits for a real answer — "the bot is off" and
+      // "Telegram refused it" are both things the model has to hear.
+      deliverFile: (file, caption) =>
+        this.peer.request<{ ok: boolean; detail: string }>("telegram-file", { file, caption }),
     });
   }
 

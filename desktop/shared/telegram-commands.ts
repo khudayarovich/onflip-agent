@@ -65,19 +65,33 @@ export interface ParsedCommand {
 
 export type Incoming = ParsedCommand | { kind: "prompt"; text: string } | { kind: "empty" };
 
-const COMMANDS = new Set<string>([
-  "start",
-  "help",
-  "status",
-  "new",
-  "folder",
-  "model",
-  "thinking",
-  "access",
-  "settings",
-  "stop",
-  "id",
-]);
+/**
+ * The commands, with the one-liners Telegram shows in its own menu.
+ *
+ * One table rather than two: the set of names OnFlip *accepts* and the list it
+ * *advertises* were the same thing written twice, and a command added to one
+ * and not the other is either invisible or broken. Telegram wants a lowercase
+ * name of at most 32 characters and a description of 3 to 256.
+ *
+ * Registered with `setMyCommands` when the bot connects, which is what puts
+ * them behind the Menu button in the chat — without it the bot has commands
+ * that work and no way to discover them.
+ */
+export const COMMAND_MENU: { name: CommandName; description: string }[] = [
+  { name: "status", description: "What OnFlip is doing, and where" },
+  { name: "new", description: "Start a fresh chat with no folder" },
+  { name: "folder", description: "Open a project folder, or pick one" },
+  { name: "model", description: "Choose the model" },
+  { name: "thinking", description: "How hard it should reason" },
+  { name: "access", description: "What it may do without asking" },
+  { name: "stop", description: "Stop the turn that is running" },
+  { name: "settings", description: "Everything above, in one card" },
+  { name: "help", description: "What this bot can do" },
+  { name: "id", description: "Show your Telegram id" },
+  { name: "start", description: "Say hello and show the help card" },
+];
+
+const COMMANDS = new Set<string>(COMMAND_MENU.map((c) => c.name));
 
 /**
  * What a message means.

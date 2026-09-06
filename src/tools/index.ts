@@ -13,6 +13,7 @@ import { WEB_TOOLS } from "./web";
 import { BROWSER_TOOLS } from "./browser";
 import { MEMORY_TOOLS } from "./memory";
 import { TERMINAL_TOOLS } from "./terminal";
+import { deliverTools, DeliverFile } from "./deliver";
 import { err } from "./util";
 
 export { getShellCwd, setShellCwd, resetShellCwd, killAllJobs, listJobs } from "./shell";
@@ -40,6 +41,14 @@ export interface RegistryOptions {
   disableShell?: boolean;
   /** Hide the network tool entirely. */
   disableNetwork?: boolean;
+  /**
+   * Hand a file to the person who is not at the machine — the Telegram chat.
+   *
+   * Absent on the CLI, which has no bot to hand anything to, and the tool is
+   * not offered at all when it is: a tool the model can call and nothing can
+   * carry out is worse than no tool.
+   */
+  deliverFile?: DeliverFile;
 }
 
 export interface ToolRegistry {
@@ -66,7 +75,7 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
   if (!opts.disableNetwork) tools = [...tools, ...WEB_TOOLS, ...BROWSER_TOOLS];
   // Listed last, so the closing blocks sit at the end of the roster the model
   // reads; and present in every mode, since they mutate nothing.
-  tools = [...tools, ...TERMINAL_TOOLS];
+  tools = [...tools, ...deliverTools(opts.deliverFile), ...TERMINAL_TOOLS];
   if (opts.readOnly) tools = tools.filter((t) => !t.mutates);
 
   const byName = new Map(tools.map((t) => [t.name, t]));

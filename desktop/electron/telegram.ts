@@ -14,6 +14,7 @@ import {
 } from "../shared/telegram-format";
 import {
   CallbackTable,
+  COMMAND_MENU,
   isAllowed,
   parseAllowList,
   parseIncoming,
@@ -361,6 +362,73 @@ async function sendPhotoEverywhere(dataUrl: string, caption: string): Promise<bo
     }
   }
   return sentAny;
+}
+
+/**
+ * Hand a file on this machine to the chat, as a file.
+ *
+ * The bot could talk and could not deliver: asked for a document, the best the
+ * agent could do was read it and paste the text, which loses a PDF entirely.
+ * This is the other half — `sendDocument`, streamed from disk, to every chat
+ * the bot is talking to.
+ *
+ * Answers rather than throws, because the caller is the agent and a refusal is
+ * something it has to be able to tell the user about. Fifty megabytes is
+ * Telegram's ceiling for a bot, not ours.
+ */
+export async function telegramSendFile(
+  file: string,
+  caption?: string
+): Promise<{ ok: boolean; detail: string }> {
+  if (!polling) {
+    return { ok: false, detail: "The Telegram bot is not running, so there is nowhere to send it." };
+  }
+  const chatIds = targetChats();
+  if (!chatIds.length) {
+    return { ok: false, detail: "No Telegram chat has spoken to this bot yet — send it a message first." };
+  }
+  let bytes: Buffer;
+  try {
+    bytes = fs.readFileSync(file);
+  } catch (e) {
+    return { ok: false, detail: `Could not read ${file}: ${e instanceof Error ? e.message : String(e)}` };
+  }
+  if (bytes.length > 50 * 1024 * 1024) {
+    return {
+      ok: false,
+      detail: `${path.basename(file)} is ${(bytes.length / (1024 * 1024)).toFixed(1)} MB; Telegram takes at most 50 MB from a bot.`,
+    };
+  }
+
+  const name = path.basename(file) || "file";
+  let sent = 0;
+  let lastError = "";
+  for (const chatId of chatIds) {
+    try {
+      const form = new FormData();
+      form.append("chat_id", String(chatId));
+      if (caption) {
+        form.append("caption", escapeHtml(oneLine(caption, 900)));
+        form.append("parse_mode", "HTML");
+      }
+      form.append("document", new Blob([new Uint8Array(bytes)]), name);
+      const response = await fetch(`${API}${settings.token}/sendDocument`, {
+        method: "POST",
+        body: form,
+      });
+      const json = (await response.json()) as { ok: boolean; description?: string };
+      if (json.ok) sent++;
+      else lastError = json.description ?? "Telegram refused it";
+    } catch (e) {
+      lastError = e instanceof Error ? e.message : String(e);
+    }
+  }
+  if (!sent) return { ok: false, detail: `Telegram would not take ${name}: ${lastError}` };
+  const kb = Math.max(1, Math.round(bytes.length / 1024));
+  return {
+    ok: true,
+    detail: `Sent ${name} (${kb} KB) to Telegram${sent > 1 ? ` (${sent} chats)` : ""}.`,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -949,6 +1017,14 @@ function restart(): void {
       username = me?.username;
       state = "connected";
       detail = undefined;
+      // The Menu button in the chat is Telegram's, and it is empty until the
+      // bot tells Telegram what it answers to. Best-effort: a bot that could
+      // not publish its menu still works, it is just harder to discover.
+      void api("setMyCommands", {
+        commands: COMMAND_MENU.map((c) => ({ command: c.name, description: c.description })),
+      }).catch((e) =>
+        console.error("[telegram] could not publish the command menu:", e instanceof Error ? e.message : String(e))
+      );
     } catch (e) {
       state = "error";
       detail = e instanceof Error ? e.message : String(e);

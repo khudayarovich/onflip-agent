@@ -186,3 +186,44 @@ test("clearing forgets everything", { skip: needsBuild }, () => {
 
   assert.equal(tickets.take(data), null);
 });
+
+// --- the menu Telegram shows behind its own button --------------------------
+
+test("every command in the menu is one the bot accepts", { skip: needsBuild }, () => {
+  // The set of names the bot answers to and the list it advertises used to be
+  // the same thing written twice. A command added to one and not the other is
+  // either invisible or broken, so they come from one table now — this is the
+  // test that keeps it that way.
+  const { COMMAND_MENU, parseIncoming } = load();
+
+  for (const entry of COMMAND_MENU) {
+    const parsed = parseIncoming(`/${entry.name}`);
+    assert.equal(parsed.kind, "command", `/${entry.name} is advertised but not accepted`);
+    assert.equal(parsed.name, entry.name);
+  }
+});
+
+test("the menu meets Telegram's own rules for setMyCommands", { skip: needsBuild }, () => {
+  // Lowercase, 1-32 characters, and a description of 3 to 256 — Telegram
+  // rejects the whole call if one entry is wrong, so the menu would silently
+  // stay empty.
+  const { COMMAND_MENU } = load();
+
+  assert.ok(COMMAND_MENU.length > 0);
+  for (const { name, description } of COMMAND_MENU) {
+    assert.match(name, /^[a-z0-9_]{1,32}$/, `bad command name: ${name}`);
+    assert.ok(description.length >= 3 && description.length <= 256, `bad description: ${name}`);
+  }
+  const names = COMMAND_MENU.map((c) => c.name);
+  assert.equal(new Set(names).size, names.length, "a command is listed twice");
+});
+
+test("the ones people reach for first are near the top", { skip: needsBuild }, () => {
+  // Telegram shows the list in the order it is given, and the menu is read
+  // top-down by someone who has just opened the chat.
+  const { COMMAND_MENU } = load();
+  const names = COMMAND_MENU.map((c) => c.name);
+
+  assert.ok(names.indexOf("status") < names.indexOf("settings"));
+  assert.ok(names.indexOf("stop") < names.indexOf("id"));
+});

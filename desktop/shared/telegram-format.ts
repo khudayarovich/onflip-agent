@@ -236,6 +236,9 @@ export function helpCard(): string {
     "",
     "Send any message and it goes to OnFlip as a prompt.",
     "",
+    "Ask for a file and it comes back as a file: “send me the report on my "
+      + "desktop”, “forward today’s log”. Up to 50 MB.",
+    "",
     "<b>Commands</b>",
     "/status — what OnFlip is pointed at",
     "/new — start a fresh chat with no folder",

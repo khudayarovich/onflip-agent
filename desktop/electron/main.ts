@@ -58,6 +58,7 @@ import {
   telegramAskApproval,
   telegramOnEvent,
   telegramPublic,
+  telegramSendFile,
 } from "./telegram";
 import {
   applyIndicator,
@@ -653,6 +654,10 @@ function startEngine(ws: Workspace, requested?: string): void {
   wire.onRequest = async (method, params) => {
     if (method === "approval") {
       return await askRendererForApproval(ws, params);
+    }
+    if (method === "telegram-file") {
+      const p = (params ?? {}) as { file?: string; caption?: string };
+      return await telegramSendFile(String(p.file ?? ""), p.caption);
     }
     throw new Error(`Unknown engine->app request: ${method}`);
   };
