@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.2
+# OnFlip Desktop 0.10.3
 
-**Files, both ways, over Telegram.** Ask the bot for a file on your desktop and it arrives as a file. Send it one and the agent can work with it. The bot's Menu button also has the commands in it now, and stop ends a turn even when the page has stopped listening.
+**The agent knows when you are asking from your phone.** Ask over Telegram for a file and the file arrives, instead of the path to it. Plus a turn that can no longer spend itself retrying one thing that cannot work, and the bot showing three dots while it thinks.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.2.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.2/OnFlip-Setup-0.10.2.exe) | ~84 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.2-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.2/OnFlip-0.10.2-mac-arm64.dmg) | ~101 MB |
-| **macOS** · Intel | [OnFlip-0.10.2-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.2/OnFlip-0.10.2-mac-x64.dmg) | ~108 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.3.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.3/OnFlip-Setup-0.10.3.exe) | ~84 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.3-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.3/OnFlip-0.10.3-mac-arm64.dmg) | ~101 MB |
+| **macOS** · Intel | [OnFlip-0.10.3-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.3/OnFlip-0.10.3-mac-x64.dmg) | ~108 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
 
@@ -18,22 +18,22 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 ## What's new
 
-**Ask for a file and get the file.** "Send me the report on my desktop", "forward today's log" — it arrives in the chat as a real document you can open or save, up to Telegram's 50 MB. It asks before sending, because the file does leave the machine, and read-only mode never offers it. Every refusal says what is wrong: a folder named instead of a file, an empty one, one over the limit, a bot that is not running.
+**A request from Telegram now says so.** Asked over the bot to send a file, the agent used to save it and answer with its path — the right answer for someone at the keyboard, and no answer at all for someone holding a phone, who then had to ask a second time. The turn now carries where it came from: the model is told the person is not at this computer, cannot open a path on it, and that anything they asked for goes to them as a file. Answers from the bot are kept short enough to read on a phone. A request typed at the desktop is unaffected — there a path is exactly right.
 
-**Send the bot a file and the agent can work with it.** Until now a file sent to the bot did nothing at all — the message carried no text, so nothing happened and the file stayed in Telegram. Now it is downloaded to `~/.onflip/inbox` and the agent is handed the path. With a caption the caption becomes the request — "summarise this", "convert this to csv" — and without one it is saved quietly and confirmed, so your next message can refer to it. Documents, photos, video, audio and voice notes, up to the 20 MB Telegram allows a bot to download. An image goes to the model as an image, since looking at it is usually the point.
-
-Incoming files land in their own folder rather than inside whatever project is open: a folder appearing in your git checkout because somebody sent a photo is a surprise in the wrong place.
-
-**The Menu button works.** Telegram fills it from the bot, and the bot had never told it anything — every command worked and none could be found. It publishes them on connect now.
+**The bot shows it is thinking.** Three dots in the chat header for as long as the turn runs, refreshed every four seconds, gone the moment it ends. An agent turn is minutes, and the gap between "Working…" and the answer used to look like nothing happening.
 
 ## Fixed
 
-**Stop now ends a turn that has stopped listening.** Reported as two things that are one thing: a turn silent for nearly six minutes, and stop doing nothing about it. Stopping aborts a signal, and a signal only stops something watching it — every poll loop does, but a page whose JavaScript thread is wedged never answers, so the loop never comes back around to look. After five seconds of a stop not landing, OnFlip closes its browser: every pending call rejects, the turn ends, and the next message opens it again. A healthy stop still lands in about half a second and never reaches this.
+**A turn can no longer spend itself on one thing that cannot work.** From a real log: a Word document to export as PDF, on a machine where Word's COM export never returned. The agent tried it four ways — direct export, a retry wrapper, LibreOffice, SaveAs — each killed at the two-minute limit, and each attempt made the next worse, because killing a command does not kill the Word process it started and that process kept the document open. Identical-call detection could not see it: four spellings of one idea are not the same call. Timeouts are counted on their own now, and from the second one the model is told what it actually needs — that a timeout is a command that never came back, that whatever it started is still running and still holding its files, and to take a different route or stop and say what is blocking it.
 
-**The silence warning stopped promising a countdown.** It said "restarts by itself in about 4 more", was written once, and then sat there while the clock ran — so by minute five it read as a broken promise. It now names the time it will act at, and says that stop ends it now.
+**PowerShell parse errors are no longer unreadable.** They are written before the command runs, so the prelude that switches the console to UTF-8 has not executed and they arrive in the wrong codepage as a drift of replacement characters. A model that cannot read its own syntax error cannot fix it, so it guesses — which is how the loop above began. Those are now recognised and flagged as unreliable text.
+
+**And the syntax error itself:** a here-string whose closing `'@` was indented with the rest of the script. That is a parse error every time, and writing a script inside an indented block is exactly the situation that produces it, so the shell tool now says the rule out loud — along with the one about Office applications outliving the command that opened them.
+
+Everything here works the same on ChatGPT and DeepSeek.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.1...desktop-v0.10.2](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.1...desktop-v0.10.2)
+**Full changelog:** [desktop-v0.10.2...desktop-v0.10.3](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.2...desktop-v0.10.3)
