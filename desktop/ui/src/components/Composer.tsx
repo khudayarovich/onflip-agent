@@ -55,8 +55,29 @@ function approvalInfo(mode: ApprovalMode | undefined) {
   return APPROVAL_MODES.find((m) => m.mode === mode) ?? APPROVAL_MODES[1];
 }
 
-function thinkingInfo(level: ThinkingLevel | null | undefined) {
-  return THINKING_LEVELS.find((t) => t.level === (level ?? null)) ?? THINKING_LEVELS[0];
+/**
+ * DeepSeek has a switch, not a dial.
+ *
+ * Beside its composer is one toggle — "Deep thinking" — so offering four
+ * levels there would be offering three distinctions the service does not
+ * have, and two of them would land on the same setting. `high` is the "on"
+ * side because that is what the driver maps any explicit effort to.
+ */
+const DEEPSEEK_THINKING: typeof THINKING_LEVELS = [
+  { level: "off", label: "thinkOff", hint: "thinkDsOffHint" },
+  { level: "high", label: "thinkDsDeep", hint: "thinkDsDeepHint" },
+];
+
+function thinkingLevels(deepseek: boolean): typeof THINKING_LEVELS {
+  return deepseek ? DEEPSEEK_THINKING : THINKING_LEVELS;
+}
+
+function thinkingInfo(level: ThinkingLevel | null | undefined, deepseek = false) {
+  const levels = thinkingLevels(deepseek);
+  // On DeepSeek an unset level is off — the toggle's own resting state, and
+  // what the driver applies when nothing was chosen.
+  if (deepseek) return levels.find((t) => t.level === (level ?? "off")) ?? levels[0];
+  return levels.find((t) => t.level === (level ?? null)) ?? levels[0];
 }
 
 // -- chip icons (14px inline strokes, lucide-style) --------------------------
@@ -392,6 +413,8 @@ export function Composer({
   // allowance an agent run empties in minutes, so the controls that spend it
   // are turned off rather than left to fail halfway through a task. The
   // engine enforces this either way; these two only make it visible.
+  // Which service is answering decides what the reasoning chip can offer.
+  const onDeepSeek = status?.provider === "deepseek";
   const planRationed = Boolean(status?.planRationed);
   const planNote = status?.planLimitNote ?? "";
   const planTitle = status?.planLimitTitle ?? "";
@@ -561,7 +584,7 @@ export function Composer({
             onClick={planRationed ? undefined : thinkingMenu.open}
           >
             <ThinkingIcon />
-            <span className="chip-label">{t(thinkingInfo(thinkingShown).label)}</span>
+            <span className="chip-label">{t(thinkingInfo(thinkingShown, onDeepSeek).label)}</span>
             {planRationed ? (
               planCard
             ) : (
@@ -652,11 +675,11 @@ export function Composer({
           openUp
           entries={[
             { key: "_h", heading: t("menuReasoning"), label: "" },
-            ...THINKING_LEVELS.map((entry) => ({
+            ...thinkingLevels(onDeepSeek).map((entry) => ({
               key: entry.level ?? "default",
               label: t(entry.label),
               hint: t(entry.hint),
-              checked: (status?.thinking ?? null) === entry.level,
+              checked: thinkingInfo(status?.thinking, onDeepSeek).level === entry.level,
               onPick: () => onSetThinking(entry.level),
             })),
           ]}

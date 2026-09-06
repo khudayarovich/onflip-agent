@@ -165,6 +165,14 @@ export interface EngineStatus {
    * stays on the unlimited path. The UI greys out what it cannot offer.
    */
   planRationed?: boolean;
+  /**
+   * Which chat service is answering: "chatgpt" or "deepseek".
+   *
+   * The UI uses it for the things that differ per service rather than per
+   * account — the reasoning chip offers a switch on DeepSeek and a dial on
+   * ChatGPT, because that is what each one actually has.
+   */
+  provider?: string;
   /** Heading and body for the card shown on a control the plan rations. */
   planLimitTitle?: string;
   planLimitNote?: string;

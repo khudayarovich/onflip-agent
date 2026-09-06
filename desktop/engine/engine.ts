@@ -673,6 +673,7 @@ export class Engine {
       // gauge half-full on an empty conversation.
       contextChars: reducibleChars(this.history),
       contextBudget: this.contextBudgetChars(),
+      provider: activeProvider(),
       planRationed: rationedPlan(cfg.planType) || undefined,
       planLimitTitle: planLimitCard(cfg.planType)?.title,
       planLimitNote: planLimitCard(cfg.planType)?.body,
