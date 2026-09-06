@@ -1048,34 +1048,43 @@ export function App(): React.ReactElement {
             onClick={() => setTerminalOpen((o) => !o)}
             title={t("stripTerminalTip")}
           >
-            <TerminalIcon /> {t("stripTerminal")}
+            <TerminalIcon />
+            <span className="strip-label">{t("stripTerminal")}</span>
           </button>
           <button
             className={`strip-btn${browserOpen ? " badged" : ""}`}
             onClick={() => setBrowserOpen((o) => !o)}
             title={t("browserTip")}
           >
-            <BrowserIcon /> {t("browserTitle")}
+            <BrowserIcon />
+            <span className="strip-label">{t("browserTitle")}</span>
           </button>
           <button
             className={`strip-btn${(status?.snapshotCount ?? 0) > 0 ? " badged" : ""}`}
             onClick={() => setModal("diff")}
             title={t("stripDiffTip")}
           >
-            <DiffIcon /> {t("stripDiff")}{status?.snapshotCount ? ` (${status.snapshotCount})` : ""}
+            <DiffIcon />
+            <span className="strip-label">{t("stripDiff")}</span>
+            {status?.snapshotCount ? (
+              <span className="strip-count">({status.snapshotCount})</span>
+            ) : null}
           </button>
           <button className="strip-btn" onClick={doUndo} title={t("stripUndoTip")}>
-            <UndoIcon /> {t("stripUndo")}
+            <UndoIcon />
+            <span className="strip-label">{t("stripUndo")}</span>
           </button>
           <button className="strip-btn" onClick={doExport} title={t("stripExportTip")}>
-            <ExportIcon /> {t("stripExport")}
+            <ExportIcon />
+            <span className="strip-label">{t("stripExport")}</span>
           </button>
           <button
             className={`strip-btn${searchOpen ? " badged" : ""}`}
             onClick={() => setSearchOpen((o) => !o)}
             title={t("stripSearchTip")}
           >
-            <SearchIcon /> {t("stripSearch")}
+            <SearchIcon />
+            <span className="strip-label">{t("stripSearch")}</span>
           </button>
         </div>
 
