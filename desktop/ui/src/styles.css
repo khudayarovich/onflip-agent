@@ -3967,3 +3967,33 @@ a:hover {
   flex: none;
   opacity: 0.85;
 }
+
+/* The two services, on the About page. The marks are the published artwork,
+   so they carry their own colour and sit against a light tile in either
+   theme — the same way they do in the titlebar badge. */
+.about-services {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 10px 0 8px;
+}
+.service-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.service-row svg {
+  flex: none;
+  margin-top: 1px;
+  border-radius: 5px;
+}
+.service-name {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.service-text {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text-secondary);
+}

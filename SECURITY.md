@@ -17,7 +17,8 @@ vulnerability:
 
 - **Your ChatGPT session** — cookies and any access token — is stored in
   `~/.onflip/config.json` with owner-only permissions, and is sent only to
-  ChatGPT.
+  ChatGPT. DeepSeek's session is not a cookie: it lives in its own browser
+  profile under `~/.onflip/providers/deepseek/`, and the two are kept apart.
 - **Session transcripts** are plain JSON under `~/.onflip/sessions/`, including
   the prompts you sent and the tool output the agent saw.
 - **Logs** under `~/.onflip/logs/` record message shapes, and at debug level
@@ -26,8 +27,8 @@ vulnerability:
   sites the agent signed in to.
 
 There is no OnFlip server, no telemetry, and no account system. Nothing leaves
-your machine except the conversation OnFlip sends to ChatGPT through your own
-session.
+your machine except the conversation OnFlip sends to the chat service you are
+signed in to, through your own session.
 
 ## The agent runs code on your computer
 

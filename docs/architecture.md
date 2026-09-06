@@ -1,8 +1,8 @@
 # Architecture
 
 OnFlip is three processes with one job between them: turn a sentence typed by a
-person into work done on their computer, using a ChatGPT session rather than an
-API.
+person into work done on their computer, using a chat session — ChatGPT or
+DeepSeek — rather than an API.
 
 ```
   Electron renderer            Electron main               engine (plain Node)
@@ -10,12 +10,29 @@ API.
   React UI, draws only  ──IPC──►  windows, dialogs,  ──ndjson──►  agent loop
   never touches disk    ◄──────   sign-in, terminal  ◄─ over ──   tools
                                                         stdio     approval policy
-                                                                  ChatGPT transport
+                                                                  provider seam
                                                                         │
                                                                   Playwright
                                                                         ▼
-                                                                   chatgpt.com
+                                                          chatgpt.com · deepseek.com
 ```
+
+## Providers
+
+Two services, one agent. `src/providers/index.ts` is the only seam: everything
+above it — the loop, the tools, the approval policy, the sessions — is the same
+code whichever service is answering. Below it sit two drivers, one per service,
+each with its own browser profile.
+
+The seam answers rather than throws for anything a service does not have:
+DeepSeek has no projects and no conversation list, so those come back empty and
+a session keeps working. Only what would silently lose the user's work — asking
+to *create* a project that cannot exist — refuses out loud.
+
+Config is scoped the same way. ChatGPT keeps the top level of `config.json`,
+where every install written before providers existed already put things; every
+other service reads and writes under `providers.<id>`. A session token belongs
+to ChatGPT alone and is filed there whichever service is running.
 
 ## Why the engine is a separate process
 
@@ -40,8 +57,9 @@ turn. What must be shared — the account session, the send cooldown — lives i
 There is no API key, so there is no API. The engine drives a real browser
 session:
 
-- A message is typed into the ChatGPT composer, or — when it is too large to
-  type — handed over as an uploaded file with a short pointer message.
+- A message is typed into the composer, or — on ChatGPT, when it is too large
+  to type — handed over as an uploaded file with a short pointer message.
+  DeepSeek has no such upload path, so its ceiling is what the composer takes.
 - The reply is read back out of the page and re-serialised to Markdown, because
   the rendered DOM has already eaten characters the agent needs (`$_` becomes
   emphasis, and the command no longer runs).
@@ -67,7 +85,7 @@ Everything a tool does passes through `src/agent/permissions.ts` first.
 
 ## Context
 
-A conversation is replayed to a fresh ChatGPT thread whenever one is opened, so
+A conversation is replayed to a fresh thread whenever one is opened, so
 transcript size is a real cost. It is compacted into a handover brief when it
 grows past a budget sized from the account's plan and the model's published
 context window. The compaction trigger measures only what compaction can

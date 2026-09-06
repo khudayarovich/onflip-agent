@@ -45,6 +45,7 @@ Useful while developing:
 | --- | --- |
 | `src/agent` | The agent loop, the tool protocol, compaction, approvals |
 | `src/chatgpt` | Talking to ChatGPT: transport, browser automation, backoff |
+| `src/providers` | The seam between the agent and a service; DeepSeek's driver |
 | `src/tools` | What the agent can do: files, shell, web, browser, todos |
 | `src/auth` | Finding and reusing a ChatGPT session |
 | `desktop/electron` | The Electron shell: windows, IPC, sign-in, terminal |
@@ -94,4 +95,5 @@ conventional-commit prefixes.
   a real user; that line is deliberate and is not moved.
 - Automation flags on the browsers OnFlip drives — they are what gets a session
   challenged or blocked.
-- Telemetry, analytics, or anything that sends user data anywhere but ChatGPT.
+- Telemetry, analytics, or anything that sends user data anywhere but the chat
+  service the user signed in to.

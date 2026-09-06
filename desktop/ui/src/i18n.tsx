@@ -299,13 +299,20 @@ const en = {
   setCommands: "Commands",
   setWriteDirs: "Write directories",
   setAbout: "About",
-  aboutTagline: "Your agent for code and everyday tasks, powered by the ChatGPT you already have.",
+  aboutTagline: "Your agent for code and everyday tasks, powered by a chat account you already have.",
   aboutIdeaTitle: "How it works",
   aboutIdea:
-    "OnFlip drives ChatGPT's ordinary chat through a real browser — the same conversation you could type at chatgpt.com. No API key, no per-token billing: the agent rides on the ChatGPT plan you already have, so it adds no separate API costs or usage limits. The model does the thinking on ChatGPT's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
+    "OnFlip drives an ordinary chat through a real browser — the same conversation you could type at chatgpt.com or chat.deepseek.com. No API key, no per-token billing: the agent rides on an account you already have, so it adds no separate API costs or usage limits. The model does the thinking on the service's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
+  aboutServicesTitle: "Services",
+  aboutServicesIntro:
+    "One at a time, switched from the account menu. Each keeps its own sign-in, chats, projects and settings — nothing crosses between them.",
+  aboutServiceChatGpt:
+    "Projects, file uploads, image replies and four reasoning levels. Usage follows your plan — the tables below.",
+  aboutServiceDeepSeek:
+    "Free, with no plan tiers to work around: Instant, Expert and Vision modes, DeepThink on or off, and image attachments. No projects, and chats it did not start cannot be reopened.",
   aboutAuthorTitle: "Author",
   aboutLicense: "Open source under the MIT license.",
-  aboutLimitsTitle: "Models & usage limits",
+  aboutLimitsTitle: "ChatGPT models & usage limits",
   aboutLimitsIntro:
     "OnFlip spends your ChatGPT plan's normal chat allowance — each agent step is one model request. What is capped depends on the plan and model (as of August 2026):",
   aboutLimitFree:
@@ -315,7 +322,7 @@ const en = {
   aboutLimitPro: "Effectively unlimited on standard models, within abuse guardrails",
   aboutLimitsNote:
     "Thinking/Pro-class models are capped on every plan and each model counts separately. Luna's unlimited tier covers text only and sits behind abuse guardrails — and OpenAI adjusts all of these limits over time.",
-  aboutTokensTitle: "Context & token sizes",
+  aboutTokensTitle: "ChatGPT context & token sizes",
   aboutTokensIntro:
     "How much conversation the model can hold in view depends on the plan's context window (~4 characters per token, as of August 2026):",
   aboutTokensFree: "≈16K-token context window",
@@ -634,13 +641,20 @@ const ru: Partial<Record<StringKey, string>> = {
   setCommands: "Команды",
   setWriteDirs: "Папки для записи",
   setAbout: "О программе",
-  aboutTagline: "Ваш агент для кода и повседневных задач — на базе ChatGPT, который у вас уже есть.",
+  aboutTagline: "Ваш агент для кода и повседневных задач — на аккаунте чата, который у вас уже есть.",
   aboutIdeaTitle: "Как это работает",
   aboutIdea:
-    "OnFlip управляет обычным чатом ChatGPT через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com. Без API-ключа и оплаты за токены: агент работает на вашем существующем плане ChatGPT и не добавляет отдельных API-затрат и лимитов. Модель думает на стороне ChatGPT, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
+    "OnFlip управляет обычным чатом через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com или chat.deepseek.com. Без API-ключа и оплаты за токены: агент работает на вашем существующем аккаунте и не добавляет отдельных API-затрат и лимитов. Модель думает на стороне сервиса, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
+  aboutServicesTitle: "Сервисы",
+  aboutServicesIntro:
+    "По одному за раз, переключается в меню аккаунта. У каждого свой вход, свои чаты, проекты и настройки — ничего не пересекается.",
+  aboutServiceChatGpt:
+    "Проекты, загрузка файлов, картинки в ответах и четыре уровня рассуждения. Расход идёт по вашему плану — таблицы ниже.",
+  aboutServiceDeepSeek:
+    "Бесплатно, без тарифов и лимитов: режимы Instant, Expert и Vision, DeepThink вкл/выкл и вложения-картинки. Без проектов; чаты, начатые не в OnFlip, открыть нельзя.",
   aboutAuthorTitle: "Автор",
   aboutLicense: "Открытый код по лицензии MIT.",
-  aboutLimitsTitle: "Модели и лимиты",
+  aboutLimitsTitle: "Модели и лимиты ChatGPT",
   aboutLimitsIntro:
     "OnFlip расходует обычную квоту чата вашего плана ChatGPT — каждый шаг агента это один запрос к модели. Что ограничено, зависит от плана и модели (на август 2026):",
   aboutLimitFree:
@@ -650,7 +664,7 @@ const ru: Partial<Record<StringKey, string>> = {
   aboutLimitPro: "Практически без лимитов на стандартных моделях, в рамках защиты от злоупотреблений",
   aboutLimitsNote:
     "Модели класса Thinking/Pro ограничены на всех планах, и у каждой модели свой счётчик. Безлимит Luna касается только текста и защищён от злоупотреблений — и OpenAI со временем меняет эти лимиты.",
-  aboutTokensTitle: "Контекст и размеры токенов",
+  aboutTokensTitle: "Контекст и размеры токенов ChatGPT",
   aboutTokensIntro:
     "Сколько беседы модель держит в поле зрения, зависит от контекстного окна плана (~4 символа на токен, на август 2026):",
   aboutTokensFree: "контекст ≈16K токенов",
@@ -967,13 +981,20 @@ const uz: Partial<Record<StringKey, string>> = {
   setCommands: "Buyruqlar",
   setWriteDirs: "Yozish papkalari",
   setAbout: "Dastur haqida",
-  aboutTagline: "Kod va kundalik ishlar uchun agentingiz — sizda allaqachon bor ChatGPT asosida.",
+  aboutTagline: "Kod va kundalik ishlar uchun agentingiz — sizda allaqachon bor chat hisobi asosida.",
   aboutIdeaTitle: "Qanday ishlaydi",
   aboutIdea:
-    "OnFlip haqiqiy brauzer orqali ChatGPT ning oddiy chatini boshqaradi — bu chatgpt.com da yozadigan o'sha suhbatingiz. API kaliti ham, token uchun to'lov ham yo'q: agent sizdagi mavjud ChatGPT tarifida ishlaydi, alohida API xarajatlari va limitlari qo'shilmaydi. Model ChatGPT tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",
+    "OnFlip haqiqiy brauzer orqali oddiy chatni boshqaradi — bu chatgpt.com yoki chat.deepseek.com da yozadigan o'sha suhbatingiz. API kaliti ham, token uchun to'lov ham yo'q: agent sizdagi mavjud hisobda ishlaydi, alohida API xarajatlari va limitlari qo'shilmaydi. Model xizmat tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",
+  aboutServicesTitle: "Xizmatlar",
+  aboutServicesIntro:
+    "Bir vaqtda bittasi; hisob menyusidan almashtiriladi. Har birining o‘z kirishi, chatlari, loyihalari va sozlamalari bor — hech nima aralashmaydi.",
+  aboutServiceChatGpt:
+    "Loyihalar, fayl yuklash, javobda rasmlar va to‘rtta fikrlash darajasi. Sarf tarifingizga bog‘liq — quyidagi jadvallar.",
+  aboutServiceDeepSeek:
+    "Bepul, tarif va limitlarsiz: Instant, Expert va Vision rejimlari, DeepThink yoqiq yoki o‘chiq, hamda rasm biriktirish. Loyihalar yo‘q; OnFlip boshlamagan chatlarni ocholmaydi.",
   aboutAuthorTitle: "Muallif",
   aboutLicense: "MIT litsenziyasi ostidagi ochiq kod.",
-  aboutLimitsTitle: "Modellar va limitlar",
+  aboutLimitsTitle: "ChatGPT modellari va limitlari",
   aboutLimitsIntro:
     "OnFlip ChatGPT tarifingizning oddiy chat kvotasini sarflaydi — agentning har bir qadami bitta model so'rovi. Nima cheklangani tarif va modelga bog'liq (2026-yil avgust holatiga):",
   aboutLimitFree:
@@ -983,7 +1004,7 @@ const uz: Partial<Record<StringKey, string>> = {
   aboutLimitPro: "Standart modellarda amalda cheksiz, suiiste'moldan himoya doirasida",
   aboutLimitsNote:
     "Thinking/Pro toifadagi modellar barcha tariflarda cheklangan va har bir model alohida hisoblanadi. Luna cheksizligi faqat matnga tegishli va himoya qoidalari ostida — OpenAI bu limitlarni vaqt o'tishi bilan o'zgartiradi.",
-  aboutTokensTitle: "Kontekst va token hajmlari",
+  aboutTokensTitle: "ChatGPT konteksti va token hajmlari",
   aboutTokensIntro:
     "Model suhbatning qanchasini ko'ra olishi tarifning kontekst oynasiga bog'liq (~4 belgi = 1 token, 2026-yil avgust holatiga):",
   aboutTokensFree: "kontekst oynasi ≈16K token",

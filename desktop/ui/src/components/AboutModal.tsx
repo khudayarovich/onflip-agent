@@ -4,6 +4,7 @@ import { Modal } from "./common";
 import { api } from "../api";
 import { useT } from "../i18n";
 import logo from "../assets/logo.svg";
+import { ChatGptMark, DeepSeekMark } from "./icons";
 
 type CheckState =
   | { state: "idle" }
@@ -11,8 +12,8 @@ type CheckState =
   | { state: "done"; latest?: string; url: string; available: boolean; error?: string };
 
 /**
- * The About page: what OnFlip is, why it costs nothing beyond the ChatGPT
- * plan the user already has, and who made it.
+ * The About page: what OnFlip is, why it costs nothing beyond the chat
+ * account the user already has, and who made it.
  *
  * It is also where the two questions asked of a desktop app that has gone
  * wrong get answered — am I on the current version, and what do I put in the
@@ -105,6 +106,27 @@ export function AboutModal({
       <div className="about-section">
         <h3>{t("aboutIdeaTitle")}</h3>
         <p>{t("aboutIdea")}</p>
+      </div>
+
+      <div className="about-section">
+        <h3>{t("aboutServicesTitle")}</h3>
+        <p>{t("aboutServicesIntro")}</p>
+        <div className="about-services">
+          <div className="service-row">
+            <ChatGptMark size={18} />
+            <div>
+              <div className="service-name">ChatGPT</div>
+              <div className="service-text">{t("aboutServiceChatGpt")}</div>
+            </div>
+          </div>
+          <div className="service-row">
+            <DeepSeekMark size={18} />
+            <div>
+              <div className="service-name">DeepSeek</div>
+              <div className="service-text">{t("aboutServiceDeepSeek")}</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <div className="about-section">
