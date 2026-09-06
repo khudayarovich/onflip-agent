@@ -156,10 +156,15 @@ const POLL_MS = 1_200;
 
 export async function sendTurn(
   text: string,
-  opts: OpenOptions & { timeoutMs?: number } = {}
+  opts: OpenOptions & { timeoutMs?: number; signal?: AbortSignal } = {}
 ): Promise<SendResult> {
   const started = Date.now();
   let page = await chatPage(opts);
+  if (pendingNewChat) {
+    pendingNewChat = false;
+    await page.goto(DEEPSEEK_CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await page.waitForTimeout(2_000);
+  }
   const before = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
 
   await page.click(COMPOSER);
@@ -219,7 +224,36 @@ export async function sendTurn(
     }
   }
   if (last === null) throw new Error("DeepSeek did not answer before the deadline.");
+  noteConversation(page.url());
   const ms = Date.now() - started;
   logger.info("deepseek", "turn answered", { chars: last.length, ms });
   return { reply: last, ms };
+}
+
+/**
+ * The conversation the driver is in, if any.
+ *
+ * DeepSeek puts the id in the path once a chat has a first message; a fresh
+ * one sits at the root. The transport reads this to know whether the thread
+ * it has been appending to still exists — if it does not, the whole
+ * transcript has to be replayed.
+ */
+let conversationId: string | null = null;
+
+export function currentConversationId(): string | null {
+  return conversationId;
+}
+
+/** Abandon the current thread; the next send starts a new one. */
+export function newChat(): void {
+  conversationId = null;
+  pendingNewChat = true;
+}
+
+let pendingNewChat = false;
+
+/** Note the conversation from the page's URL, e.g. /a/chat/s/<id>. */
+function noteConversation(url: string): void {
+  const m = /\/a\/chat\/s\/([0-9a-f-]{8,})/i.exec(url) || /\/chat\/s\/([0-9a-f-]{8,})/i.exec(url);
+  conversationId = m ? m[1] : conversationId;
 }

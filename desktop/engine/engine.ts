@@ -24,7 +24,9 @@ import {
 import { resolveAuth, ResolvedAuth } from "onflip/dist/auth/resolve";
 import { spawnExtractToken, takeExtractError, lastBrowserFindings } from "onflip/dist/auth/extract";
 import { fetchAccessToken } from "onflip/dist/auth/access";
-import { chooseTransport, Transport } from "onflip/dist/chatgpt/transport";
+// Through the provider seam: one `if` decides which service's transport is
+// built, and ChatGPT's branch is the same call it has always been.
+import { chooseTransport, Transport } from "onflip/dist/providers/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import {
   compactionBudget,
