@@ -161,8 +161,13 @@ function ProviderBadge(): React.ReactElement | null {
   return (
     <span className="brand-provider" title={`OnFlip is driving ${provider.label}`}>
       <span className="brand-x">×</span>
-      <Mark size={14} />
-      {provider.label}
+      {/* The mark and its name are one thing and sit closer together than
+          either sits to the ×, which is what makes the pairing read as
+          "OnFlip × DeepSeek" rather than three separate items. */}
+      <span className="brand-service">
+        <Mark size={14} />
+        {provider.label}
+      </span>
     </span>
   );
 }

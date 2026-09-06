@@ -3875,26 +3875,36 @@ a:hover {
  * Lighter than the app's own name on purpose: OnFlip is the product and the
  * service is what it happens to be driving, so the pairing reads as one
  * phrase with the emphasis in the right half of it.
+ *
+ * The × is spaced evenly. Its left gap comes from `.brand`, so the badge
+ * matches that value rather than adding a margin on top of it — which is what
+ * made the two sides 16px and 6px. The mark and its name then sit closer to
+ * each other than either does to the ×, so the eye groups them as one term.
  */
 .titlebar .brand-provider {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  margin-left: 8px;
+  /* Matches `.brand`'s own gap, so both sides of the × are equal. */
+  gap: 8px;
   color: var(--text-secondary);
   font-weight: 500;
   -webkit-app-region: drag;
 }
-/* The marks are the brands' own colours, so they are not dimmed like the
-   monochrome icons elsewhere. The ChatGPT mark is a full-bleed tile; a small
-   radius keeps it from reading as a hard square beside the round OnFlip mark. */
+.titlebar .brand-service {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+/* Not dimmed like the monochrome icons elsewhere: these are the brands' own
+   artwork and the colour is the point. Each already rounds its own corners,
+   so no radius is applied here — clipping supplied artwork is how a logo ends
+   up subtly wrong. */
 .titlebar .brand-provider svg {
-  border-radius: 3px;
   flex-shrink: 0;
 }
 .titlebar .brand-x {
   color: var(--text-muted);
-  font-size: 11px;
-  /* Optically centred against the two names either side of it. */
-  transform: translateY(0.5px);
+  font-size: 14px;
+  line-height: 1;
+  font-weight: 400;
 }
