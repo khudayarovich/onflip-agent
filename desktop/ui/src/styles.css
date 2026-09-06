@@ -3885,8 +3885,12 @@ a:hover {
   font-weight: 500;
   -webkit-app-region: drag;
 }
+/* The marks are the brands' own colours, so they are not dimmed like the
+   monochrome icons elsewhere. The ChatGPT mark is a full-bleed tile; a small
+   radius keeps it from reading as a hard square beside the round OnFlip mark. */
 .titlebar .brand-provider svg {
-  opacity: 0.85;
+  border-radius: 3px;
+  flex-shrink: 0;
 }
 .titlebar .brand-x {
   color: var(--text-muted);

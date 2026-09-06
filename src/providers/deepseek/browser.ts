@@ -295,3 +295,67 @@ export async function checkSelectors(): Promise<{
     };
   }
 }
+
+/**
+ * DeepSeek's reasoning switch.
+ *
+ * Not levels — one toggle beside the composer, labelled "Deep thinking" in
+ * whatever language the account is set to. So OnFlip's four levels collapse
+ * to two here, and `wantsDeepThink` decides which side of the line a level
+ * falls on.
+ *
+ * Found by `aria-pressed` rather than by class. Everything else on that page
+ * is hashed — `f79352dc`, `_6dbc175` — and will change on their next deploy,
+ * but the toggle carries a real ARIA state, which is both how its current
+ * position is read and the only durable handle on it. The label match is a
+ * fallback across the languages the UI ships in, and the first toggle is the
+ * last resort: DeepThink sits left of search.
+ */
+export function wantsDeepThink(level: string | undefined): boolean {
+  return level === "low" || level === "medium" || level === "high";
+}
+
+const DEEP_THINK_LABELS = "deepthink|deep think|глубок|深度思考|chuqur";
+
+export async function setDeepThink(on: boolean): Promise<boolean> {
+  try {
+    const page = await chatPage();
+    // The composer's toggles render about two seconds after the document, so
+    // a query the moment the page is ready finds nothing and every turn
+    // silently runs at whatever effort was left over. Waited for rather than
+    // slept past, so a fast machine is not punished and a slow one still works.
+    await page
+      .waitForSelector(".ds-toggle-button", { timeout: 15_000, state: "attached" })
+      .catch(() => null);
+    const script = (want: boolean) => `(() => {
+      const labels = /${DEEP_THINK_LABELS}/i;
+      const toggles = Array.from(document.querySelectorAll(".ds-toggle-button"));
+      const el = toggles.find((t) => labels.test(t.textContent || "")) || toggles[0];
+      if (!el) return { found: false, state: null };
+      const state = el.getAttribute("aria-pressed") === "true";
+      if (state !== ${want}) {
+        const r = el.getBoundingClientRect();
+        (document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) || el).click();
+      }
+      return { found: true, state };
+    })()`;
+    const before = (await page.evaluate(script(on))) as { found: boolean; state: boolean | null };
+    if (!before.found) {
+      logger.warn("deepseek", "the deep-thinking toggle was not on the page");
+      return false;
+    }
+    if (before.state === on) return true;
+    // Confirm rather than assume: a click that did not land would otherwise
+    // leave every turn running at the wrong effort, silently.
+    await page.waitForTimeout(600);
+    const after = (await page.evaluate(script(on))) as { state: boolean | null };
+    const ok = after.state === on;
+    logger.info("deepseek", "deep thinking", { wanted: on, applied: ok });
+    return ok;
+  } catch (e) {
+    logger.warn("deepseek", "could not set deep thinking", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return false;
+  }
+}

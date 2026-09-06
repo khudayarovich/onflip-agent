@@ -2,7 +2,7 @@ import { ChatMessage } from "../../types";
 import { buildTurnPrompt } from "../../agent/protocol";
 import { logger } from "../../log";
 import type { SendOptions, Transport, TransportReply } from "../../chatgpt/transport";
-import { newChat, sendTurn, currentConversationId } from "./browser";
+import { newChat, sendTurn, currentConversationId, setDeepThink, wantsDeepThink } from "./browser";
 
 /**
  * Talking to DeepSeek as the agent's transport.
@@ -32,6 +32,11 @@ export class DeepSeekTransport implements Transport {
       includeSystem: this.sentThrough === 0,
     });
     const body = [turn, opts.reminder].filter((s) => s && s.trim()).join("\n\n");
+
+    // The reasoning toggle is part of the page, not of the request, so it is
+    // set before each turn rather than carried with one — and a turn sent at
+    // the wrong effort cannot be taken back.
+    await setDeepThink(wantsDeepThink(opts.thinking));
 
     const { reply, ms } = await sendTurn(body, { signal: opts.signal });
     this.sentThrough = history.length;
