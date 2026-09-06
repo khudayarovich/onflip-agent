@@ -121,7 +121,7 @@ const en = {
   browserOpenExternal: "Open in your browser",
   signInBlockedTitle: "Google will not accept a sign-in from inside an app",
   signInBlockedBody:
-    "This is Google's own rule for embedded browsers, not a fault here. Sign in with an email and password instead, or open the page in your own browser and sign in there.",
+    "Google blocks this deliberately for browsers inside apps, so it is not something OnFlip can fix. Sign in here with an email and password — signing in elsewhere gives that browser the session, not this one. If the account was created with Google, use “Forgot password” on this page to set one.",
   signInBlockedAction: "Open in my browser",
   browserUrlPlaceholder: "Address, or something to search for",
   setIndicator: "Indicator",
@@ -452,7 +452,7 @@ const ru: Partial<Record<StringKey, string>> = {
   browserOpenExternal: "Открыть в своём браузере",
   signInBlockedTitle: "Google не принимает вход из встроенного браузера",
   signInBlockedBody:
-    "Это правило самого Google для встроенных браузеров, а не ошибка приложения. Войдите по адресу электронной почты и паролю или откройте страницу в своём браузере и войдите там.",
+    "Google намеренно блокирует вход из встроенных браузеров — это не ошибка OnFlip. Войдите здесь по почте и паролю: вход в другом браузере даёт сессию ему, а не этому окну. Если аккаунт создан через Google, задайте пароль по ссылке «Забыли пароль?» на этой странице.",
   signInBlockedAction: "Открыть в моём браузере",
   browserUrlPlaceholder: "Адрес или поисковый запрос",
   setIndicator: "Индикатор",
@@ -774,7 +774,7 @@ const uz: Partial<Record<StringKey, string>> = {
   browserOpenExternal: "O'z brauzeringizda ochish",
   signInBlockedTitle: "Google ilova ichidagi brauzerdan kirishni qabul qilmaydi",
   signInBlockedBody:
-    "Bu Google'ning o'z qoidasi, ilovadagi xato emas. Elektron pochta va parol bilan kiring yoki sahifani o'z brauzeringizda ochib, o'sha yerda kiring.",
+    "Google buni ilova ichidagi brauzerlar uchun ataylab to'sadi, bu OnFlip xatosi emas. Shu yerda pochta va parol bilan kiring — boshqa brauzerda kirish sessiyani o'sha brauzerga beradi, bunisiga emas. Agar hisob Google orqali yaratilgan bo'lsa, shu sahifadagi “Parolni unutdingizmi?” orqali parol o'rnating.",
   signInBlockedAction: "Brauzerimda ochish",
   browserUrlPlaceholder: "Manzil yoki qidiruv so'rovi",
   setIndicator: "Indikator",
