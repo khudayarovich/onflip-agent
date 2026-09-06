@@ -42,6 +42,15 @@ export interface ToolResult {
   display?: ToolDisplay;
   /** Set when the user declined the action, so the loop can react. */
   denied?: boolean;
+  /**
+   * The command hit its time limit and was killed.
+   *
+   * Reported separately from `error` because the loop treats it differently:
+   * a command that fails is information, a command that times out is two
+   * minutes gone, and two of those in one turn is a pattern worth naming
+   * before a third.
+   */
+  timedOut?: boolean;
 }
 
 /** Snapshot of a file taken before a tool mutated it, enabling /undo. */

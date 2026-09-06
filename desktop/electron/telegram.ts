@@ -436,6 +436,40 @@ export async function telegramSendFile(
 }
 
 /**
+ * The three dots in the chat header while a turn runs.
+ *
+ * Telegram shows a typing indicator for five seconds and then drops it, so it
+ * has to be renewed rather than switched on: this refreshes every four while
+ * the turn lasts, and stops the moment it ends. An agent turn is minutes, not
+ * seconds, and without it the chat looks like nothing is happening between
+ * the "Working…" card and the answer.
+ *
+ * Best-effort throughout. A failed indicator is not worth a line in the chat,
+ * and it must never be the reason a turn reports an error.
+ */
+let typingTimer: NodeJS.Timeout | null = null;
+
+function sendTyping(): void {
+  for (const chatId of targetChats()) {
+    void api("sendChatAction", { chat_id: chatId, action: "typing" }).catch(() => {});
+  }
+}
+
+function startTyping(): void {
+  stopTyping();
+  sendTyping();
+  typingTimer = setInterval(sendTyping, 4_000);
+  // The interval must not hold the process open by itself.
+  typingTimer.unref?.();
+}
+
+function stopTyping(): void {
+  if (!typingTimer) return;
+  clearInterval(typingTimer);
+  typingTimer = null;
+}
+
+/**
  * Files arriving the other way: sent to the bot, saved on this machine.
  *
  * The bot could hand a file over and could not take one. Sending a contract
@@ -998,9 +1032,11 @@ export async function telegramOnEvent(event: string, data: unknown): Promise<voi
     const turn = data as { state?: string; error?: string; interrupted?: boolean };
     if (turn.state === "start") {
       turnStartedAt = Date.now();
+      startTyping();
       const targets = await broadcastTargets("⚙️ <b>Working…</b>");
       activity = targets.length ? { targets, lines: [], lastEdit: 0 } : null;
     } else if (turn.state === "end") {
+      stopTyping();
       const took = turnStartedAt ? elapsedLine(Date.now() - turnStartedAt) : "";
       if (activity) {
         const done = turn.interrupted ? "⏹ <b>Stopped</b>" : "✅ <b>Done</b>";
@@ -1200,6 +1236,7 @@ function restart(): void {
 export function stopTelegram(): void {
   stopping = true;
   polling = false;
+  stopTyping();
   state = "off";
 }
 

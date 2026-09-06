@@ -58,7 +58,15 @@ const WINDOWS_UTF8_PRELUDE =
  * next file it writes, and the corruption becomes permanent.
  */
 export function looksMisdecoded(text: string): boolean {
-  return /вЂ|РІР|[ÐÃ][\u0080-\u00bf]/.test(text);
+  if (/вЂ|РІР|[ÐÃ][\u0080-\u00bf]/.test(text)) return true;
+  // The other direction, and the one that catches PowerShell's own parser
+  // errors: those are written before the command runs, so the prelude that
+  // switches the console to UTF-8 has not run yet and the text arrives in
+  // the OEM codepage. It reaches us as a drift of replacement characters,
+  // which left a model unable to read the syntax error it had just made —
+  // so it guessed, and guessed again, two minutes at a time.
+  const replacements = (text.match(/\uFFFD/g) ?? []).length;
+  return replacements >= 4 && replacements / Math.max(1, text.length) > 0.02;
 }
 
 export function shellHost(): ShellHost {
@@ -468,6 +476,7 @@ export const bashTool: ToolDefinition = {
     return {
       output: parts.join("\n"),
       error: failed,
+      timedOut: result.timedOut,
       title: summary,
       display: {
         kind: "text",

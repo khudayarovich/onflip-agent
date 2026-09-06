@@ -214,6 +214,8 @@ export async function runTurn(
   // Set when a compaction failed to shrink anything, so a transcript that is
   // over budget for some other reason cannot put the turn in a loop.
   let compactionExhausted = false;
+  /** Commands killed at their time limit this turn, however they were written. */
+  let timeouts = 0;
 
   for (let iteration = 1; iteration <= budget; iteration++) {
     if (opts.signal.aborted) return finish("interrupted", "", iteration - 1);
@@ -353,6 +355,15 @@ export async function runTurn(
           const attempts = (failedCalls.get(signature) ?? 0) + 1;
           failedCalls.set(signature, attempts);
           if (attempts > 1) output = `${output}\n\n${repeatedCallAdvice(call.tool, attempts)}`;
+        }
+        // Counted apart from the signature above, because the shape that runs
+        // away is not one command repeated — it is several variations on one
+        // approach, each costing the full limit. Seen live: a Word COM export
+        // to PDF tried four ways, two minutes each, on a machine where the
+        // first killed command had left Word running and holding the file.
+        if (result.timedOut) {
+          timeouts++;
+          if (timeouts > 1) output = `${output}\n\n${repeatedTimeoutAdvice(timeouts)}`;
         }
 
         resultBlocks.push(formatToolResult(call, output, Boolean(result.error)));
@@ -901,6 +912,26 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
  * already in the transcript and did not change anything, so this names the
  * loop itself and gives the tool's own way out.
  */
+/**
+ * What to say after the second command in a turn is killed at its time limit.
+ *
+ * Not "try again differently" — that is what the model does by itself, and it
+ * is how the turn was lost: four spellings of the same Word COM export, two
+ * minutes each. The useful thing to say is why the next one will hang too. A
+ * killed shell does not take its out-of-process servers with it, and on
+ * Windows an Office application opened over COM outlives the command that
+ * started it and goes on holding the document open — enough by itself to make
+ * every later attempt time out.
+ */
+function repeatedTimeoutAdvice(timeouts: number): string {
+  return [
+    `[OnFlip] ${timeouts} commands have now been killed at the time limit this turn.`,
+    "A timeout is not a failing command, it is one that never came back, and rewording the same idea will hit the same wall.",
+    "Whatever those commands started is very likely still running and still holding its files: killing a shell does not kill an out-of-process server it launched, and on Windows an Office application opened over COM keeps running after it.",
+    "Take a genuinely different route, or stop and tell the user what is blocking you. Do not spend another two minutes on a variation.",
+  ].join(" ");
+}
+
 function repeatedCallAdvice(tool: string, attempts: number): string {
   const lead =
     `[OnFlip] That is attempt ${attempts} at this exact ${tool} call, with the same arguments, ` +
