@@ -149,3 +149,33 @@ test("the platform hint names this machine", { skip: needsBuild }, () => {
 
   assert.equal(platformHint(), expected);
 });
+
+// --- what the brands may claim ---------------------------------------------
+
+test("the hints say Chromium, because the JavaScript brand list cannot be changed", { skip: needsBuild }, () => {
+  // The previous version claimed "Google Chrome" here, reasoning that the UA
+  // string names Chrome and the hints should agree. That was the wrong half
+  // to change: Electron exposes no way to alter navigator.userAgentData, so
+  // the header claimed Chrome while page JavaScript went on reporting
+  // Chromium — and reading both is exactly what a bot check does. Measured on
+  // a running build before this: header `"Google Chrome";v="130"…`, JS
+  // `[{Not?A_Brand 99},{Chromium 130}]`.
+  const { brandHeader } = load();
+  const header = brandHeader("130");
+
+  assert.doesNotMatch(header, /Google Chrome/);
+  assert.match(header, /"Chromium";v="130"/);
+  // The GREASE entry every Chrome sends; its absence is its own signal.
+  assert.match(header, /Not\?A_Brand/);
+});
+
+test("the version in the hints is the one in the user agent", { skip: needsBuild }, () => {
+  // A header naming one Chrome and a UA naming another is the same
+  // self-contradiction, in a smaller place.
+  const { brandHeader, chromeMajor, chromeUserAgent } = load();
+  const ua = chromeUserAgent(ELECTRON_UA);
+  const major = chromeMajor(ua);
+
+  assert.equal(major, "130");
+  assert.match(brandHeader(major), new RegExp(`"Chromium";v="${major}"`));
+});

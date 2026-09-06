@@ -1,4 +1,4 @@
-import { app, BrowserWindow, WebContentsView } from "electron";
+import { app, BrowserWindow, WebContentsView, type WebContents } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomBytes } from "node:crypto";
@@ -142,14 +142,77 @@ export function chromeUserAgent(electronUserAgent: string): string {
 /**
  * The client-hint header that goes with that user agent.
  *
- * Chromium builds `Sec-CH-UA` from its own brand list, which says "Chromium"
- * and never "Google Chrome", and there is no Electron API to change it. A
- * request whose UA says Chrome while its hints say Chromium-only is exactly
- * the inconsistency these checks look for, so the header is rewritten to
- * agree with the name the UA gives.
+ * Electron sends no `Sec-CH-UA` at all, and on a secure origin every Chrome
+ * since 89 sends one — an absence is as clear a signal as a wrong value, so
+ * the header is supplied.
+ *
+ * It says Chromium, not Google Chrome. Claiming Chrome here is what the
+ * previous version did, on the reasoning that the UA string names Chrome and
+ * the hints should agree with it. That was the wrong half to change: there is
+ * no Electron API for the *JavaScript* brand list, so `navigator.userAgentData`
+ * went on reporting Chromium while the header claimed Chrome, and a page that
+ * reads both — which is exactly what a bot check does — saw a browser
+ * contradicting itself. Measured on a running build: header
+ * `"Google Chrome";v="130"…`, JS `[{Not?A_Brand 99},{Chromium 130}]`.
+ *
+ * Matching Chromium is also simply honest, and it is what every
+ * Chromium-derived browser reports: a UA string containing `Chrome/130`
+ * beside hints that say Chromium is the normal, unremarkable combination.
  */
-function brandHeader(version: string): string {
-  return `"Google Chrome";v="${version}", "Chromium";v="${version}", "Not?A_Brand";v="99"`;
+export function brandHeader(version: string): string {
+  return `"Chromium";v="${version}", "Not?A_Brand";v="99"`;
+}
+
+/**
+ * Turn off the flag that says a machine is driving this.
+ *
+ * `navigator.webdriver` is the first thing an anti-bot check reads, and
+ * Chromium sets it whenever a remote debugging port is open — which, since
+ * the browser panel became a real browser view, is always: the port is how
+ * the agent drives the page at all. Measured on a running build, over raw CDP
+ * with no automation library attached, so it is the port and not the client.
+ *
+ * That made the whole feature look automated to every site that checks.
+ * Reported from the field twice: Cloudflare asking for verification, the page
+ * reloading, and asking again, with no way through — on pages a person was
+ * sitting in front of and driving by hand.
+ *
+ * The flag is not what makes the browser honest or dishonest; it describes
+ * how the window was opened, and this window is one a person opened and is
+ * looking at.
+ *
+ * Done by redefining the getter before any page script runs, because that is
+ * what works. `Emulation.setAutomationOverride { enabled: false }` is the
+ * obvious candidate and it is a lie: measured on this Chromium it returns
+ * success and changes nothing, before or after a reload — it can raise the
+ * flag but not lower one the command line has already set.
+ *
+ * On `Navigator.prototype` rather than on `navigator`, since an own property
+ * where the platform puts an inherited one is itself a tell, and returning
+ * false rather than deleting the getter, because in a real Chrome
+ * `navigator.webdriver` is `false` and `"webdriver" in navigator` is true.
+ *
+ * The script rides the debugger session, so the session stays attached for
+ * the life of the view; detaching would take it with it.
+ */
+async function presentAsHandDriven(contents: WebContents): Promise<void> {
+  try {
+    if (!contents.debugger.isAttached()) contents.debugger.attach("1.3");
+  } catch {
+    // Another client owns the target. The view still works; it just keeps
+    // the flag, which is the behaviour before this existed.
+    return;
+  }
+  try {
+    await contents.debugger.sendCommand("Page.enable");
+    await contents.debugger.sendCommand("Page.addScriptToEvaluateOnNewDocument", {
+      source:
+        "Object.defineProperty(Navigator.prototype, 'webdriver', " +
+        "{ get: () => false, configurable: true });",
+    });
+  } catch {
+    /* the target went away, or this build has no such command */
+  }
 }
 
 /** The major Chrome version out of a UA string, or "" when it has none. */
@@ -231,6 +294,11 @@ export function ensureView(win: BrowserWindow): WebContentsView | null {
       done({ requestHeaders: headers });
     });
   }
+
+  // Before anything is loaded, so the first real page already has it. Once
+  // only: the script is registered against the target and runs for every
+  // document after it, and re-registering per navigation would stack copies.
+  void presentAsHandDriven(view.webContents);
 
   view.setBackgroundColor("#00000000");
   win.contentView.addChildView(view);
