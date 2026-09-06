@@ -327,6 +327,8 @@ export function SettingsModal({
         )}
       </div>
 
+      <ProviderSection />
+
       <IndicatorSection />
 
       <TelegramSection />
@@ -485,6 +487,72 @@ function TelegramSection(): React.ReactElement {
  * Off by default: an always-on-top window that appears without being asked
  * for is the sort of thing people uninstall an app over.
  */
+/**
+ * Which chat service OnFlip drives.
+ *
+ * Switching restarts the app, and the wording says so before the click rather
+ * than after: a provider is a different signed-in account, a different browser
+ * profile and a different set of chats, and the engine is holding a live
+ * conversation on the current one. Restarting is how that is let go of
+ * cleanly.
+ *
+ * It also says the chats are separate, because that is the part people
+ * otherwise discover by losing track of a conversation. Nothing moves between
+ * providers — a thread lives in the service's own account, and there is
+ * nothing to carry across.
+ */
+function ProviderSection(): React.ReactElement | null {
+  const t = useT();
+  const [state, setState] = React.useState<{
+    id: string;
+    label: string;
+    all: { id: string; label: string }[];
+  } | null>(null);
+  const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => {
+    void window.onflip.providerGet?.().then(setState).catch(() => setState(null));
+  }, []);
+
+  // Older main processes have no such handler; showing nothing is better than
+  // showing a control that cannot work.
+  if (!state || !window.onflip.providerSet) return null;
+
+  const choose = (id: string) => {
+    if (busy || id === state.id) return;
+    setBusy(true);
+    void window.onflip.providerSet?.(id).catch(() => setBusy(false));
+  };
+
+  return (
+    <div className="settings-section">
+      <h3>{t("setProvider")}</h3>
+      <div className="setting-row">
+        <div className="info">
+          <div className="name">{t("setProviderName")}</div>
+          <div className="desc">{t("setProviderDesc")}</div>
+        </div>
+        <div className="segmented">
+          {state.all.map((p) => (
+            <button
+              key={p.id}
+              className={state.id === p.id ? "on" : ""}
+              disabled={busy}
+              onClick={() => choose(p.id)}
+            >
+              <span className="radio-mark">
+                <RadioOn size={13} />
+              </span>{" "}
+              {p.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {busy && <p className="modal-note">{t("setProviderSwitching")}</p>}
+    </div>
+  );
+}
+
 function IndicatorSection(): React.ReactElement {
   const t = useT();
   const [info, setInfo] = useState<{ enabled: boolean; size: number } | null>(null);

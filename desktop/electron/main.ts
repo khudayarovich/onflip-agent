@@ -66,6 +66,13 @@ import {
   startIndicator,
   type IndicatorState,
 } from "./indicator";
+import {
+  activeProvider,
+  providerLabel,
+  isProviderId,
+  PROVIDER_IDS,
+} from "onflip/dist/providers/id";
+import { saveConfig } from "onflip/dist/config";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 
 /**
@@ -1279,6 +1286,36 @@ function registerIpc(): void {
   });
 
   // Keep native menus and dialogs in step with the renderer's theme.
+  /**
+   * Which service this run drives, and switching to another.
+   *
+   * A switch relaunches rather than reloads, and that is the honest shape of
+   * it: a provider is a different browser profile, a different signed-in
+   * account and a different set of chats, and the engine holds a live
+   * conversation on one of them. Restarting is how all of that is let go of
+   * cleanly, and it is what makes "your DeepSeek chats and your ChatGPT chats
+   * are separate" true rather than merely intended.
+   */
+  ipcMain.handle("provider-get", () => ({
+    id: activeProvider(),
+    label: providerLabel(),
+    all: PROVIDER_IDS.map((id) => ({ id, label: providerLabel(id) })),
+  }));
+
+  ipcMain.handle("provider-set", (_e, payload: { id?: string }) => {
+    const id = payload?.id;
+    if (!isProviderId(id)) return { ok: false, reason: "Unknown provider." };
+    if (id === activeProvider()) return { ok: false, reason: "Already on that provider." };
+    saveConfig({ provider: id });
+    // Relaunch after this call has returned, so the renderer is not waiting on
+    // a reply from a process that is exiting.
+    setTimeout(() => {
+      app.relaunch();
+      app.exit(0);
+    }, 250);
+    return { ok: true, id };
+  });
+
   ipcMain.handle("set-theme", (_e, payload: { theme: "dark" | "light" }) => {
     nativeTheme.themeSource = payload.theme;
     return true;

@@ -120,6 +120,10 @@ interface OnFlipBridge {
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
+  /** Which chat service this run drives, and the ones it could. */
+  providerGet?(): Promise<{ id: string; label: string; all: { id: string; label: string }[] }>;
+  /** Switch service. Relaunches the app; nothing after this resolves normally. */
+  providerSet?(id: string): Promise<{ ok: boolean; id?: string; reason?: string }>;
   signOut(): Promise<{ ok: boolean; reason?: string }>;
   winControl(action: "minimize" | "maximize" | "close" | "query"): Promise<{ maximized: boolean }>;
   onWinState(listener: (state: { maximized: boolean }) => void): () => void;

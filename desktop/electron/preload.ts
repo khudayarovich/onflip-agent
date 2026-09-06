@@ -122,6 +122,10 @@ export interface OnFlipBridge {
   setTheme(theme: "dark" | "light"): Promise<boolean>;
   setPrefs(prefs: { notifications?: boolean; language?: string }): Promise<boolean>;
   signIn(): Promise<{ ok: boolean; reason?: string }>;
+  /** Which chat service this run drives, and the ones it could. */
+  providerGet(): Promise<{ id: string; label: string; all: { id: string; label: string }[] }>;
+  /** Switch service. Relaunches the app; nothing after this resolves normally. */
+  providerSet(id: string): Promise<{ ok: boolean; id?: string; reason?: string }>;
   signOut(): Promise<{ ok: boolean; reason?: string }>;
   winControl(action: "minimize" | "maximize" | "close" | "query"): Promise<{ maximized: boolean }>;
   onWinState(listener: (state: { maximized: boolean }) => void): () => void;
@@ -215,6 +219,8 @@ const bridge: OnFlipBridge = {
   setTheme: (theme) => ipcRenderer.invoke("set-theme", { theme }),
   setPrefs: (prefs) => ipcRenderer.invoke("set-prefs", prefs),
   signIn: () => ipcRenderer.invoke("sign-in"),
+  providerGet: () => ipcRenderer.invoke("provider-get"),
+  providerSet: (id: string) => ipcRenderer.invoke("provider-set", { id }),
   signOut: () => ipcRenderer.invoke("sign-out"),
   winControl: (action) => ipcRenderer.invoke("win-control", { action }),
   startUpdate: () => ipcRenderer.invoke("start-update"),
