@@ -436,6 +436,33 @@ export function isSignInRefusal(url: string): boolean {
   );
 }
 
+/**
+ * Where "open in my browser" should actually go from a refusal page.
+ *
+ * Not the page itself. Google's refusal URL is a one-time thing full of
+ * request-bound tokens — `dsh`, `rart`, `epd`, a `continue` pointing at a
+ * consent step that has already been declined — and handing it to a fresh
+ * browser gets a bare "400. Произошла ошибка." Reported immediately, because
+ * that is exactly what the button did on its first use.
+ *
+ * What the user wants is the site they were signing in to, which Google
+ * helpfully names in `app_domain`. Landing there in a real browser puts them
+ * one click from the sign-in that will work. Falls back to the page's own
+ * origin, and then to nothing rather than to a URL known to fail.
+ */
+export function externalTarget(url: string): string {
+  if (!/^https?:\/\//i.test(url)) return "";
+  if (!isSignInRefusal(url)) return url;
+  try {
+    const parsed = new URL(url);
+    const app = parsed.searchParams.get("app_domain");
+    if (app && /^https?:\/\//i.test(app)) return app;
+    return parsed.origin;
+  } catch {
+    return "";
+  }
+}
+
 export function viewChrome(win: BrowserWindow): ViewChrome | null {
   const view = views.get(win);
   if (!view || view.webContents.isDestroyed()) return null;

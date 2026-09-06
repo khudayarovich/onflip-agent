@@ -206,3 +206,33 @@ test("Google's refusal pages are recognised, ordinary ones are not", { skip: nee
   assert.equal(isSignInRefusal("https://chat.deepseek.com/sign_in"), false);
   assert.equal(isSignInRefusal("https://example.com/"), false);
 });
+
+test("open-in-my-browser goes to the site, not the refusal page", { skip: needsBuild }, () => {
+  // The first version of this button handed Google's refusal URL straight to
+  // the real browser, which answered "400. Произошла ошибка." — the URL is
+  // one-time and full of request-bound tokens (dsh, rart, epd, a continue
+  // pointing at a consent step already declined). What the user wants is the
+  // site they were signing in to, which Google names in app_domain.
+  const { externalTarget } = load();
+  const refusal =
+    "https://accounts.google.com/v3/signin/rejected?access_type=offline" +
+    "&app_domain=https%3A%2F%2Fchat.deepseek.com&client_id=205977709770-x.apps.googleusercontent.com" +
+    "&dsh=S1948691910%3A1788705011209057&rart=ANgoxcf&flowName=GeneralOAuthFlow";
+
+  assert.equal(externalTarget(refusal), "https://chat.deepseek.com");
+});
+
+test("a refusal with no app_domain falls back to the origin, never to itself", { skip: needsBuild }, () => {
+  const { externalTarget } = load();
+  const bare = "https://accounts.google.com/v3/signin/rejected?dsh=S1%3A2";
+  assert.equal(externalTarget(bare), "https://accounts.google.com");
+});
+
+test("an ordinary page opens exactly as it is", { skip: needsBuild }, () => {
+  const { externalTarget } = load();
+  assert.equal(externalTarget("https://chat.deepseek.com/sign_in"), "https://chat.deepseek.com/sign_in");
+  // Nothing that is not http(s) is handed to the OS.
+  assert.equal(externalTarget("file:///C:/secret.txt"), "");
+  assert.equal(externalTarget("data:text/html,x"), "");
+  assert.equal(externalTarget(""), "");
+});

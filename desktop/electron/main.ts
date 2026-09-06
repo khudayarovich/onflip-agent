@@ -30,6 +30,7 @@ import {
   actOnView,
   navigateView,
   viewChrome,
+  externalTarget,
   watchViewChrome,
   type ViewAction,
 } from "./browser-view";
@@ -1008,7 +1009,9 @@ function registerIpc(): void {
    */
   ipcMain.handle("browser-view-external", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
-    const url = win ? (viewChrome(win)?.url ?? "") : "";
+    const showing = win ? (viewChrome(win)?.url ?? "") : "";
+    // A refusal page is not worth opening anywhere: see `externalTarget`.
+    const url = externalTarget(showing);
     if (!/^https?:\/\//i.test(url)) return false;
     void shell.openExternal(url);
     return true;
