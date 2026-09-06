@@ -597,6 +597,7 @@ async function handleIncomingFile(message: {
   const reply = await host!.call<{ queued?: boolean }>("send", {
     text: arrivalPrompt(caption, [saved]),
     attachments,
+    origin: "telegram",
   });
   if (reply?.queued) await say(chatId, "⏳ <i>Queued behind the turn already running.</i>");
 }
@@ -733,7 +734,13 @@ async function handleMessage(chatId: number, userId: number | undefined, text: s
 
   if (parsed.kind === "empty") return;
   if (parsed.kind === "prompt") {
-    const reply = await host!.call<{ queued?: boolean }>("send", { text: parsed.text });
+    // Marked as coming from here, which changes what a finished answer has
+    // to look like: a file goes to the chat, not to a path on a machine the
+    // person asking is not sitting at.
+    const reply = await host!.call<{ queued?: boolean }>("send", {
+      text: parsed.text,
+      origin: "telegram",
+    });
     if (reply?.queued) await say(chatId, "⏳ <i>Queued behind the turn already running.</i>");
     return;
   }

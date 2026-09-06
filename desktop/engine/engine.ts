@@ -254,8 +254,17 @@ export class Engine {
 
   private abort = new AbortController();
   private busy = false;
+  /** Where the running turn was asked from; absent means the desktop window. */
+  private turnOrigin: "telegram" | undefined;
   /** `auto` marks a turn OnFlip queued for itself, which stop may cancel. */
-  private queue: { id: string; text: string; attachments?: string[]; auto?: boolean }[] = [];
+  private queue: {
+    id: string;
+    text: string;
+    attachments?: string[];
+    auto?: boolean;
+    /** Where it was asked from; absent means the desktop window. */
+    origin?: "telegram";
+  }[] = [];
   private connected = false;
 
   /** Arguments of the call currently awaiting approval, for diff previews. */
@@ -929,17 +938,17 @@ export class Engine {
   /** This turn was aborted by the watchdog, not by the user pressing stop. */
   private stallRestart = false;
 
-  send(text: string, attachments?: string[]): { queued: boolean } {
+  send(text: string, attachments?: string[], origin?: "telegram"): { queued: boolean } {
     if (!this.connected) throw new Error("The engine is still connecting — try again in a moment.");
     this.autoResumes = 0;
     if (this.busy) {
       // A queued message keeps its own attachments: they belong to that
       // message, not to whichever turn happens to run next.
-      this.queue.push({ id: randomUUID(), text, attachments });
+      this.queue.push({ id: randomUUID(), text, attachments, origin });
       this.pushStatus();
       return { queued: true };
     }
-    void this.runOneTurn(text, attachments);
+    void this.runOneTurn(text, attachments, origin);
     return { queued: false };
   }
 
@@ -1139,7 +1148,15 @@ export class Engine {
     }
   }
 
-  private async runOneTurn(text: string, attachments?: string[]): Promise<void> {
+  private async runOneTurn(
+    text: string,
+    attachments?: string[],
+    origin?: "telegram"
+  ): Promise<void> {
+    // Read by `agentOptions` when the turn's reminder is built, and held for
+    // the turn rather than passed down: the loop asks for its options once
+    // per turn, and a queued turn from the phone must still read as one.
+    this.turnOrigin = origin;
     this.busy = true;
     this.abort = new AbortController();
     this.silence.start();
@@ -1357,7 +1374,7 @@ export class Engine {
         // Start synchronously through the point where runOneTurn installs its
         // new AbortController. A stop click can then never hit the old turn's
         // already-finished controller during the queue hand-off.
-        void this.runOneTurn(next.text, next.attachments);
+        void this.runOneTurn(next.text, next.attachments, next.origin);
       }
     }
   }
@@ -1468,6 +1485,7 @@ export class Engine {
       maxIterations: this.maxIterations,
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
       signal: this.abort.signal,
+      remote: this.turnOrigin === "telegram",
       compactAfterMessages: this.config.compactAfter ?? 60,
       // The ceiling here is the composer's, not the model's — OnFlip cannot
       // read the account's plan, so this is a local heuristic about what can
@@ -2333,7 +2351,7 @@ export class Engine {
       this.busy = next !== undefined;
       this.saveNow();
       this.pushStatus();
-      if (next !== undefined) void this.runOneTurn(next.text, next.attachments);
+      if (next !== undefined) void this.runOneTurn(next.text, next.attachments, next.origin);
     }
   }
 

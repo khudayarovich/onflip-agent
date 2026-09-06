@@ -96,6 +96,15 @@ export interface AgentOptions {
    * twenty short exchanges.
    */
   compactAfterChars?: number;
+  /**
+   * True when this turn was asked for from somewhere other than the machine.
+   *
+   * The agent's answer is shaped by where the person is. Asked from a phone
+   * to "send me the file", it saved the file and answered with its path —
+   * correct for someone at the keyboard, useless to someone who is not, and
+   * reported exactly that way.
+   */
+  remote?: boolean;
 }
 
 /** Why a turn stopped, for the log and for the stats over it. */
@@ -712,7 +721,8 @@ async function sendWithRetry(
       opts.shellEnabled,
       opts.tools.list.map((t) => t.name),
       listJobs(),
-      lastUserRequest(history, 200)
+      lastUserRequest(history, 200),
+      opts.remote
     ),
   };
 

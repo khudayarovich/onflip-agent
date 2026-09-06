@@ -85,7 +85,8 @@ peer.onRequest = async (method, rawParams) => {
     case "send":
       return engine.send(
         String(params.text ?? ""),
-        params.attachments as string[] | undefined
+        params.attachments as string[] | undefined,
+        params.origin === "telegram" ? "telegram" : undefined
       );
     case "interrupt":
       engine.interrupt();

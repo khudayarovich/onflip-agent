@@ -375,11 +375,34 @@ export function languageAnchor(request?: string | null): string {
   return `The user's latest message reads: "${sample}" — write your prose in that language, whatever language the rest of this conversation happens to be in. ${ruling}`;
 }
 
+/**
+ * The line that says the person asking is not at this computer.
+ *
+ * Reported from a real session: asked over Telegram to send a file, the agent
+ * saved it and answered with its path. That is the right answer for someone
+ * at the keyboard and no answer at all for someone holding a phone — they
+ * had to ask a second time, "send it to telegram", to get the file itself.
+ *
+ * So the turn carries where it came from. Nothing about the work changes;
+ * what changes is what counts as having delivered it.
+ */
+function remoteLine(tools: string[] | undefined): string {
+  const canSend = tools?.includes("send_file");
+  return [
+    "This request came from Telegram: the person asking is not at this computer and cannot open a path on it.",
+    canSend
+      ? "Anything you produce or are asked for goes to them with send_file — a document, an export, a screenshot, a log. Saving it and replying with its location is not delivering it."
+      : "You have no way to hand them a file, so say so plainly rather than answering with a path they cannot open.",
+    "Keep answers short enough to read on a phone.",
+  ].join(" ");
+}
+
 export function turnReminder(
   shellEnabled: boolean,
   tools?: string[],
   jobs?: JobSummary[],
-  request?: string | null
+  request?: string | null,
+  remote?: boolean
 ): string {
   // Naming them matters. Describing only the syntax leaves a model that is
   // used to native function calling concluding that no tools are attached to
@@ -400,6 +423,7 @@ export function turnReminder(
     // block for as long as prose alone was allowed to end one.
     "Every reply ends with a block. When the whole request is finished and verified, end with `tool: done` and `summary: |` holding your final answer; when only the user can decide what happens next, end with `tool: ask_user` and `question: |`. There is no third way to end a reply: prose with no block is an error and comes back to you.",
     "Never end a reply by announcing what you are about to do (\"I'm verifying the build now\", \"next I'll implement…\") — put the tool block for that step in the same reply. Never send done while an item on your task list is still open, or right after a failed tool call: fix the failure and take the next step.",
+    remote ? remoteLine(tools) : "",
     languageAnchor(request) ||
       "Write your prose in the language the user writes in. The onflip block itself never changes with the language: the fence, the `tool:` line, the tool names and the argument keys stay exactly as documented.",
     "Do not use your own python/analysis/browsing tools — they run on the wrong machine.",

@@ -190,3 +190,31 @@ test("the reminder carries the jobs, and drops them when the shell is off", () =
   assert.doesNotMatch(turnReminder(false, ["bash"], jobs), /job_2/);
   assert.doesNotMatch(turnReminder(true, ["bash"]), /Background jobs/);
 });
+
+// --- where the person asking actually is ------------------------------------
+
+test("a turn from Telegram says the person is not at the machine", () => {
+  // Reported from a real session: asked over Telegram to send a file, the
+  // agent saved it and answered with its path. Right for someone at the
+  // keyboard, useless to someone holding a phone — they had to ask twice.
+  const reminder = turnReminder(true, ["bash", "read", "send_file"], [], "send me the report", true);
+
+  assert.match(reminder, /came from Telegram/);
+  assert.match(reminder, /send_file/);
+  assert.match(reminder, /not delivering it/);
+});
+
+test("and when nothing can carry a file, it says that instead of naming a tool", () => {
+  const reminder = turnReminder(true, ["bash", "read"], [], "send me the report", true);
+
+  assert.match(reminder, /no way to hand them a file/);
+  assert.ok(!/goes to them with send_file/.test(reminder));
+});
+
+test("a turn from the desktop says nothing about Telegram at all", () => {
+  const reminder = turnReminder(true, ["bash", "send_file"], [], "send me the report", false);
+
+  assert.ok(!/came from Telegram/.test(reminder));
+  // The default reminder is otherwise unchanged.
+  assert.match(reminder, /OnFlip protocol reminder/);
+});

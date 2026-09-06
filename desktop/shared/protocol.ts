@@ -339,7 +339,23 @@ export interface ExportResult {
 /** Everything the renderer can ask of the engine, by method name. */
 export interface EngineMethods {
   init: { params: Record<string, never>; result: EngineStatus };
-  send: { params: { text: string; attachments?: string[] }; result: { queued: boolean } };
+  send: {
+    params: {
+      text: string;
+      attachments?: string[];
+      /**
+       * Where the request came from. Absent means the desktop window.
+       *
+       * It changes what a finished answer should look like: "send me the
+       * report" from the app means write the file and show it in the
+       * transcript, and the same words from a phone mean put the file in the
+       * chat, because a path on this machine is not something the person
+       * asking can open.
+       */
+      origin?: "telegram";
+    };
+    result: { queued: boolean };
+  };
   /** Take one message back out of the queue; its text comes back to be edited. */
   unqueue: {
     params: { id: string };
