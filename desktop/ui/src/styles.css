@@ -3908,3 +3908,26 @@ a:hover {
   line-height: 1;
   font-weight: 400;
 }
+
+/*
+ * A chip that is a switch, shown as on.
+ *
+ * Used where the control is a toggle rather than a menu — DeepSeek's
+ * DeepThink, which is a single switch on the page OnFlip is driving. The
+ * accent is OnFlip's own rather than the service's: it has to read as "this
+ * setting is on" alongside the other chips, not as a fragment of another
+ * product's interface.
+ */
+.chip.chip-on {
+  color: var(--accent);
+  border-color: var(--accent-dim);
+  background: var(--accent-soft);
+}
+.chip.chip-on:hover {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+.chip.chip-on svg {
+  opacity: 1;
+}

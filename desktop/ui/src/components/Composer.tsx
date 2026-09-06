@@ -437,6 +437,10 @@ export function Composer({
   // The stored level is ignored on these plans, so showing it would be a
   // label describing something that is not happening.
   const thinkingShown = planRationed ? undefined : status?.thinking;
+  // On DeepSeek the reasoning control is a switch rather than a dial, so what
+  // the chip needs is one boolean: is DeepThink on. `high` is the on side,
+  // matching what the driver maps any explicit effort to.
+  const deepThinkOn = onDeepSeek && thinkingInfo(status?.thinking, true).level === "high";
 
   // How full the conversation is, against the size at which it compacts.
   const contextPct =
@@ -577,22 +581,43 @@ export function Composer({
               <ChevronDown size={12} />
             </span>
           </button>
-          <button
-            className={`chip${planRationed ? " chip-off" : ""}`}
-            data-tip={planRationed ? undefined : t("menuReasoning")}
-            aria-disabled={planRationed || undefined}
-            onClick={planRationed ? undefined : thinkingMenu.open}
-          >
-            <ThinkingIcon />
-            <span className="chip-label">{t(thinkingInfo(thinkingShown, onDeepSeek).label)}</span>
-            {planRationed ? (
-              planCard
-            ) : (
-              <span className="chev">
-                <ChevronDown size={12} />
-              </span>
-            )}
-          </button>
+          {onDeepSeek ? (
+            /*
+             * A switch, drawn as one.
+             *
+             * DeepSeek has a single DeepThink toggle beside its own composer,
+             * so a dropdown of two items was a menu pretending to be a
+             * choice — two clicks and a popover to do what one click does on
+             * the page it is driving. This is the same control: on when it is
+             * on, and one click either way.
+             */
+            <button
+              className={`chip${deepThinkOn ? " chip-on" : ""}`}
+              data-tip={t(deepThinkOn ? "thinkDsDeepHint" : "thinkDsOffHint")}
+              aria-pressed={deepThinkOn}
+              onClick={() => onSetThinking(deepThinkOn ? "off" : "high")}
+            >
+              <ThinkingIcon />
+              <span className="chip-label">{t("thinkDsDeep")}</span>
+            </button>
+          ) : (
+            <button
+              className={`chip${planRationed ? " chip-off" : ""}`}
+              data-tip={planRationed ? undefined : t("menuReasoning")}
+              aria-disabled={planRationed || undefined}
+              onClick={planRationed ? undefined : thinkingMenu.open}
+            >
+              <ThinkingIcon />
+              <span className="chip-label">{t(thinkingInfo(thinkingShown, onDeepSeek).label)}</span>
+              {planRationed ? (
+                planCard
+              ) : (
+                <span className="chev">
+                  <ChevronDown size={12} />
+                </span>
+              )}
+            </button>
+          )}
           <button
             className="chip"
             data-tip={t(approvalInfo(status?.approvalMode).hint)}
