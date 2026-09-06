@@ -257,3 +257,41 @@ function noteConversation(url: string): void {
   const m = /\/a\/chat\/s\/([0-9a-f-]{8,})/i.exec(url) || /\/chat\/s\/([0-9a-f-]{8,})/i.exec(url);
   conversationId = m ? m[1] : conversationId;
 }
+
+/**
+ * Are the two selectors this driver depends on still on the page?
+ *
+ * Small on purpose. ChatGPT's driver reads a dozen things from its DOM and
+ * needs a census; this one needs a composer to type into and a node to read
+ * the answer out of, and if either has moved, nothing else matters.
+ */
+export async function checkSelectors(): Promise<{
+  ok: boolean;
+  matches: Record<string, number>;
+  detail: string;
+}> {
+  try {
+    const page = await chatPage();
+    const matches = (await page.evaluate(
+      `({
+        composer: document.querySelectorAll("textarea").length,
+        assistant: document.querySelectorAll(".ds-markdown.ds-assistant-message-main-content").length,
+        codeBlock: document.querySelectorAll(".md-code-block").length,
+      })`
+    )) as Record<string, number>;
+    const ok = matches.composer > 0;
+    return {
+      ok,
+      matches,
+      detail: ok
+        ? "DeepSeek's composer is on the page."
+        : "DeepSeek's composer was not found — the page may have changed, or the profile may be signed out.",
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      matches: {},
+      detail: `Could not reach DeepSeek: ${e instanceof Error ? e.message : String(e)}`,
+    };
+  }
+}

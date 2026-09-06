@@ -1,21 +1,228 @@
+import type { SessionCookie } from "../auth/access";
+import * as chatgpt from "../chatgpt/browser-client";
+import * as ds from "./deepseek/browser";
+import * as dsSignIn from "./deepseek/signin";
+import { deepseekProfileDir } from "./deepseek/session";
+import { activeProvider } from "./id";
+
 /**
  * The seam a provider plugs into.
  *
- * Everything that drives a chat service goes through here, so that the engine
- * names a provider rather than naming ChatGPT. Today there is one
- * implementation and this file is a straight re-export of it: the ChatGPT
- * driver is not moved, wrapped or edited, and `git diff src/chatgpt/**` is
- * empty for the commit that introduces this.
+ * Every call the engine makes to "the chat service" lands here and is routed
+ * by `activeProvider()`. ChatGPT's side of each route is the same function it
+ * has always been, called with the same arguments — the driver is not moved,
+ * wrapped or edited, and `git diff src/chatgpt/**` has stayed empty across
+ * every phase of this work.
  *
- * That is the point of doing it in this order. The seam is the part that
- * touches the working provider, so it lands on its own, provably changing
- * nothing, before any second implementation exists to blame.
+ * The interesting half is what DeepSeek does with the calls it has no answer
+ * for. ChatGPT has Projects, plans, uploads and image replies; DeepSeek has
+ * none of them, and the engine asks about all of them on ordinary paths — the
+ * status payload alone reaches for the plan and the project list. Throwing
+ * would turn "this service has no projects" into a broken session, so each
+ * one answers with the shape that means nothing is there: an empty list, a
+ * null, a no-op.
  *
- * When DeepSeek arrives this becomes a dispatcher — each export choosing an
- * implementation from `activeProvider()` — and the ChatGPT side of that
- * dispatch is still the same functions, called the same way.
+ * Silence is the right answer for absence, but not for refusal. Where a call
+ * would quietly lose something a person asked for — attaching files being the
+ * one that matters — it declines out loud instead, through the warning
+ * channel the composer already uses.
  */
-export * from "../chatgpt/browser-client";
+
+const onDeepSeek = (): boolean => activeProvider() === "deepseek";
+
+// --- what DeepSeek genuinely has -------------------------------------------
+
+export function configureBrowser(opts: Parameters<typeof chatgpt.configureBrowser>[0]): void {
+  // Headed/profile options are ChatGPT's; DeepSeek's driver reads its own.
+  if (onDeepSeek()) return;
+  chatgpt.configureBrowser(opts);
+}
+
+export async function closeBrowser(): Promise<void> {
+  return onDeepSeek() ? ds.closeBrowser() : chatgpt.closeBrowser();
+}
+
+export async function clearBrowserProfile(): Promise<void> {
+  if (!onDeepSeek()) return chatgpt.clearBrowserProfile();
+  const { rm } = await import("node:fs/promises");
+  await ds.closeBrowser();
+  await rm(deepseekProfileDir(), { recursive: true, force: true });
+}
+
+export async function checkSignedIn(
+  cookies: SessionCookie[]
+): Promise<{ signedIn: boolean; reachable: boolean; detail: string }> {
+  if (!onDeepSeek()) return chatgpt.checkSignedIn(cookies);
+  const check = await ds.checkSignedIn();
+  return {
+    signedIn: check.signedIn,
+    // Getting far enough to read the profile means the page loaded.
+    reachable: true,
+    detail: check.signedIn
+      ? `Signed in to DeepSeek${check.account ? ` as ${check.account}` : ""}.`
+      : "No DeepSeek session in OnFlip's profile. Use Sign in to open a browser and log in.",
+  };
+}
+
+export async function signInWithRealBrowser(
+  onProgress?: (state: "waiting" | "verifying" | "downloading") => void
+): Promise<Awaited<ReturnType<typeof chatgpt.signInWithRealBrowser>>> {
+  if (!onDeepSeek()) return chatgpt.signInWithRealBrowser(onProgress);
+  const result = await dsSignIn.signInWithRealBrowser((state) => onProgress?.(state));
+  // The shape ChatGPT's returns, minus the browser record it reports; the
+  // caller only ever reads `ok` and `reason` from it.
+  return { ok: result.ok, reason: result.reason };
+}
+
+export function finishRealBrowserSignIn(): boolean {
+  if (!onDeepSeek()) return chatgpt.finishRealBrowserSignIn();
+  if (!dsSignIn.signInRunning()) return false;
+  dsSignIn.finishSignIn();
+  return true;
+}
+
+export function cancelRealBrowserSignIn(): boolean {
+  if (!onDeepSeek()) return chatgpt.cancelRealBrowserSignIn();
+  if (!dsSignIn.signInRunning()) return false;
+  dsSignIn.cancelSignIn();
+  return true;
+}
+
+export function currentConversationId(): string | null {
+  return onDeepSeek() ? ds.currentConversationId() : chatgpt.currentConversationId();
+}
+
+// --- what DeepSeek does not have -------------------------------------------
+
+/** Projects are ChatGPT's; DeepSeek has no equivalent to report. */
+export async function listProjects(cookies: SessionCookie[]): Promise<chatgpt.RemoteProject[]> {
+  return onDeepSeek() ? [] : chatgpt.listProjects(cookies);
+}
+
+export async function createProject(
+  cookies: SessionCookie[],
+  name: string
+): Promise<chatgpt.RemoteProject> {
+  if (onDeepSeek()) throw new Error("DeepSeek has no projects. Use a folder on this machine instead.");
+  return chatgpt.createProject(cookies, name);
+}
+
+export function setActiveProject(project: chatgpt.RemoteProject | null): void {
+  if (onDeepSeek()) return;
+  chatgpt.setActiveProject(project);
+}
+
+export async function listProjectConversations(
+  cookies: SessionCookie[],
+  projectId: string,
+  limit?: number
+): Promise<chatgpt.RemoteConversation[]> {
+  return onDeepSeek() ? [] : chatgpt.listProjectConversations(cookies, projectId, limit);
+}
+
+export async function sweepConversationsIntoProject(ids: string[]): Promise<void> {
+  if (onDeepSeek()) return;
+  return chatgpt.sweepConversationsIntoProject(ids);
+}
+
+export function takeProjectWarning(): string | null {
+  return onDeepSeek() ? null : chatgpt.takeProjectWarning();
+}
+
+/**
+ * Plans are a ChatGPT idea, and answering null is the honest shape.
+ *
+ * It also matters more than it looks: the compaction budget is sized from the
+ * plan, and `compactionBudget` already treats an unknown plan as "use the
+ * composer ceiling" — which is exactly right here, since DeepSeek's limit is
+ * what its composer will take.
+ */
+export async function fetchAccountPlan(cookies: SessionCookie[]): Promise<string | null> {
+  return onDeepSeek() ? null : chatgpt.fetchAccountPlan(cookies);
+}
+
+/** Conversation listing is ChatGPT's sidebar; DeepSeek's is not read yet. */
+export async function listConversations(
+  cookies: SessionCookie[],
+  limit?: number
+): Promise<chatgpt.RemoteConversation[]> {
+  return onDeepSeek() ? [] : chatgpt.listConversations(cookies, limit);
+}
+
+export async function openConversation(
+  cookies: SessionCookie[],
+  id: string
+): Promise<chatgpt.RemoteMessage[]> {
+  if (onDeepSeek()) throw new Error("Opening an existing DeepSeek conversation is not supported yet.");
+  return chatgpt.openConversation(cookies, id);
+}
+
+export function openedConversationIds(): string[] {
+  return onDeepSeek() ? [] : chatgpt.openedConversationIds();
+}
+
+export async function deleteConversations(
+  cookies: SessionCookie[],
+  ids: string[]
+): Promise<{ deleted: string[]; failed: string[] }> {
+  // Nothing was opened remotely, so there is nothing of OnFlip's to remove.
+  return onDeepSeek() ? { deleted: [], failed: [] } : chatgpt.deleteConversations(cookies, ids);
+}
+
+export async function pageSessionUser(
+  cookies: SessionCookie[]
+): Promise<{ name?: string; email?: string } | null> {
+  if (!onDeepSeek()) return chatgpt.pageSessionUser(cookies);
+  const check = await ds.checkSignedIn();
+  return check.signedIn ? { name: check.account } : null;
+}
+
+export function takeReplyImages(): chatgpt.ReplyImage[] {
+  return onDeepSeek() ? [] : chatgpt.takeReplyImages();
+}
+
+/**
+ * Attachments, declined out loud.
+ *
+ * The only call here where silence would be wrong: a file the user attached
+ * and that never went anywhere is a thing they asked for and did not get.
+ * The composer warning is the channel the engine already reads for exactly
+ * this kind of "your send was not quite what you meant".
+ */
+let deepseekWarning: string | null = null;
+
+export function queueAttachments(paths: string[]): void {
+  if (!onDeepSeek()) return chatgpt.queueAttachments(paths);
+  if (paths.length) {
+    deepseekWarning =
+      "OnFlip cannot attach files on DeepSeek yet, so they were not sent. The agent was given their paths and can read them from disk.";
+  }
+}
+
+export function takeComposerWarning(): string | null {
+  if (!onDeepSeek()) return chatgpt.takeComposerWarning();
+  const warning = deepseekWarning;
+  deepseekWarning = null;
+  return warning;
+}
+
+/**
+ * The doctor's selector check.
+ *
+ * DeepSeek's driver depends on two selectors — the composer and the assistant
+ * message — so the check is real rather than a stub, just much smaller than
+ * ChatGPT's census.
+ */
+export async function checkSelectorsLive(
+  cookies: SessionCookie[]
+): Promise<{ ok: boolean; matches: Record<string, number>; detail: string }> {
+  if (!onDeepSeek()) return chatgpt.checkSelectorsLive(cookies);
+  return ds.checkSelectors();
+}
+
+// --- unchanged, and provider-agnostic --------------------------------------
+
+export { pickSignInBrowser, type RemoteProject, type RemoteConversation } from "../chatgpt/browser-client";
 export {
   activeProvider,
   providerStateDir,
