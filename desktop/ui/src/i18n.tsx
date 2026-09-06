@@ -31,7 +31,7 @@ const en = {
   newSessionTitle: "(new session)",
   deleteSession: "Delete session",
   deleteSessionConfirm:
-    "Delete this session? Its transcript and the ChatGPT conversations OnFlip created for it will be removed.",
+    "Delete this session? Its transcript will be removed, along with any chats OnFlip created for it.",
   settings: "Settings",
   msgs: "msgs",
   missing: "missing",
@@ -49,8 +49,8 @@ const en = {
   days7: "7 days",
   days30: "30 days",
   allTime: "All time",
-  usageNote: "Counted locally by OnFlip — ChatGPT does not expose account usage.",
-  usageNoteSince: "Counted locally by OnFlip since {date} — ChatGPT does not expose account usage.",
+  usageNote: "Counted locally by OnFlip — {service} does not expose account usage.",
+  usageNoteSince: "Counted locally by OnFlip since {date} — {service} does not expose account usage.",
   // empty state
   emptyTitle: "What are we building?",
   emptyDescProject:
@@ -281,7 +281,7 @@ const en = {
   setNotificationsDesc:
     "A system notification when a task finishes, needs your approval or asks a question while OnFlip is in the background.",
   setBrowser: "Automation browser",
-  setHeaded: "Show the ChatGPT browser window",
+  setHeaded: "Show the {service} browser window",
   setHeadedDesc: "Headed mode — useful when something goes wrong and you want to watch the page.",
   setHeadless: "Run the agent's own browser windowless",
   setHeadlessDesc: "The browser the browser_* tools drive.",
@@ -336,7 +336,7 @@ const en = {
   menuSignIn: "Sign in to {service}",
   menuSignOut: "Sign out",
   signOutConfirm:
-    "Sign out of ChatGPT? The stored session and OnFlip's browser profile are cleared, and you will need to sign in again to send anything.",
+    "Sign out of {service}? The stored session and OnFlip's browser profile are cleared, and you will need to sign in again to send anything.",
   skillsTitle: "Skill Hub",
   skillsHint:
     "Pick a skill — it lands in the input as an @skill tag; add details and send. In chat the tag shows as a link revealing the full skill. Typing @ in the input opens this list too.",
@@ -346,7 +346,7 @@ const en = {
   autoResumeNotice: "OnFlip carried on by itself.",
   setAutoResume: "Carry on after a failed turn",
   setAutoResumeHelp:
-    "When a ChatGPT conversation fails or goes silent mid-run, pick the work up in a new one. A stuck turn is named after two and a half minutes and restarted after seven. Three attempts, then it stops and says why.",
+    "When a conversation fails or goes silent mid-run, pick the work up in a new one. A stuck turn is named after two and a half minutes and restarted after seven. Three attempts, then it stops and says why.",
   updateTitle: "Update",
   updateAvailable: "OnFlip {version} is out — you have {current}.",
   updateGet: "Update",
@@ -384,7 +384,7 @@ const ru: Partial<Record<StringKey, string>> = {
   newSessionTitle: "(новая сессия)",
   deleteSession: "Удалить сессию",
   deleteSessionConfirm:
-    "Удалить эту сессию? Её история и созданные OnFlip чаты в ChatGPT тоже будут удалены.",
+    "Удалить эту сессию? Её история будет удалена вместе с чатами, которые OnFlip создал для неё.",
   settings: "Настройки",
   msgs: "сообщ.",
   missing: "не найдена",
@@ -401,8 +401,8 @@ const ru: Partial<Record<StringKey, string>> = {
   days7: "7 дней",
   days30: "30 дней",
   allTime: "Всего",
-  usageNote: "Подсчитано локально OnFlip — ChatGPT не раскрывает статистику аккаунта.",
-  usageNoteSince: "Подсчитано локально OnFlip с {date} — ChatGPT не раскрывает статистику аккаунта.",
+  usageNote: "Подсчитано локально OnFlip — {service} не раскрывает статистику аккаунта.",
+  usageNoteSince: "Подсчитано локально OnFlip с {date} — {service} не раскрывает статистику аккаунта.",
   emptyTitle: "Что будем создавать?",
   emptyDescProject:
     "Рабочая папка: {project}. Опишите изменение — OnFlip прочитает код, внесёт правки и запустит сборку, спрашивая перед рискованными действиями.",
@@ -623,7 +623,7 @@ const ru: Partial<Record<StringKey, string>> = {
   setNotificationsDesc:
     "Системное уведомление, когда задача завершена, нужно ваше разрешение или задан вопрос, пока OnFlip в фоне.",
   setBrowser: "Браузер автоматизации",
-  setHeaded: "Показывать окно браузера ChatGPT",
+  setHeaded: "Показывать окно браузера {service}",
   setHeadedDesc: "Полезно, когда что-то идёт не так и нужно видеть страницу.",
   setHeadless: "Браузер агента без окна",
   setHeadlessDesc: "Браузер, которым управляют инструменты browser_*.",
@@ -678,7 +678,7 @@ const ru: Partial<Record<StringKey, string>> = {
   menuSignIn: "Войти в {service}",
   menuSignOut: "Выйти",
   signOutConfirm:
-    "Выйти из ChatGPT? Сохранённая сессия и профиль браузера OnFlip будут удалены — чтобы отправлять сообщения, нужно будет войти снова.",
+    "Выйти из {service}? Сохранённая сессия и профиль браузера OnFlip будут удалены — чтобы отправлять сообщения, нужно будет войти снова.",
   skillsTitle: "Хаб навыков",
   skillsHint:
     "Выберите навык — он вставится в поле ввода как @skill-тег: добавьте детали и отправьте. В чате тег отображается ссылкой с полным текстом навыка. Символ @ в поле ввода тоже открывает этот список.",
@@ -724,7 +724,7 @@ const uz: Partial<Record<StringKey, string>> = {
   newSessionTitle: "(yangi sessiya)",
   deleteSession: "Sessiyani o'chirish",
   deleteSessionConfirm:
-    "Bu sessiya o'chirilsinmi? Uning tarixi va OnFlip yaratgan ChatGPT chatlari ham o'chiriladi.",
+    "Bu sessiya o'chirilsinmi? Uning tarixi va OnFlip u uchun yaratgan chatlar o'chiriladi.",
   settings: "Sozlamalar",
   msgs: "xabar",
   missing: "topilmadi",
@@ -741,8 +741,8 @@ const uz: Partial<Record<StringKey, string>> = {
   days7: "7 kun",
   days30: "30 kun",
   allTime: "Jami",
-  usageNote: "OnFlip tomonidan lokal hisoblangan — ChatGPT hisob statistikasini bermaydi.",
-  usageNoteSince: "{date} dan beri OnFlip lokal hisoblagan — ChatGPT hisob statistikasini bermaydi.",
+  usageNote: "OnFlip tomonidan lokal hisoblangan — {service} hisob statistikasini bermaydi.",
+  usageNoteSince: "{date} dan beri OnFlip lokal hisoblagan — {service} hisob statistikasini bermaydi.",
   emptyTitle: "Nima quramiz?",
   emptyDescProject:
     "{project} loyihasida ishlayapmiz. O'zgartirishni yozing — OnFlip kodni o'qiydi, tahrirlaydi va buildni ishga tushiradi, xavfli amallardan oldin so'raydi.",
@@ -963,7 +963,7 @@ const uz: Partial<Record<StringKey, string>> = {
   setNotificationsDesc:
     "Vazifa tugaganda, ruxsat kerak bo'lganda yoki savol berilganda, OnFlip fonda bo'lsa, tizim bildirishnomasi.",
   setBrowser: "Avtomatlashtirish brauzeri",
-  setHeaded: "ChatGPT brauzer oynasini ko'rsatish",
+  setHeaded: "{service} brauzer oynasini ko'rsatish",
   setHeadedDesc: "Biror narsa noto'g'ri ketganda sahifani kuzatish uchun foydali.",
   setHeadless: "Agent brauzerini oynasiz ishlatish",
   setHeadlessDesc: "browser_* vositalari boshqaradigan brauzer.",
@@ -1018,7 +1018,7 @@ const uz: Partial<Record<StringKey, string>> = {
   menuSignIn: "{service} ga kirish",
   menuSignOut: "Chiqish",
   signOutConfirm:
-    "ChatGPT dan chiqilsinmi? Saqlangan sessiya va OnFlip brauzer profili tozalanadi — xabar yuborish uchun qaytadan kirishingiz kerak bo'ladi.",
+    "{service} dan chiqilsinmi? Saqlangan sessiya va OnFlip brauzer profili tozalanadi — xabar yuborish uchun qaytadan kirishingiz kerak bo'ladi.",
   skillsTitle: "Ko'nikmalar markazi",
   skillsHint:
     "Ko'nikmani tanlang — u kiritish maydoniga @skill teg sifatida tushadi: tafsilot qo'shib yuboring. Chatda teg havola bo'lib, ko'nikmaning to'liq matnini ochadi. Maydonda @ yozish ham shu ro'yxatni ochadi.",

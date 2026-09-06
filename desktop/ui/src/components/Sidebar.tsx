@@ -526,8 +526,11 @@ function AccountBar({
             </div>
             <div className="usage-note">
               {usage && usage.since > 0
-                ? t("usageNoteSince", { date: new Date(usage.since).toLocaleDateString() })
-                : t("usageNote")}
+                ? t("usageNoteSince", {
+                    date: new Date(usage.since).toLocaleDateString(),
+                    service: providerName,
+                  })
+                : t("usageNote", { service: providerName })}
             </div>
 
             <div className="pop-divider" />

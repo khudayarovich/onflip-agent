@@ -34,6 +34,7 @@ import { SchedulesModal } from "./components/SchedulesModal";
 import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
 import { ChevronDown, CircleHalf } from "./components/icons";
+import { serviceLabel } from "../../shared/providers";
 
 type ModalName =
   | "settings"
@@ -988,7 +989,7 @@ export function App(): React.ReactElement {
         onOpenSchedules={() => setModal("schedules")}
         onSignOut={() =>
           setConfirm({
-            message: t("signOutConfirm"),
+            message: t("signOutConfirm", { service: serviceLabel(status?.provider) }),
             danger: true,
             action: () => {
               void window.onflip
