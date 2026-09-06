@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.9.0
+# OnFlip Desktop 0.9.1
 
-**Run it from your phone.** Send OnFlip a task from Telegram, approve what it wants to do from the bus, and read the answer without going near your desk. That is the big one — but this release also adds scheduled prompts, a status light that floats above every other window, a real toolbar on the built-in browser, and a Changes view that finally shows all of the diff.
+**The built-in browser no longer announces itself as a robot.** If Cloudflare kept asking you to verify, reloaded, and asked again with no way through — this is that bug. Everything else in [0.9.0](https://github.com/khudayarovich/onflip-agent/releases/tag/desktop-v0.9.0) is unchanged.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,56 +8,30 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.9.0.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.9.0/OnFlip-Setup-0.9.0.exe) | ~84 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.9.0-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.9.0/OnFlip-0.9.0-mac-arm64.dmg) | ~101 MB |
-| **macOS** · Intel | [OnFlip-0.9.0-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.9.0/OnFlip-0.9.0-mac-x64.dmg) | ~108 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.9.1.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.9.1/OnFlip-Setup-0.9.1.exe) | ~84 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.9.1-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.9.1/OnFlip-0.9.1-mac-arm64.dmg) | ~101 MB |
+| **macOS** · Intel | [OnFlip-0.9.1-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.9.1/OnFlip-0.9.1-mac-x64.dmg) | ~108 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
 
 **On 0.8.7 or later?** You should not need this page: the app offers the update itself.
 
-## OnFlip on Telegram
+## What was wrong
 
-Put a bot token and your Telegram user ID into **Settings → Telegram** and the app answers to your phone. Anything you would type into the composer, you can send to the bot.
+`navigator.webdriver` — the first thing any bot check reads — was **true** in the built-in browser.
 
-- **Approvals arrive as buttons.** The thing that actually made remote control work: a turn that stops for permission is no longer a turn that waits until you get home. Allow, allow-for-session or deny, from the phone.
-- **Questions arrive as buttons too.** When the agent asks you to choose between options, the options are the buttons — no retyping an answer to a question you are looking at.
-- **Screenshots come through** as pictures, not as a note saying a picture exists.
-- **Commands** for a new chat, opening a project folder, the model, the thinking level and the access level, plus `/status` for what it is doing right now.
-- **Replies are formatted**, not dumped — headings, code blocks and long answers split at sensible places rather than at the 4,096th character.
+Chromium sets that flag whenever a remote debugging port is open. Since 0.8.9 turned the browser panel into a real browser view, that port is always open, because it is how the agent drives the page at all. So the change that made the browser real is the same change that made every site think a machine was holding it. On a page a person had opened and was looking at.
 
-Only the IDs on your allow-list can talk to it, and the token is encrypted by the OS — DPAPI on Windows, the Keychain on macOS.
+0.9.0 tried to fix the symptom and went after the user agent instead, which was a real signal but the smaller one. Worse, it half-fixed it: `Sec-CH-UA` was rewritten to claim "Google Chrome" while `navigator.userAgentData` — which Electron gives no way to change — went on reporting Chromium. Reading both and comparing them is exactly what a bot check does, so the browser was caught contradicting itself.
 
-## Scheduled prompts
+## What changed
 
-A saved prompt, a cron expression and the project it runs in. It fires on time and lands in the chat as though you had typed it. Useful for the things you would otherwise remember to ask on Monday morning.
+- **The flag is down.** The obvious lever, `Emulation.setAutomationOverride`, reports success and does nothing — it can raise the flag but not lower one the command line has already set. So the getter is redefined before any page script runs, on `Navigator.prototype` rather than on `navigator`, returning `false` rather than vanishing, so that `"webdriver" in navigator` is still true the way it is in a real Chrome.
+- **The hints tell the truth.** `Sec-CH-UA` now says Chromium, matching what page JavaScript reports. A user agent containing `Chrome/130` beside Chromium hints is what every Chromium-derived browser sends; it is the contradiction that stood out, not the name.
 
-## A status light for the corner of your screen
+Measured on the page from the report, same machine, same build: **through in one navigation and under five seconds** with the flag down, against twenty-five seconds and two navigations with it up.
 
-A small rounded square that floats above every window, with a voice-assistant-style wave inside it:
-
-- **green** — idle, nothing running
-- **red** — working
-- **yellow** — stopped and waiting for *you*, an approval or a question
-
-The yellow is the one that earns it. Without a state for "blocked", a turn waiting on permission looks exactly like a finished one, which is precisely the moment glancing at a corner of the screen is worth anything. Size it, move it, or turn it off in **Settings → Indicator**.
-
-## Also new
-
-- **A toolbar on the built-in browser** — back, forward, reload, and the address bar you expect at the top of a browser.
-- **Copy buttons** on every message, and on every code block inside one.
-- **The Changes view shows the whole diff.** It used to stop at 600 lines and say "diff truncated…" with no way to reach the rest — because there was no rest to reach; it had never left the engine. Now the full diff is sent, rendered a page at a time as you scroll, with a search box at the top that finds a match in the twentieth file without you scrolling to it.
-- **The terminal looks like a terminal** — its colours are kept rather than flattened and mapped to the app's own palette, set in Ubuntu Mono where you have it and a considered fallback where you do not.
-- **Skills rewritten** to tell the agent *how* to work rather than only what the task is.
-
-## Fixed
-
-- **Cloudflare challenged page after page** in the built-in browser — the same verification over and over, on a browser a person was sitting in front of and driving by hand. Electron advertises itself twice in every request, once as the app and once as the runtime, and those are the two most conspicuous tokens a bot check can see. Everything else already looked like a real browser; it was the name badge.
-- **The window could be dragged narrower than what was open inside it**, leaving the terminal or the browser panel squeezed into nothing. It now stops at a width that fits what is showing.
-- **The composer chips no longer overflow** when a side panel takes the chat's width — the model, thinking and access buttons drop their labels and keep their icons.
-- **Sign-in says what to do, not just what failed.** Chrome 127 and later encrypt cookies so that only Chrome can read them, which is the point of that feature and not a fault any version of OnFlip can fix; the message said "cannot be decrypted" and left you looking for a fix that does not exist. It now points at the app's own sign-in window, which needs nothing set up. When Google refuses the window, the advice leads with **Try another way** — the step it rejects is usually a passkey, and that link walks straight past it.
-- **The Chrome extension sign-in is gone.** It never worked for anyone, and it could not have: the three handlers behind it were wired from the main process through preload and into the renderer's types, and nothing in the app ever called them. It shipped in every build until now.
-- **An empty session no longer shows an empty title** across the top of the window.
+**Honestly:** in that comparison the old behaviour did eventually get through, after 25 seconds. A site that hands you the click-the-checkbox challenge rather than the silent one may still be harder work — this removes the signal that provokes it, which is not the same as a promise about every site. If you still get stuck, please open an issue with the URL.
 
 ## Requirements
 
@@ -68,8 +42,4 @@ Windows 10/11, or macOS 13+. A ChatGPT account — the free plan is enough.
 **Windows:** the build is unsigned, so SmartScreen warns — **More info → Run anyway**.
 **macOS:** the app is ad-hoc signed, not notarised, so the first launch needs **right-click → Open → Open**.
 
-## Under the hood
-
-The Telegram bot polls; it opens no inbound port and needs no webhook, so nothing on your machine becomes reachable from the internet.
-
-326 automated tests run on every push, up from 207.
+328 automated tests run on every push, including two that keep the client hints from claiming a browser this is not.
