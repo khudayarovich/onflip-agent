@@ -174,6 +174,23 @@ const SILENCE_RESUME_MS = 420_000;
 const MAX_AUTO_RESUMES = 3;
 
 /**
+ * How long stop is given to land before the browser is closed to force it.
+ *
+ * Stopping works by aborting a signal, which only stops anything if something
+ * is watching it. Every loop in the drivers does — but a `page.evaluate` on a
+ * renderer whose JavaScript thread is blocked never returns at all, so the
+ * loop never comes back around to look, and the turn cannot be stopped by
+ * asking. Reported that way: a turn silent for nearly six minutes with stop
+ * doing nothing.
+ *
+ * Closing the browser makes every pending call reject, which is the one lever
+ * that does not depend on the page cooperating. Five seconds, because a stop
+ * that lands normally lands in about half of one — measured — so this only
+ * ever fires when the polite route has already failed.
+ */
+const FORCE_STOP_MS = 5_000;
+
+/**
  * The app's version, read from the package it ships in.
  *
  * It was a hand-written constant, so it still said 0.1.0 six releases later
@@ -266,9 +283,13 @@ export class Engine {
     canRestart: () => loadConfig().autoResume !== false,
     hasRestartsLeft: () => this.autoResumes < MAX_AUTO_RESUMES,
     onWarn: (idle) => {
-      const more = Math.max(1, Math.round((SILENCE_RESUME_MS - idle) / 60_000));
+      // An absolute time rather than "in about 4 more". The notice is written
+      // once and then sits in the transcript while the clock runs, so a
+      // countdown in it is wrong within a minute and reads as a broken
+      // promise by minute five — reported exactly that way.
+      const at = Math.round(SILENCE_RESUME_MS / 60_000);
       this.notice(
-        `Nothing has come back from ChatGPT for ${Math.round(idle / 60_000)} minutes. Still waiting — OnFlip restarts the turn by itself in about ${more} more.`
+        `Nothing has come back from ${providerLabel()} for ${Math.round(idle / 60_000)} minutes. Still waiting — if nothing arrives by ${at} minutes of silence, OnFlip restarts the turn by itself. Stop ends it now.`
       );
     },
     onRestart: (idle) => this.restartSilentTurn(idle),
@@ -1015,6 +1036,9 @@ export class Engine {
         cancelledResumes: auto,
       });
     }
+    // Whether or not this press was the one that aborted: the turn is still
+    // running, and stop has to end it even when nothing is watching.
+    if (this.busy) this.armForceStop();
     if (auto > 0) this.pushStatus();
   }
 
@@ -1041,6 +1065,28 @@ export class Engine {
     const [taken] = this.queue.splice(at, 1);
     this.pushStatus();
     return { text: taken.text, attachments: taken.attachments };
+  }
+
+  /** Set between a stop being pressed and the turn actually ending. */
+  private forceStop: NodeJS.Timeout | null = null;
+
+  private armForceStop(): void {
+    if (this.forceStop) return;
+    this.forceStop = setTimeout(() => {
+      this.forceStop = null;
+      if (!this.busy) return;
+      logger.warn("session", "stop did not land; closing the browser to end the turn");
+      this.notice(
+        "The page stopped responding, so OnFlip closed its browser to end the turn. The next message opens it again."
+      );
+      void closeBrowser().catch(() => {});
+    }, FORCE_STOP_MS);
+  }
+
+  private clearForceStop(): void {
+    if (!this.forceStop) return;
+    clearTimeout(this.forceStop);
+    this.forceStop = null;
   }
 
   private runningToolId: string | null = null;
@@ -1204,6 +1250,7 @@ export class Engine {
       if (resumable) this.queueAutoResume(message);
     } finally {
       this.silence.stop();
+      this.clearForceStop();
       const composerWarning = takeComposerWarning();
       if (composerWarning) this.notice(composerWarning);
 
