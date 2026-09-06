@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import { chromium, BrowserContext, Page } from "playwright";
 import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
+import { EXTRACT_REPLY as EXTRACT_REPLY_SCRIPT, toMarkdown } from "./extract";
 import {
   DEEPSEEK_CHAT_URL,
   TOKEN_KEY,
@@ -31,6 +32,9 @@ import {
  * which service is being driven. It belongs in a shared place, and will move
  * there once there is a second caller to prove the shape.
  */
+
+/** Where an assistant reply lives; user messages have no markdown node. */
+const ASSISTANT_SELECTOR = ".ds-markdown.ds-assistant-message-main-content";
 
 let context: BrowserContext | null = null;
 
@@ -123,4 +127,99 @@ export async function checkSignedIn(opts: OpenOptions = {}): Promise<SignedInChe
     });
     return { signedIn: false };
   }
+}
+
+/**
+ * Send a turn and wait for the answer.
+ *
+ * Completion is decided by the reply going quiet rather than by a stop
+ * button: DeepSeek's controls carry no aria-label and their class names are
+ * hashed, so a selector for the stop control is a selector that breaks on the
+ * next deploy. Text that has not changed for three consecutive polls is the
+ * signal, which costs a second or so at the end of every turn and does not
+ * depend on any class name at all.
+ *
+ * The composer is filled through the value setter and an input event, not by
+ * typing: a twenty-thousand-character system prompt typed key by key takes
+ * minutes, and this arrives in one go. Measured on the real composer, which
+ * accepted 20,936 characters without truncating.
+ */
+export interface SendResult {
+  reply: string;
+  /** How long the answer took to settle, for the log. */
+  ms: number;
+}
+
+const COMPOSER = "textarea";
+const SETTLE_POLLS = 3;
+const POLL_MS = 1_200;
+
+export async function sendTurn(
+  text: string,
+  opts: OpenOptions & { timeoutMs?: number } = {}
+): Promise<SendResult> {
+  const started = Date.now();
+  let page = await chatPage(opts);
+  const before = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
+
+  await page.click(COMPOSER);
+  // A string rather than a callback: this package is built without the DOM
+  // library, so nothing here may name `document`. The same reason the
+  // extractor is a script.
+  const fill = `(() => {
+    const el = document.querySelector(${JSON.stringify(COMPOSER)});
+    if (!el) return -1;
+    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+    setter.call(el, ${JSON.stringify(text)});
+    el.dispatchEvent(new Event("input", { bubbles: true }));
+    return el.value.length;
+  })()`;
+  const accepted = (await page.evaluate(fill)) as number;
+  if (accepted < 0) throw new Error("DeepSeek's composer was not on the page.");
+  if (accepted < text.length) {
+    logger.warn("deepseek", "the composer truncated the turn", {
+      sent: text.length,
+      accepted,
+    });
+  }
+  await page.waitForTimeout(300);
+  await page.keyboard.press("Enter");
+
+  const deadline = Date.now() + (opts.timeoutMs ?? 10 * 60_000);
+  let last: string | null = null;
+  let quiet = 0;
+  let recovered = false;
+  while (Date.now() < deadline) {
+    try {
+      await page.waitForTimeout(POLL_MS);
+      const count = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
+      if (count <= before) continue;
+      const now = await page.evaluate(EXTRACT_REPLY_SCRIPT).catch(() => null);
+      const text = now ? toMarkdown(now as never) : "";
+      if (!text) continue;
+      if (text === last) quiet++;
+      else quiet = 0;
+      last = text;
+      if (quiet >= SETTLE_POLLS) break;
+    } catch (e) {
+      // A renderer that died mid-answer, seen once on a long conversation.
+      // The turn was already sent, so this reopens and reads rather than
+      // sending again — a resend would ask the model the same thing twice and
+      // run whatever it answered twice with it.
+      const message = e instanceof Error ? e.message : String(e);
+      if (recovered || !/crash|Target closed|Session closed|has been closed/i.test(message)) throw e;
+      recovered = true;
+      logger.warn("deepseek", "the page died mid-answer; reopening to read the reply", {
+        error: message.slice(0, 120),
+      });
+      await closeBrowser();
+      page = await chatPage(opts);
+      await page.waitForTimeout(4_000);
+      quiet = 0;
+    }
+  }
+  if (last === null) throw new Error("DeepSeek did not answer before the deadline.");
+  const ms = Date.now() - started;
+  logger.info("deepseek", "turn answered", { chars: last.length, ms });
+  return { reply: last, ms };
 }
