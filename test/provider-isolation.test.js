@@ -31,7 +31,7 @@ fs.mkdirSync(path.dirname(CONFIG), { recursive: true });
 const write = (obj) => fs.writeFileSync(CONFIG, JSON.stringify(obj, null, 2));
 const read = () => JSON.parse(fs.readFileSync(CONFIG, "utf8"));
 
-const { loadConfig, saveConfig } = require("../dist/config");
+const { loadConfig, saveConfig, clearConfigKeys } = require("../dist/config");
 const { allModels, defaultModel } = require("../dist/models");
 
 // What a real install looks like before any of this existed.
@@ -115,6 +115,86 @@ test("an app-wide setting saved on DeepSeek is seen by ChatGPT too", () => {
   const raw = read();
   assert.equal(raw.language, "en", "shared settings stay shared");
   assert.equal(raw.providers?.deepseek?.language, undefined, "and are not duplicated");
+});
+
+// --- a session filed under the wrong service --------------------------------
+
+test("ChatGPT's session is never written into another service's room", () => {
+  // Found on a real install: the whole ChatGPT session — token, access token,
+  // cookie name, account, discovered models — sitting inside
+  // `providers.deepseek`, because a ChatGPT code path wrote it while DeepSeek
+  // was the active service and the split filed it by who was running.
+  write({ ...EXISTING, provider: "deepseek" });
+  saveConfig({
+    sessionToken: "fresh-chatgpt-secret",
+    sessionCookieName: "__Secure-next-auth.session-token.0",
+    accountEmail: "me@example.com",
+    discoveredModels: [{ slug: "gpt-5-6", title: "GPT-5.6 Sol", description: "" }],
+  });
+  const raw = read();
+  assert.equal(raw.providers.deepseek.sessionToken, undefined, "not in DeepSeek's room");
+  assert.equal(raw.providers.deepseek.accountEmail, undefined);
+  assert.equal(raw.providers.deepseek.discoveredModels, undefined);
+  assert.equal(raw.sessionToken, "fresh-chatgpt-secret", "filed where ChatGPT reads it");
+});
+
+test("and one an older version already misfiled is not read back", () => {
+  // The symptom this caused: "connected" on an account never signed in to.
+  write({
+    ...EXISTING,
+    provider: "deepseek",
+    providers: { deepseek: { model: "deepseek-vision", sessionToken: "leaked", accountEmail: "me@example.com" } },
+  });
+  const c = loadConfig();
+  assert.equal(c.sessionToken, undefined, "a stray copy is still not DeepSeek's session");
+  assert.equal(c.accountEmail, undefined);
+  assert.equal(c.model, "deepseek-vision", "its own settings still come through");
+});
+
+test("and the next save cleans it out of the file", () => {
+  write({
+    ...EXISTING,
+    provider: "deepseek",
+    providers: { deepseek: { model: "deepseek-vision", sessionToken: "leaked" } },
+  });
+  saveConfig({ thinking: "off" });
+  assert.equal(read().providers.deepseek.sessionToken, undefined);
+});
+
+// --- clearing keys, which used to take the whole file with it ---------------
+
+test("signing out of DeepSeek leaves ChatGPT signed in", () => {
+  // `clearConfigKeys` wrote back what `loadConfig` returns — the two rooms
+  // merged, with `providers` stripped off. On DeepSeek that deleted every
+  // room in the file and left DeepSeek's own model and thinking sitting where
+  // ChatGPT reads them, alongside a ChatGPT session that had just been wiped.
+  write({ ...EXISTING, provider: "deepseek" });
+  saveConfig({ model: "deepseek-vision", thinking: "off" });
+  clearConfigKeys(["sessionToken", "accessToken", "accountEmail"]);
+
+  const raw = read();
+  assert.equal(raw.sessionToken, "chatgpt-secret", "ChatGPT's session survives");
+  assert.equal(raw.model, "gpt-5-6-mini", "and its model");
+  assert.ok(raw.providers?.deepseek, "DeepSeek's room is still there");
+  assert.equal(raw.providers.deepseek.model, "deepseek-vision");
+});
+
+test("signing out of ChatGPT clears ChatGPT and nothing else", () => {
+  write({ ...EXISTING, providers: { deepseek: { model: "deepseek-vision" } } });
+  clearConfigKeys(["sessionToken", "accessToken"]);
+
+  const raw = read();
+  assert.equal(raw.sessionToken, undefined, "the session is gone");
+  assert.equal(raw.model, "gpt-5-6-mini", "settings it was not asked to clear stay");
+  assert.equal(raw.providers.deepseek.model, "deepseek-vision", "the other room is untouched");
+});
+
+test("signing out of one service does not sign the other out", () => {
+  write({ ...EXISTING, provider: "deepseek" });
+  saveConfig({ signedOut: true });
+  const raw = read();
+  assert.equal(raw.providers.deepseek.signedOut, true);
+  assert.equal(raw.signedOut, undefined, "ChatGPT was not signed out");
 });
 
 // --- and the two symptoms that were reported --------------------------------

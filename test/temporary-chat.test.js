@@ -17,6 +17,17 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+
+// A home of its own, set before anything reads one. This test turns a setting
+// on and off, and without this it did that to the real ~/.onflip/config.json
+// — rewriting the config of whoever ran the suite, and leaving the setting
+// inverted for good if the run was interrupted between the two saves.
+const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-temp-chat-"));
+process.env.USERPROFILE = HOME;
+process.env.HOME = HOME;
 
 const { newChatUrl, temporaryChats } = require("../dist/chatgpt/browser-client");
 const { loadConfig, saveConfig } = require("../dist/config");

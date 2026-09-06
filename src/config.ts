@@ -219,20 +219,43 @@ export function isProviderId(value: unknown): value is ProviderId {
  * connected because ChatGPT's cookies are in hand. Reported on the first
  * switch, both of those, within a minute of each other.
  */
-const PROVIDER_SCOPED = [
+const PROVIDER_SETTINGS = [
   "model",
   "thinking",
+  "browserChannel",
+  "signedOut",
+] as const satisfies readonly (keyof OnFlipConfig)[];
+
+/**
+ * ChatGPT's account, which no other service can produce.
+ *
+ * A session token, an access token, the plan and the discovered model list
+ * come from one place: a signed-in ChatGPT. DeepSeek keeps its session in its
+ * browser profile's localStorage and writes none of these, so a copy of them
+ * inside `providers.deepseek` is always something misfiled — and it was, on
+ * this machine: the whole ChatGPT session, duplicated into DeepSeek's room by
+ * a ChatGPT code path that happened to run while DeepSeek was the active
+ * service. `saveConfig` files them by who they belong to rather than by who
+ * is running, and drops any that a previous version left in the wrong room.
+ *
+ * They stay in the hidden set either way: what DeepSeek must not see is the
+ * point of scoping, and that has not changed.
+ */
+const CHATGPT_ACCOUNT = [
   "planType",
   "discoveredModels",
   "sessionToken",
+  "sessionCookies",
   "sessionCookieName",
   "sessionDeviceId",
   "accessToken",
   "accessTokenExpiry",
   "accountName",
   "accountEmail",
-  "browserChannel",
 ] as const satisfies readonly (keyof OnFlipConfig)[];
+
+/** Everything another service must not read out of ChatGPT's top level. */
+const PROVIDER_SCOPED = [...PROVIDER_SETTINGS, ...CHATGPT_ACCOUNT] as const;
 
 /**
  * ChatGPT keeps the top level, everything else gets a room of its own.
@@ -342,6 +365,11 @@ export function loadConfig(): OnFlipConfig {
     const own = stored.providers?.[scope] ?? {};
     for (const key of PROVIDER_SCOPED) delete config[key];
     Object.assign(config, own);
+    // And not from its own room either. A copy of ChatGPT's session found
+    // there was misfiled by an earlier version, and reading it back is the
+    // reported symptom itself: DeepSeek announcing a connected account on a
+    // service that had never been signed in to.
+    for (const key of CHATGPT_ACCOUNT) delete config[key];
   }
 
   // `sandbox` used to mean "shell allowed". Keep old configs working.
@@ -391,22 +419,28 @@ function writeConfig(config: OnFlipConfig, action: string): void {
 
 export function saveConfig(patch: OnFlipConfig): void {
   // Load first: it is what decides whether the file may be written at all.
+  // `readRaw` cannot answer that — it swallows a parse failure and returns an
+  // empty object, and merging a patch into that empties the file.
+  loadConfig();
   const stored = readRaw();
   const scope = scopeOf(stored);
   if (scope === DEFAULT_PROVIDER) {
     writeConfig({ ...stored, ...patch }, "saving config");
     return;
   }
-  // Split the patch: what belongs to this service goes in its room, what
-  // belongs to the app stays at the top level where both services read it.
+  // Split the patch three ways: this service's own settings go in its room,
+  // ChatGPT's account goes to ChatGPT's room whoever is running, and the rest
+  // stays at the top level where both services read it.
   const scoped: OnFlipConfig = {};
   const shared: OnFlipConfig = {};
   for (const [key, value] of Object.entries(patch)) {
-    const target = (PROVIDER_SCOPED as readonly string[]).includes(key) ? scoped : shared;
+    const target = (PROVIDER_SETTINGS as readonly string[]).includes(key) ? scoped : shared;
     (target as Record<string, unknown>)[key] = value;
   }
   const providers = { ...(stored.providers ?? {}) };
-  providers[scope] = { ...(providers[scope] ?? {}), ...scoped };
+  const room: OnFlipConfig = { ...(providers[scope] ?? {}), ...scoped };
+  for (const key of CHATGPT_ACCOUNT) delete room[key];
+  providers[scope] = room;
   writeConfig({ ...stored, ...shared, providers }, "saving config");
 }
 
@@ -421,11 +455,28 @@ function readRaw(): OnFlipConfig & { providers?: Record<string, OnFlipConfig> } 
   return {};
 }
 
-/** Remove keys entirely rather than setting them to undefined. */
+/**
+ * Remove keys entirely rather than setting them to undefined.
+ *
+ * From the active service's room, and only from it. Written against the file
+ * rather than against `loadConfig()`, which returns the two rooms already
+ * merged into one and with `providers` stripped off: writing that back put
+ * DeepSeek's model and session where ChatGPT reads them and deleted every
+ * other room in the file. Signing out of one service would have taken the
+ * other's saved session with it.
+ */
 export function clearConfigKeys(keys: (keyof OnFlipConfig)[]): void {
-  const config = loadConfig();
-  for (const key of keys) delete config[key];
-  writeConfig(config, "clearing config keys");
+  loadConfig(); // for the refusal check on an unreadable file
+  const stored = readRaw();
+  const scope = scopeOf(stored);
+  if (scope === DEFAULT_PROVIDER) {
+    for (const key of keys) delete stored[key];
+  } else {
+    const room = { ...(stored.providers?.[scope] ?? {}) };
+    for (const key of keys) delete room[key];
+    stored.providers = { ...(stored.providers ?? {}), [scope]: room };
+  }
+  writeConfig(stored, "clearing config keys");
 }
 
 /**
