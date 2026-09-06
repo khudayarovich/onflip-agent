@@ -653,12 +653,26 @@ a:hover {
 }
 
 /*
- * 600px, measured rather than picked. The six buttons with their words on
- * need 433px, so they stay on one line down to about 530 — dropping the
- * labels at the first sign of pressure would hide them while 150px of slack
- * was still going spare. Between 660 and 600 the path ellipsizes instead,
- * which is what an ellipsis is for, and below 600 the labels go and the path
- * gets its full width back.
+ * Two rules, because there are two different ways to run out of room and
+ * neither one sees the other.
+ *
+ * The container query is for a side panel squeezing the chat column while the
+ * window stays wide. 600px measured rather than picked: the six buttons with
+ * their words need 433px and stay on one line down to about 530, so cutting
+ * at the first sign of pressure would hide them with 150px of slack still
+ * spare. Between roughly 660 and 600 the path ellipsizes instead, which is
+ * what an ellipsis is for.
+ *
+ * The media query is for the window itself being small, which the container
+ * query cannot express — and missing it left a whole layout unable to reach
+ * icon mode at all. With the sidebar hidden the strip is very nearly the
+ * window, so at the smallest window the app allows (760) the strip is still
+ * 720 wide: comfortably over the 600 line, labels never dropped, no way to
+ * get them to. Measured, after shipping the container query and believing it
+ * was done.
+ *
+ * 900px matches where the sidebar-shown case already collapses, so the strip
+ * behaves the same at a given window size whether or not the sidebar is out.
  */
 @container strip (max-width: 600px) {
   .context-strip .strip-label {
@@ -669,8 +683,19 @@ a:hover {
   }
 }
 
+@media (max-width: 900px) {
+  .context-strip .strip-label {
+    display: none;
+  }
+  .context-strip .strip-btn {
+    padding: 3px 7px;
+  }
+}
+
 /* Narrower still, and the branch goes too: it is the one thing here that is
-   neither an action nor the place you are working in. */
+   neither an action nor the place you are working in. Container-only — this
+   one is about the strip genuinely running out of room, which the window
+   floor already prevents when the sidebar is hidden. */
 @container strip (max-width: 430px) {
   .context-strip .branch {
     display: none;
