@@ -25,6 +25,8 @@ export const api = {
     call<{ queued: boolean }>("send", { text, attachments }),
   interrupt: () => call<null>("interrupt"),
   clearQueue: () => call<null>("clearQueue"),
+  unqueue: (id: string) =>
+    call<{ text: string; attachments?: string[] } | null>("unqueue", { id }),
 
   newSession: () => call<EngineStatus>("newSession"),
   listSessions: (limit?: number) => call<SessionSummaryDTO[]>("listSessions", { limit }),

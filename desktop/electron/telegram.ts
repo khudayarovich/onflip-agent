@@ -63,7 +63,7 @@ export interface TelegramPublic {
 
 /** What the bot needs from the app; supplied by the main process. */
 export interface BotHost {
-  status(): StatusLike & { queued?: string[] };
+  status(): StatusLike & { queued?: { text: string }[] };
   /** Any engine RPC, against the window the bot is driving. */
   call<T = unknown>(method: string, params?: unknown): Promise<T>;
   /** Told when something the settings screen shows has changed. */

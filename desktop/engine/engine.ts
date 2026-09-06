@@ -238,7 +238,7 @@ export class Engine {
   private abort = new AbortController();
   private busy = false;
   /** `auto` marks a turn OnFlip queued for itself, which stop may cancel. */
-  private queue: { text: string; attachments?: string[]; auto?: boolean }[] = [];
+  private queue: { id: string; text: string; attachments?: string[]; auto?: boolean }[] = [];
   private connected = false;
 
   /** Arguments of the call currently awaiting approval, for diff previews. */
@@ -703,7 +703,7 @@ export class Engine {
       cooldownUntil: cfg.cooldownUntil && cfg.cooldownUntil > Date.now() ? cfg.cooldownUntil : undefined,
       headed: cfg.headed ?? false,
       busy: this.busy,
-      queued: this.queue.map((q) => q.text),
+      queued: this.queue.map((q) => ({ id: q.id, text: q.text, attachments: q.attachments })),
       snapshotCount: this.toolState.snapshots.length,
       todoCount: this.toolState.todos.length,
       signedIn: this.hasSession(),
@@ -909,7 +909,7 @@ export class Engine {
     if (this.busy) {
       // A queued message keeps its own attachments: they belong to that
       // message, not to whichever turn happens to run next.
-      this.queue.push({ text, attachments });
+      this.queue.push({ id: randomUUID(), text, attachments });
       this.pushStatus();
       return { queued: true };
     }
@@ -939,7 +939,7 @@ export class Engine {
     this.notice(
       `Nothing has come back for ${Math.round(idleMs / 60_000)} minutes, so the turn is stuck. Starting it again in a fresh conversation (attempt ${this.autoResumes} of ${MAX_AUTO_RESUMES}).`
     );
-    this.queue.push({ text: RESUME_PROMPT, auto: true });
+    this.queue.push({ id: randomUUID(), text: RESUME_PROMPT, auto: true });
     this.abort.abort();
   }
   /**
@@ -994,7 +994,7 @@ export class Engine {
     // Into the queue rather than straight into a turn: the turn that just
     // failed is still in its own finally block, and that block is what
     // hands the next one over.
-    this.queue.push({ text: RESUME_PROMPT, auto: true });
+    this.queue.push({ id: randomUUID(), text: RESUME_PROMPT, auto: true });
   }
 
   interrupt(): void {
@@ -1016,6 +1016,26 @@ export class Engine {
   clearQueue(): void {
     this.queue = [];
     this.pushStatus();
+  }
+
+  /**
+   * Take one message back out of the queue.
+   *
+   * The text comes back so the caller can put it in the composer; a caller
+   * that only wants it gone throws the text away. One method for both because
+   * they are the same act — the message leaves the queue — and splitting them
+   * would give two ways to race the turn that is draining it.
+   *
+   * Answers null when the id is not there any more, which is what happens
+   * when the running turn finished and took the message with it between the
+   * strip being drawn and the button being pressed.
+   */
+  unqueue(id: string): { text: string; attachments?: string[] } | null {
+    const at = this.queue.findIndex((q) => q.id === id);
+    if (at < 0) return null;
+    const [taken] = this.queue.splice(at, 1);
+    this.pushStatus();
+    return { text: taken.text, attachments: taken.attachments };
   }
 
   private runningToolId: string | null = null;

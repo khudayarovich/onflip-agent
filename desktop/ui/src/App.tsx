@@ -160,7 +160,9 @@ export function App(): React.ReactElement {
     Record<string, "pending" | "read" | "sent" | "failed">
   >({});
   /** Text pushed back into the composer by "edit message". */
-  const [draft, setDraft] = useState<{ text: string; nonce: number } | null>(null);
+  const [draft, setDraft] = useState<{ text: string; files?: string[]; nonce: number } | null>(
+    null
+  );
   /** Sidebar width in px, draggable and remembered. */
   const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
     try {
@@ -637,6 +639,29 @@ export function App(): React.ReactElement {
    * and either put it back into the composer or send it again. Editing any
    * message but the last discards later turns, so that asks first.
    */
+  /**
+   * A queued message, taken back before it is sent.
+   *
+   * "edit" returns it to the composer — with its files, which is the whole
+   * reason the queue carries them — and "delete" drops it. Both go through
+   * the same engine call, because both are the message leaving the queue and
+   * only the caller differs in what it does with the text.
+   */
+  const unqueueMessage = useCallback(
+    (id: string, mode: "edit" | "delete") => {
+      void api
+        .unqueue(id)
+        .then((taken) => {
+          // Null means the running turn finished and took it first; nothing
+          // was lost and nothing needs saying.
+          if (!taken || mode !== "edit") return;
+          setDraft({ text: taken.text, files: taken.attachments, nonce: Date.now() });
+        })
+        .catch((e: Error) => notifyError(e.message));
+    },
+    [notifyError]
+  );
+
   const reviseMessage = useCallback(
     (id: string, mode: "edit" | "resend") => {
       const lastUserId = [...items].reverse().find((i) => i.type === "user")?.id;
@@ -1203,6 +1228,7 @@ export function App(): React.ReactElement {
             emptyProject={status ? baseName(status.cwd) : null}
             deliveries={deliveries}
             onRevise={busy || engineDown ? undefined : reviseMessage}
+            onUnqueue={engineDown ? undefined : unqueueMessage}
             onResume={busy || engineDown ? undefined : () => sendPrompt("continue")}
             searchOpen={searchOpen}
             onCloseSearch={() => setSearchOpen(false)}

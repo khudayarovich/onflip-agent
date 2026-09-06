@@ -183,7 +183,7 @@ export function Composer({
   onLoadModels: () => void;
   disabled: boolean;
   /** Text injected by "edit message"; a new nonce applies it again. */
-  draft: { text: string; nonce: number } | null;
+  draft: { text: string; files?: string[]; nonce: number } | null;
 }): React.ReactElement {
   const t = useT();
   const [text, setText] = useState("");
@@ -215,6 +215,9 @@ export function Composer({
   useEffect(() => {
     if (!draft) return;
     setText(draft.text);
+    // A queued message brings its attachments back with it; anything else
+    // leaves whatever is already staged alone.
+    if (draft.files?.length) setAttached(draft.files);
     const el = areaRef.current;
     if (el) {
       el.focus();

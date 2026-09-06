@@ -1,5 +1,5 @@
 import React, { useContext, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatItem } from "../../../shared/protocol";
+import type { ChatItem, QueuedMessage } from "../../../shared/protocol";
 import { Markdown } from "../markdown";
 import { ToolCard } from "./ToolCard";
 import logo from "../assets/logo.svg";
@@ -58,12 +58,15 @@ export function Transcript({
   deliveries,
   onRevise,
   onResume,
+  onUnqueue,
   searchOpen,
   onCloseSearch,
 }: {
   items: ChatItem[];
   streaming: StreamingState;
-  queued: string[];
+  queued: QueuedMessage[];
+  /** Take a queued message back — into the composer, or away. */
+  onUnqueue?: (id: string, mode: "edit" | "delete") => void;
   toolProgress: Record<string, string>;
   onSuggest: (text: string) => void;
   emptyProject: string | null;
@@ -282,9 +285,22 @@ export function Transcript({
         {queued.length > 0 && (
           <div className="queue-strip">
             {queued.map((q, i) => (
-              <div key={i} className="queue-chip">
+              <div key={q.id} className="queue-chip">
                 <span className="n">{t("queuedN", { n: i + 1 })}</span>
-                <span>{q.length > 90 ? `${q.slice(0, 90)}…` : q}</span>
+                <span className="queue-text">{q.text.length > 90 ? `${q.text.slice(0, 90)}…` : q.text}</span>
+                {q.attachments && q.attachments.length > 0 && (
+                  <span className="queue-files">{t("queuedFiles", { n: q.attachments.length })}</span>
+                )}
+                {onUnqueue && (
+                  <span className="queue-actions">
+                    <button title={t("queueEdit")} onClick={() => onUnqueue(q.id, "edit")}>
+                      ✎
+                    </button>
+                    <button title={t("queueRemove")} onClick={() => onUnqueue(q.id, "delete")}>
+                      <Close size={12} />
+                    </button>
+                  </span>
+                )}
               </div>
             ))}
           </div>

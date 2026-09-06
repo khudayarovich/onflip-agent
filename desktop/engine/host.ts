@@ -93,6 +93,8 @@ peer.onRequest = async (method, rawParams) => {
     case "clearQueue":
       engine.clearQueue();
       return null;
+    case "unqueue":
+      return engine.unqueue(String(params.id ?? ""));
 
     case "newSession":
       return engine.newSession();

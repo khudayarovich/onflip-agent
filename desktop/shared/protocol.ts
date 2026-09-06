@@ -151,6 +151,21 @@ export interface RemoteChatDTO {
   projectName?: string;
 }
 
+/**
+ * A message waiting behind the turn that is running.
+ *
+ * Addressed by id rather than by position: the queue shifts on its own as
+ * turns finish, and an index picked when the strip was drawn can name a
+ * different message by the time it is clicked — which, for a delete button,
+ * means deleting the wrong one.
+ */
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  /** Files staged with it, so they are visible and survive an edit. */
+  attachments?: string[];
+}
+
 export interface EngineStatus {
   version: string;
   cwd: string;
@@ -195,7 +210,7 @@ export interface EngineStatus {
   cooldownUntil?: number;
   headed: boolean;
   busy: boolean;
-  queued: string[];
+  queued: QueuedMessage[];
   snapshotCount: number;
   todoCount: number;
   /**
@@ -325,6 +340,11 @@ export interface ExportResult {
 export interface EngineMethods {
   init: { params: Record<string, never>; result: EngineStatus };
   send: { params: { text: string; attachments?: string[] }; result: { queued: boolean } };
+  /** Take one message back out of the queue; its text comes back to be edited. */
+  unqueue: {
+    params: { id: string };
+    result: { text: string; attachments?: string[] } | null;
+  };
   interrupt: { params: Record<string, never>; result: null };
   clearQueue: { params: Record<string, never>; result: null };
 

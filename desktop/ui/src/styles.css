@@ -3997,3 +3997,52 @@ a:hover {
   line-height: 1.5;
   color: var(--text-secondary);
 }
+
+/* A queued message can be taken back — edited, or dropped. The controls stay
+   out of the way until the row is hovered, the way a sent message's do. */
+.queue-chip {
+  padding: 2px 4px;
+  border-radius: 6px;
+}
+.queue-chip:hover {
+  background: var(--bg-hover);
+}
+.queue-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.queue-files {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+.queue-actions {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.queue-chip:hover .queue-actions {
+  opacity: 1;
+}
+.queue-actions button {
+  width: 22px;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+.queue-actions button:hover {
+  background: var(--bg-raised);
+  color: var(--text-primary);
+}
+.queue-actions button:last-child:hover {
+  color: var(--red);
+}
