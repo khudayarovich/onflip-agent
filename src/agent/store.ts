@@ -4,6 +4,7 @@ import { randomUUID } from "node:crypto";
 import { ChatMessage, TodoItem, FileSnapshot } from "../types";
 import { isSyntheticUserText, isUserRequest } from "./protocol";
 import { configDir, withoutBom, writeFileAtomically } from "../config";
+import { providerStateDir } from "../providers/id";
 
 /**
  * On-disk session store. Sessions are plain JSON so they can be inspected,
@@ -45,8 +46,18 @@ export interface StoredSession {
 
 const MAX_SNAPSHOTS = 200;
 
+/**
+ * Where this provider's sessions live.
+ *
+ * ChatGPT's stay exactly where they have always been, `~/.onflip/sessions`,
+ * because moving them would mean migrating live session files on upgrade for
+ * no benefit to their owner. A second provider gets its own directory under
+ * `~/.onflip/providers/<id>/sessions`, which is what keeps its chats and its
+ * recent folders separate — the folder list is derived from the sessions, so
+ * separating one separates the other.
+ */
 function sessionsDir(): string {
-  return path.join(configDir(), "sessions");
+  return path.join(providerStateDir(), "sessions");
 }
 
 function sessionFile(id: string): string {

@@ -61,7 +61,10 @@ import {
   deleteConversations,
   checkSelectorsLive,
   RemoteProject,
-} from "onflip/dist/chatgpt/browser-client";
+  // Through the provider seam rather than naming ChatGPT directly. Today it
+  // re-exports exactly these functions unchanged; a second provider makes it
+  // a dispatcher without this list moving.
+} from "onflip/dist/providers";
 import {
   setBrowserFrameSink,
   setBrowserViewport,

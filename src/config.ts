@@ -170,6 +170,14 @@ export interface OnFlipConfig {
    */
   browserChannel?: "chrome" | "msedge" | "chromium";
 
+  /**
+   * Which chat service this install drives — "chatgpt" (the default) or
+   * "deepseek". Read through `activeProvider()`, which falls back to ChatGPT
+   * for anything missing or unrecognised, so a bad value cannot strand
+   * someone on a provider they have not signed in to.
+   */
+  provider?: string;
+
   /** Legacy key from earlier versions; migrated into `shell` on load. */
   sandbox?: boolean;
 }
