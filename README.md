@@ -72,7 +72,7 @@ own sign-in, chats, projects and settings, and nothing crosses between them.
 | Attachments | Yes (upload limits by plan) | Yes |
 | Projects | Yes — chats filed into an "OnFlip" project | No |
 | Reopen earlier chats | Yes | Only ones OnFlip started |
-| Usage caps | Per plan, see below | None to work around |
+| Usage caps | Per plan, as above | None to work around |
 
 ## Install
 
