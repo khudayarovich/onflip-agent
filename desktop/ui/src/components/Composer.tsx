@@ -388,6 +388,33 @@ export function Composer({
   const modelSlug = status?.model ?? "auto";
   const modelLabel = models.find((m) => m.slug === modelSlug)?.label ?? modelSlug;
 
+  // Free and Go: uploads and the reasoning variants come out of a small
+  // allowance an agent run empties in minutes, so the controls that spend it
+  // are turned off rather than left to fail halfway through a task. The
+  // engine enforces this either way; these two only make it visible.
+  const planRationed = Boolean(status?.planRationed);
+  const planNote = status?.planLimitNote ?? "";
+  const planTitle = status?.planLimitTitle ?? "";
+  /**
+   * The card shown on a control this plan rations.
+   *
+   * A real element rather than the `data-tip` pseudo-element: that one is
+   * `white-space: nowrap`, which turns a two-line explanation into a single
+   * line wider than the window. And it hangs off `:hover`, which a `disabled`
+   * button does not reliably deliver — so these chips are `aria-disabled`
+   * with their handler guarded instead, which also leaves them focusable, so
+   * the reason is reachable from the keyboard rather than mouse-only.
+   */
+  const planCard = (
+    <span className="tip-card" role="tooltip">
+      <span className="tip-card-title">{planTitle}</span>
+      <span className="tip-card-body">{planNote}</span>
+    </span>
+  );
+  // The stored level is ignored on these plans, so showing it would be a
+  // label describing something that is not happening.
+  const thinkingShown = planRationed ? undefined : status?.thinking;
+
   // How full the conversation is, against the size at which it compacts.
   const contextPct =
     status?.contextBudget && status.contextBudget > 0
@@ -496,10 +523,12 @@ export function Composer({
 
         <div className="chips">
           <button
-            className="chip icon-only"
-            data-tip={t("attachTip")}
-            disabled={disabled}
+            className={`chip icon-only${planRationed ? " chip-off" : ""}`}
+            data-tip={planRationed ? undefined : t("attachTip")}
+            disabled={disabled && !planRationed}
+            aria-disabled={planRationed || undefined}
             onClick={() => {
+              if (planRationed) return;
               void window.onflip.pickFiles().then((files) => {
                 if (files.length === 0) return;
                 // De-duplicated: picking the same file twice uploads it twice.
@@ -509,6 +538,7 @@ export function Composer({
             }}
           >
             <PaperclipIcon />
+            {planRationed && planCard}
           </button>
           <button
             className="chip"
@@ -524,12 +554,21 @@ export function Composer({
               <ChevronDown size={12} />
             </span>
           </button>
-          <button className="chip" data-tip={t("menuReasoning")} onClick={thinkingMenu.open}>
+          <button
+            className={`chip${planRationed ? " chip-off" : ""}`}
+            data-tip={planRationed ? undefined : t("menuReasoning")}
+            aria-disabled={planRationed || undefined}
+            onClick={planRationed ? undefined : thinkingMenu.open}
+          >
             <ThinkingIcon />
-            <span className="chip-label">{t(thinkingInfo(status?.thinking).label)}</span>
-            <span className="chev">
-              <ChevronDown size={12} />
-            </span>
+            <span className="chip-label">{t(thinkingInfo(thinkingShown).label)}</span>
+            {planRationed ? (
+              planCard
+            ) : (
+              <span className="chev">
+                <ChevronDown size={12} />
+              </span>
+            )}
           </button>
           <button
             className="chip"

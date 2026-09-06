@@ -26,8 +26,14 @@ import { spawnExtractToken, takeExtractError, lastBrowserFindings } from "onflip
 import { fetchAccessToken } from "onflip/dist/auth/access";
 import { chooseTransport, Transport } from "onflip/dist/chatgpt/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
-import { compactionBudget, describePlan, promptCrowdsPlan } from "onflip/dist/chatgpt/plans";
-import { uploadsAvailable } from "onflip/dist/chatgpt/transport";
+import {
+  compactionBudget,
+  describePlan,
+  planLimitCard,
+  promptCrowdsPlan,
+  rationedPlan,
+} from "onflip/dist/chatgpt/plans";
+import { attachmentsBlockedReason, uploadsAvailable } from "onflip/dist/chatgpt/transport";
 import {
   configureBrowser,
   closeBrowser,
@@ -654,6 +660,9 @@ export class Engine {
       // gauge half-full on an empty conversation.
       contextChars: reducibleChars(this.history),
       contextBudget: this.contextBudgetChars(),
+      planRationed: rationedPlan(cfg.planType) || undefined,
+      planLimitTitle: planLimitCard(cfg.planType)?.title,
+      planLimitNote: planLimitCard(cfg.planType)?.body,
       home: os.homedir(),
       sessionId: this.session?.id ?? "",
       sessionTitle: this.session ? deriveTitle(this.session) : "",
@@ -1056,7 +1065,21 @@ export class Engine {
     // Files go to the browser transport as a side-channel: the payload is
     // text, and the composer uploads these alongside it. The model is told
     // in words too, so it knows to look at what was attached.
-    if (attachments?.length) {
+    // Refused here rather than only in the composer, because the composer is
+    // not the only way in: Telegram forwards photos and documents into this
+    // same call, and on a rationed plan an upload spends the one allowance
+    // that stops the session when it runs out. The paths still reach the
+    // agent as text, so it can open them from disk itself — which costs
+    // nothing and is usually what was wanted anyway.
+    const attachmentsBlocked = attachments?.length ? attachmentsBlockedReason() : null;
+    if (attachments?.length && attachmentsBlocked) {
+      this.notice(attachmentsBlocked);
+      userMessage.content = `${userMessage.content}
+
+[These files were named but not uploaded, because this plan rations uploads. Read them from disk if you need them: ${attachments.join(
+        ", "
+      )}]`;
+    } else if (attachments?.length) {
       queueAttachments(attachments);
       userMessage.content = `${userMessage.content}
 

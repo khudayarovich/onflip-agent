@@ -159,6 +159,15 @@ export interface EngineStatus {
   /** Transcript size in characters, and the size at which compaction fires. */
   contextChars?: number;
   contextBudget?: number;
+  /**
+   * The account is on a plan whose extras are rationed (Free, Go): uploads,
+   * reasoning variants and the metered models are all turned off so the run
+   * stays on the unlimited path. The UI greys out what it cannot offer.
+   */
+  planRationed?: boolean;
+  /** Heading and body for the card shown on a control the plan rations. */
+  planLimitTitle?: string;
+  planLimitNote?: string;
   home: string;
   sessionId: string;
   sessionTitle: string;

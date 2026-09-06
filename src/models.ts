@@ -1,5 +1,5 @@
 import { loadConfig, saveConfig } from "./config";
-import { prefersLunaByDefault } from "./chatgpt/plans";
+import { prefersLunaByDefault, rationedPlan } from "./chatgpt/plans";
 
 /**
  * Model slugs.
@@ -97,7 +97,27 @@ export function allModels(): ModelInfo[] {
   // it sends an agent's turns into Pro thinking: thirty-second server errors
   // and hand-offs to ChatGPT Work, measured on a Pro account. A model the
   // account runs well is always a better start than a coin toss.
-  return discovered.length ? discovered.filter((m) => m.slug !== "auto") : BUILTIN_MODELS;
+  const listed = discovered.length ? discovered.filter((m) => m.slug !== "auto") : BUILTIN_MODELS;
+  return withinPlan(listed);
+}
+
+/**
+ * Drop the models a rationed plan cannot actually run.
+ *
+ * A Free account's list still offers Sol, and picking it is not a bigger,
+ * slower session — it is a handful of turns, then the allowance is gone for
+ * hours and the run is stuck mid-task. Unlimited text chat is on the small
+ * model only, so on these plans that is the only model worth offering, and a
+ * picker that offers the others is offering a trap.
+ *
+ * Never empty: if nothing in the account's list looks like the small model,
+ * the whole list is returned untouched rather than leaving the picker blank.
+ * A filter that hides everything is worse than one that hides nothing.
+ */
+function withinPlan(models: ModelInfo[]): ModelInfo[] {
+  if (!rationedPlan(loadConfig().planType)) return models;
+  const unmetered = models.filter((m) => /luna|mini/i.test(`${m.slug} ${m.label}`));
+  return unmetered.length ? unmetered : models;
 }
 
 /**
@@ -112,6 +132,12 @@ export function allModels(): ModelInfo[] {
  */
 export function effectiveModel(model: string, thinking: string | undefined): string {
   if (!model || model === "auto") return model;
+  // On a rationed plan the reasoning variants are the metered models wearing
+  // a different name: `-thinking` is not "the same model trying harder", it
+  // is the allowance that runs out in minutes and locks for hours. The plan
+  // has unlimited text on the plain family, so that is where every turn goes
+  // and the thinking setting has nothing to open.
+  if (rationedPlan(loadConfig().planType)) return model;
   const listed = new Set((loadConfig().discoveredModels ?? []).map((m) => m.slug));
   const family = modelFamily(model);
   const mini = /-mini$/i.test(family);

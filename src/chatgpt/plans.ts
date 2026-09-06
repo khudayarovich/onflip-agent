@@ -216,6 +216,71 @@ export function normalizePlanId(planId: string | undefined): string {
 }
 
 /**
+ * Is this a plan where one path is unlimited and everything else is rationed?
+ *
+ * Since August 2026 a Free or Go account gets *unlimited text chat on the
+ * small model* and draws everything else — file and image uploads, the
+ * stronger models, the reasoning variants — from small separate allowances
+ * that run out in minutes under an agent's turn rate and then lock for hours.
+ *
+ * That makes these plans qualitatively different rather than just smaller.
+ * Everywhere else a bigger allowance is a better answer that costs more; here
+ * there is one path that costs nothing and holds all day, and the job is to
+ * stay on it. An agent run is dozens of turns, so anything metered is spent
+ * before the first task finishes.
+ *
+ * OnFlip was doing the opposite in three places, all of them invisible to the
+ * user: turns over 45,000 characters were uploaded as files rather than typed,
+ * a thinking level opened a `-thinking` variant, and the model picker offered
+ * models the plan can only run a handful of times. Reported from the field as
+ * the app "hitting rate limits fast", and seen directly as "Files, images and
+ * data analysis will be unavailable until 07:02" with the conversation stuck
+ * behind it.
+ *
+ * Go sits with Free deliberately. It is paid, but it is the plan documented
+ * alongside Free for both halves of this — unlimited text, rationed extras —
+ * so it wants the same treatment.
+ */
+export function rationedPlan(planId: string | undefined): boolean {
+  const id = normalizePlanId(planId);
+  return id === "free" || id === "go";
+}
+
+/**
+ * What these plans are called, for a sentence shown to a person.
+ *
+ * Kept apart from `PLANS` because that table's rows carry a context window
+ * and Go's is not published. Inventing a number to get a label would put a
+ * guess into the compaction budget, which is the one place it must not go.
+ */
+const RATIONED_LABELS: Record<string, string> = { free: "Free", go: "Go" };
+
+/**
+ * Why something is greyed out, in one sentence, or nothing on a plan where
+ * it is not.
+ *
+ * One wording in one place: the composer's paperclip, the thinking chip and
+ * the model picker all disable for the same reason, and three near-identical
+ * sentences drifting apart is how a UI starts contradicting itself.
+ */
+export function planLimitCard(
+  planId: string | undefined
+): { title: string; body: string } | undefined {
+  if (!rationedPlan(planId)) return undefined;
+  const label = RATIONED_LABELS[normalizePlanId(planId)] ?? "This";
+  return {
+    title: `Not available on ${label}`,
+    body: "Uploads, reasoning levels and the larger models come from a small allowance that an agent run empties in minutes. OnFlip keeps to unlimited text chat on the small model so a session does not stop halfway.",
+  };
+}
+
+/** The same thing as one sentence, for surfaces that cannot draw a card. */
+export function planLimitNote(planId: string | undefined): string | undefined {
+  const card = planLimitCard(planId);
+  return card && `${card.title}. ${card.body}`;
+}
+
+/**
  * Whether this plan should start on Luna rather than letting ChatGPT choose.
  *
  * Every plan, now. Free and Go get a handful of messages on the stronger

@@ -12,6 +12,7 @@ import {
   ChatGPTBrowserError,
 } from "./browser-client";
 import { buildTurnPrompt } from "../agent/protocol";
+import { planLimitNote, rationedPlan } from "./plans";
 import { loadConfig, firstPositiveInt } from "../config";
 import { logger } from "../log";
 import {
@@ -212,9 +213,27 @@ export function shouldAttachTurn(state: {
  * The compaction budget turns on this: with uploads the account's window is
  * the limit, without them the composer is. ONFLIP_UPLOAD_ABOVE=0 turns the
  * path off and goes back to typing everything.
+ *
+ * The plan has the last word. On Free and Go an upload spends a small rationed
+ * allowance while typing spends nothing, so there is no size at which
+ * uploading is the better trade — see `rationedPlan`. Compaction picks the
+ * composer ceiling as a consequence, which is the correct budget for those
+ * plans anyway.
  */
 export function uploadsAvailable(): boolean {
+  if (rationedPlan(loadConfig().planType)) return false;
   return Number.isFinite(UPLOAD_ABOVE_CHARS) && UPLOAD_ABOVE_CHARS > 0;
+}
+
+/**
+ * Why an attachment cannot be sent, or null when it can.
+ *
+ * The composer's paperclip and Telegram both hand files to the same send, and
+ * a plan that rations uploads has to refuse them in one place rather than in
+ * each caller. Worded for a person, because it is shown to one.
+ */
+export function attachmentsBlockedReason(): string | null {
+  return planLimitNote(loadConfig().planType) ?? null;
 }
 
 /** Where a handed-over turn is written, and cleaned up from. */

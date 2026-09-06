@@ -1587,6 +1587,99 @@ a:hover {
 .chip:hover svg {
   opacity: 1;
 }
+/*
+ * A control the plan does not allow.
+ *
+ * Dimmed and inert rather than removed: a missing paperclip is a puzzle, and
+ * the tooltip on a greyed-out one is where the explanation lives. The cursor
+ * stays `default` instead of `not-allowed` — this is a plan boundary, not a
+ * mistake the user is making.
+ */
+/* The card inside is absolutely positioned against this, and the chip cannot
+   borrow `position: relative` from the `[data-tip]` rule any more — these
+   chips drop that attribute precisely because they carry a card instead. */
+.chip.chip-off {
+  position: relative;
+}
+.chip.chip-off,
+.chip.chip-off:hover {
+  opacity: 0.45;
+  cursor: default;
+  background: var(--bg-raised);
+  border-color: var(--border);
+  color: var(--text-muted);
+}
+.chip.chip-off:hover svg {
+  opacity: 0.75;
+}
+
+/*
+ * The card explaining why a control is unavailable.
+ *
+ * A real element, not the `data-tip` pseudo-element: that one is nowrap, and
+ * a two-sentence explanation in it becomes a single line wider than the
+ * window. This one wraps inside a fixed width and gets a heading, so it reads
+ * as an answer rather than as a long label.
+ *
+ * The chip stays at full opacity behind it — dimming applies to the control,
+ * and inheriting it here would make the explanation the hardest thing on
+ * screen to read.
+ */
+.chip .tip-card {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%) translateY(4px);
+  width: 290px;
+  max-width: min(290px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 11px 13px;
+  text-align: left;
+  white-space: normal;
+  background: var(--bg-active);
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  box-shadow: 0 10px 34px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  pointer-events: none;
+  z-index: 70;
+  transition: opacity 0.14s ease-out, transform 0.14s ease-out;
+}
+.chip.chip-off:hover .tip-card,
+.chip.chip-off:focus-visible .tip-card {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
+  transition-delay: 0.25s;
+}
+.chip .tip-card-title {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+.chip .tip-card-body {
+  color: var(--text-secondary);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.5;
+}
+/* The little pointer down to the chip, drawn as a rotated corner so it picks
+   up the same border and background as the card. */
+.chip .tip-card::after {
+  content: "";
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  margin: -5px 0 0 -4px;
+  background: var(--bg-active);
+  border-right: 1px solid var(--border-strong);
+  border-bottom: 1px solid var(--border-strong);
+  transform: rotate(45deg);
+}
 .chip .chev {
   font-size: 8px;
   color: var(--text-muted);
