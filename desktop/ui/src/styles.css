@@ -3868,3 +3868,29 @@ a:hover {
 .browser-blocked .btn {
   flex-shrink: 0;
 }
+
+/*
+ * "OnFlip × DeepSeek" in the title bar.
+ *
+ * Lighter than the app's own name on purpose: OnFlip is the product and the
+ * service is what it happens to be driving, so the pairing reads as one
+ * phrase with the emphasis in the right half of it.
+ */
+.titlebar .brand-provider {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 8px;
+  color: var(--text-secondary);
+  font-weight: 500;
+  -webkit-app-region: drag;
+}
+.titlebar .brand-provider svg {
+  opacity: 0.85;
+}
+.titlebar .brand-x {
+  color: var(--text-muted);
+  font-size: 11px;
+  /* Optically centred against the two names either side of it. */
+  transform: translateY(0.5px);
+}

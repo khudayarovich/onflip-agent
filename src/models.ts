@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig } from "./config";
 import { prefersLunaByDefault, rationedPlan } from "./chatgpt/plans";
+import { activeProvider } from "./providers/id";
 
 /**
  * Model slugs.
@@ -73,7 +74,25 @@ function isExcludedSlug(slug: string): boolean {
   return /^(research|o3|o4-mini)$/i.test(slug) || /-pro$/i.test(slug);
 }
 
+/**
+ * What DeepSeek offers, which is not a list of models.
+ *
+ * Its web chat has one model and two toggles beside the composer — deep
+ * thinking and search — rather than a picker. So the honest answer is a
+ * single entry: something has to fill the chip, and offering ChatGPT's list
+ * there is worse than offering one true row. Reported on the first switch:
+ * the picker still showed GPT-5.6 Luna and Sol on DeepSeek, neither of which
+ * exists there.
+ *
+ * `discoveredModels` cannot help: it is whatever ChatGPT's account last
+ * reported, and it is stored per install rather than per provider.
+ */
+const DEEPSEEK_MODELS: ModelInfo[] = [
+  { slug: "deepseek-chat", label: "DeepSeek", description: "unlimited text chat" },
+];
+
 export function allModels(): ModelInfo[] {
+  if (activeProvider() === "deepseek") return DEEPSEEK_MODELS;
   const cached = loadConfig().discoveredModels;
   if (!cached || cached.length === 0) return BUILTIN_MODELS;
 
@@ -132,6 +151,9 @@ function withinPlan(models: ModelInfo[]): ModelInfo[] {
  */
 export function effectiveModel(model: string, thinking: string | undefined): string {
   if (!model || model === "auto") return model;
+  // DeepSeek reaches reasoning through a toggle beside its composer, not
+  // through a slug, so there is no variant for a thinking level to open.
+  if (activeProvider() === "deepseek") return model;
   // On a rationed plan the reasoning variants are the metered models wearing
   // a different name: `-thinking` is not "the same model trying harder", it
   // is the allowance that runs out in minutes and locks for hours. The plan
@@ -189,6 +211,7 @@ export const DEFAULT_MODEL = "gpt-5-6-mini";
  * is Luna in the shape the accounts report it.
  */
 export function defaultModel(planId?: string): string {
+  if (activeProvider() === "deepseek") return DEEPSEEK_MODELS[0].slug;
   const cfg = loadConfig();
   if (!prefersLunaByDefault(planId ?? cfg.planType)) return DEFAULT_MODEL;
   const luna = cfg.discoveredModels?.find(

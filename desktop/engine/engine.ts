@@ -35,6 +35,7 @@ import {
   promptCrowdsPlan,
   rationedPlan,
 } from "onflip/dist/chatgpt/plans";
+import { activeProvider, providerLabel } from "onflip/dist/providers/id";
 import { attachmentsBlockedReason, uploadsAvailable } from "onflip/dist/chatgpt/transport";
 import {
   configureBrowser,
@@ -524,7 +525,13 @@ export class Engine {
 
   /** Only the configuration that can be silently signed out needs probing. */
   private async checkSignInState(): Promise<void> {
-    if (this.transport.name !== "browser" || this.auth.cookies.length > 0) {
+    // DeepSeek is always probed. Its transport is also named "browser", and
+    // the cookies in hand are ChatGPT's — so the shortcut below would read a
+    // ChatGPT session as proof that DeepSeek is connected, and report a
+    // signed-out account as ready. Reported from the field on the first
+    // switch: "it says connected, but I have not signed in to DeepSeek".
+    const deepseek = activeProvider() === "deepseek";
+    if (!deepseek && (this.transport.name !== "browser" || this.auth.cookies.length > 0)) {
       this.emitConnect("ready");
       return;
     }
@@ -541,11 +548,12 @@ export class Engine {
       // reader could not run at all, saying "no session found" would blame
       // the account for a missing runtime.
       const why = takeExtractError();
+      const service = providerLabel();
       this.emitConnect(
         "signed-out",
         state.reachable
-          ? `OnFlip is not signed in to ChatGPT — open the account menu (bottom left) and choose "Sign in to ChatGPT".${why ? ` (${why})` : ""}`
-          : `ChatGPT could not be reached (${state.detail}).`
+          ? `OnFlip is not signed in to ${service} — open the account menu (bottom left) and choose "Sign in".${why && !deepseek ? ` (${why})` : ""}`
+          : `${service} could not be reached (${state.detail}).`
       );
     } catch (e) {
       this.emitConnect("error", e instanceof Error ? e.message : String(e));

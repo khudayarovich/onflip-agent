@@ -79,6 +79,8 @@ export function SettingsModal({
 
   return (
     <Modal title={t("settings")} onClose={onClose} wide>
+      <ProviderSection />
+
       <div className="settings-section">
         <h3>{t("setAppearance")}</h3>
         <div className="setting-row">
@@ -326,8 +328,6 @@ export function SettingsModal({
           </div>
         )}
       </div>
-
-      <ProviderSection />
 
       <IndicatorSection />
 

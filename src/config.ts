@@ -178,8 +178,72 @@ export interface OnFlipConfig {
    */
   provider?: string;
 
+  /**
+   * Per-service settings, one room each, keyed by provider id.
+   *
+   * ChatGPT is not in here: its settings stay at the top level, exactly where
+   * every config written before providers existed already put them, so an
+   * upgrade migrates nothing. Read back through `loadConfig`, which overlays
+   * the active service's room — see `PROVIDER_SCOPED` for which keys move.
+   */
+  providers?: Record<string, OnFlipConfig>;
+
   /** Legacy key from earlier versions; migrated into `shell` on load. */
   sandbox?: boolean;
+}
+
+/**
+ * The services OnFlip can drive.
+ *
+ * Declared here rather than in `providers/` because the config has to scope
+ * itself by provider, and importing the module that reads the config to find
+ * out which provider is active would be a cycle. `providers/id.ts` re-exports
+ * these so there is still one list.
+ */
+export const PROVIDER_IDS = ["chatgpt", "deepseek"] as const;
+export type ProviderId = (typeof PROVIDER_IDS)[number];
+export const DEFAULT_PROVIDER: ProviderId = "chatgpt";
+
+export function isProviderId(value: unknown): value is ProviderId {
+  return typeof value === "string" && (PROVIDER_IDS as readonly string[]).includes(value);
+}
+
+/**
+ * Settings that belong to one service rather than to the app.
+ *
+ * The rest — theme, language, approvals, shell, timeouts — describe how the
+ * person likes to work and are the same whichever service is answering. These
+ * are different: a model slug, a plan, a session token and a discovered model
+ * list are all facts about one account on one service, and letting them cross
+ * is how a DeepSeek run ends up pinned to a ChatGPT model, or reports itself
+ * connected because ChatGPT's cookies are in hand. Reported on the first
+ * switch, both of those, within a minute of each other.
+ */
+const PROVIDER_SCOPED = [
+  "model",
+  "thinking",
+  "planType",
+  "discoveredModels",
+  "sessionToken",
+  "sessionCookieName",
+  "sessionDeviceId",
+  "accessToken",
+  "accessTokenExpiry",
+  "accountName",
+  "accountEmail",
+  "browserChannel",
+] as const satisfies readonly (keyof OnFlipConfig)[];
+
+/**
+ * ChatGPT keeps the top level, everything else gets a room of its own.
+ *
+ * No migration, and no risk to a working install: a config written before
+ * providers existed is already exactly what ChatGPT should read.
+ */
+function scopeOf(raw: { provider?: unknown }): ProviderId {
+  const forced = process.env.ONFLIP_PROVIDER?.trim().toLowerCase();
+  if (isProviderId(forced)) return forced;
+  return isProviderId(raw?.provider) ? raw.provider : DEFAULT_PROVIDER;
 }
 
 const CONFIG_DIR = path.join(os.homedir(), ".onflip");
@@ -266,7 +330,20 @@ export function loadConfig(): OnFlipConfig {
   }
   lastLoadFailed = false;
   quarantined = false;
-  const config = parsed as OnFlipConfig;
+  const stored = parsed as OnFlipConfig & { providers?: Record<string, OnFlipConfig> };
+  const config: OnFlipConfig = { ...stored };
+  delete (config as { providers?: unknown }).providers;
+
+  const scope = scopeOf(stored);
+  if (scope !== DEFAULT_PROVIDER) {
+    // The scoped keys come from this provider's room, and *only* from it —
+    // falling back to the top level would hand DeepSeek ChatGPT's model and
+    // its session, which is the bleed this exists to stop.
+    const own = stored.providers?.[scope] ?? {};
+    for (const key of PROVIDER_SCOPED) delete config[key];
+    Object.assign(config, own);
+  }
+
   // `sandbox` used to mean "shell allowed". Keep old configs working.
   if (config.shell === undefined && typeof config.sandbox === "boolean") {
     config.shell = config.sandbox;
@@ -314,8 +391,34 @@ function writeConfig(config: OnFlipConfig, action: string): void {
 
 export function saveConfig(patch: OnFlipConfig): void {
   // Load first: it is what decides whether the file may be written at all.
-  const current = loadConfig();
-  writeConfig({ ...current, ...patch }, "saving config");
+  const stored = readRaw();
+  const scope = scopeOf(stored);
+  if (scope === DEFAULT_PROVIDER) {
+    writeConfig({ ...stored, ...patch }, "saving config");
+    return;
+  }
+  // Split the patch: what belongs to this service goes in its room, what
+  // belongs to the app stays at the top level where both services read it.
+  const scoped: OnFlipConfig = {};
+  const shared: OnFlipConfig = {};
+  for (const [key, value] of Object.entries(patch)) {
+    const target = (PROVIDER_SCOPED as readonly string[]).includes(key) ? scoped : shared;
+    (target as Record<string, unknown>)[key] = value;
+  }
+  const providers = { ...(stored.providers ?? {}) };
+  providers[scope] = { ...(providers[scope] ?? {}), ...scoped };
+  writeConfig({ ...stored, ...shared, providers }, "saving config");
+}
+
+/** The file as written, without any provider overlay applied. */
+function readRaw(): OnFlipConfig & { providers?: Record<string, OnFlipConfig> } {
+  try {
+    const parsed = JSON.parse(withoutBom(fs.readFileSync(CONFIG_PATH, "utf8")));
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) return parsed;
+  } catch {
+    /* handled by loadConfig, which decides whether writing is safe at all */
+  }
+  return {};
 }
 
 /** Remove keys entirely rather than setting them to undefined. */

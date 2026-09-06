@@ -1,5 +1,12 @@
 import * as path from "node:path";
-import { configDir, loadConfig } from "../config";
+import {
+  configDir,
+  loadConfig,
+  DEFAULT_PROVIDER,
+  PROVIDER_IDS,
+  isProviderId,
+  type ProviderId,
+} from "../config";
 
 /**
  * Which chat service this run is driving.
@@ -20,22 +27,13 @@ import { configDir, loadConfig } from "../config";
  * browser driver in behind it.
  */
 
-export const PROVIDER_IDS = ["chatgpt", "deepseek"] as const;
-export type ProviderId = (typeof PROVIDER_IDS)[number];
-
 /**
- * What an unset, unreadable or unrecognised value means.
- *
- * ChatGPT, always. Everything written before providers existed has no value
- * to read, and a corrupted or hand-edited one must not be able to strand
- * someone on a provider they never chose — least of all one they have not
- * signed in to.
+ * The identity of a provider lives with the config, because the config has to
+ * scope itself by provider and cannot import this module to find out which
+ * one is active without creating a cycle. Re-exported here so callers have
+ * one place to look.
  */
-export const DEFAULT_PROVIDER: ProviderId = "chatgpt";
-
-export function isProviderId(value: unknown): value is ProviderId {
-  return typeof value === "string" && (PROVIDER_IDS as readonly string[]).includes(value);
-}
+export { PROVIDER_IDS, DEFAULT_PROVIDER, isProviderId, type ProviderId };
 
 /** The provider this process is driving. */
 export function activeProvider(): ProviderId {

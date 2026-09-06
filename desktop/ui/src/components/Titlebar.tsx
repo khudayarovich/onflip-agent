@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { EngineStatus } from "../../../shared/protocol";
 import logo from "../assets/logo.svg";
+import { ChatGptMark, DeepSeekMark } from "./icons";
 
 /** Panel-left glyph — the standard "toggle sidebar" icon. */
 function SidebarToggleIcon(): React.ReactElement {
@@ -115,9 +116,53 @@ export function Titlebar({
       <div className="brand">
         <img className="logo" src={logo} alt="" />
         OnFlip
+        <ProviderBadge />
       </div>
       <div className="session-title">{title}</div>
       {!isMac && <WindowControls />}
     </div>
+  );
+}
+
+/**
+ * Which service is answering, beside the app's own name.
+ *
+ * "OnFlip ✕ DeepSeek" rather than a bare label, because the pairing is the
+ * fact worth showing: OnFlip is the same app either way, and the thing that
+ * changed is who it is talking to. It reads at a glance from across the
+ * screen, which is what makes a switch that empties the session list feel
+ * like a choice rather than a fault.
+ *
+ * Read once, on mount, and never updated: a provider cannot change without
+ * the app restarting, so there is nothing to watch. Absent entirely until
+ * the answer arrives, and on an older main process that has no such handler
+ * — an empty gap is better than a flash of the wrong service.
+ */
+function ProviderBadge(): React.ReactElement | null {
+  const [provider, setProvider] = useState<{ id: string; label: string } | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    void window.onflip
+      .providerGet?.()
+      .then((p) => {
+        if (live) setProvider({ id: p.id, label: p.label });
+      })
+      .catch(() => {
+        /* older main process: show nothing */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
+  if (!provider) return null;
+  const Mark = provider.id === "deepseek" ? DeepSeekMark : ChatGptMark;
+  return (
+    <span className="brand-provider" title={`OnFlip is driving ${provider.label}`}>
+      <span className="brand-x">×</span>
+      <Mark size={14} />
+      {provider.label}
+    </span>
   );
 }
