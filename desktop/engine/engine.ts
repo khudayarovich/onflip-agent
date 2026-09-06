@@ -30,6 +30,7 @@ import { chooseTransport, Transport } from "onflip/dist/providers/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import {
   compactionBudget,
+  DEEPSEEK_CEILING_CHARS,
   describePlan,
   planLimitCard,
   promptCrowdsPlan,
@@ -646,6 +647,11 @@ export class Engine {
     // compacting every few turns of real work. The prompt's own size goes
     // in because the send carries it too: budgeting the transcript alone
     // is how a Free account ended up sending more than its window holds.
+    // DeepSeek's ceiling is its own, and it is not the composer's: measured,
+    // 80,069 characters arrived in one send and were read to the end.
+    if (!this.config.compactAfterChars && activeProvider() === "deepseek") {
+      return DEEPSEEK_CEILING_CHARS;
+    }
     return (
       this.config.compactAfterChars ??
       compactionBudget(

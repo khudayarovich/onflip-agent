@@ -52,12 +52,17 @@ export class DeepSeekTransport implements Transport {
     // the wrong effort cannot be taken back.
     await setDeepThink(wantsDeepThink(opts.thinking));
 
-    const { reply, ms } = await sendTurn(body, { signal: opts.signal });
+    const { reply, ms } = await sendTurn(body, {
+      signal: opts.signal,
+      // The answer as it grows, so the chat fills in rather than sitting on
+      // "working" and then appearing all at once.
+      onProgress: (partial) => opts.onDelta?.(partial),
+    });
     this.sentThrough = history.length;
     logger.info("deepseek", "transport turn", { chars: body.length, replyChars: reply.length, ms });
 
-    // Streamed progress is not available here — the reply is read once it has
-    // settled — so the caller is handed the finished text in one piece.
+    // The final text, after the partials above: the last poll only confirms
+    // the answer stopped changing, so the caller may not have seen it yet.
     opts.onDelta?.(reply);
     return { content: reply, conversationId: currentConversationId() };
   }

@@ -182,28 +182,20 @@ export function takeReplyImages(): chatgpt.ReplyImage[] {
 }
 
 /**
- * Attachments, declined out loud.
+ * Attachments.
  *
- * The only call here where silence would be wrong: a file the user attached
- * and that never went anywhere is a thing they asked for and did not get.
- * The composer warning is the channel the engine already reads for exactly
- * this kind of "your send was not quite what you meant".
+ * Both services take them, which this seam did not always believe: DeepSeek's
+ * branch used to refuse, having been written before anyone looked for the
+ * file input. There is one — hidden, multiple, and accepting images among a
+ * long list — and refusing it broke exactly the case that needs it most, a
+ * screenshot sent to Vision mode.
  */
-let deepseekWarning: string | null = null;
-
 export function queueAttachments(paths: string[]): void {
-  if (!onDeepSeek()) return chatgpt.queueAttachments(paths);
-  if (paths.length) {
-    deepseekWarning =
-      "OnFlip cannot attach files on DeepSeek yet, so they were not sent. The agent was given their paths and can read them from disk.";
-  }
+  return onDeepSeek() ? ds.queueAttachments(paths) : chatgpt.queueAttachments(paths);
 }
 
 export function takeComposerWarning(): string | null {
-  if (!onDeepSeek()) return chatgpt.takeComposerWarning();
-  const warning = deepseekWarning;
-  deepseekWarning = null;
-  return warning;
+  return onDeepSeek() ? null : chatgpt.takeComposerWarning();
 }
 
 /**

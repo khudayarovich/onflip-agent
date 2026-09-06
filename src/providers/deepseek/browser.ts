@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
 import { chromium, BrowserContext, Page } from "playwright";
 import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
@@ -165,7 +166,20 @@ async function readLast(page: Page): Promise<{ text: string; count: number }> {
 
 export async function sendTurn(
   text: string,
-  opts: OpenOptions & { timeoutMs?: number; signal?: AbortSignal } = {}
+  opts: OpenOptions & {
+    timeoutMs?: number;
+    signal?: AbortSignal;
+    /**
+     * Called with the answer so far, each time it grows.
+     *
+     * The reply is polled rather than streamed — DeepSeek's page gives no
+     * event to subscribe to — but it is polled every 1.2 seconds anyway to
+     * decide when the answer has settled, and handing that partial text back
+     * costs nothing. Without it a turn shows "working" for a minute and then
+     * the whole answer at once, which reads as a hang rather than as thinking.
+     */
+    onProgress?: (partial: string) => void;
+  } = {}
 ): Promise<SendResult> {
   const started = Date.now();
   let page = await chatPage(opts);
@@ -181,6 +195,8 @@ export async function sendTurn(
   // conversation. The last reply's text catches that; the count catches the
   // rarer case of a model repeating itself word for word.
   const before = await readLast(page);
+
+  await attachPending(page);
 
   await page.click(COMPOSER);
   // A string rather than a callback: this package is built without the DOM
@@ -228,7 +244,12 @@ export async function sendTurn(
       }
       lastChange = Date.now();
       if (now.text === last) quiet++;
-      else quiet = 0;
+      else {
+        quiet = 0;
+        // Only on a change, so a settled answer is not re-emitted three times
+        // while the loop confirms it has stopped growing.
+        opts.onProgress?.(now.text);
+      }
       last = now.text;
       if (quiet >= SETTLE_POLLS) break;
     } catch (e) {
@@ -458,4 +479,60 @@ export async function setMode(mode: string): Promise<boolean> {
     });
     return false;
   }
+}
+
+/**
+ * Files to attach to the next turn.
+ *
+ * DeepSeek does take attachments — a hidden multiple file input beside the
+ * composer, accepting images among a long list of types — which an earlier
+ * version of this provider did not know, and refused them instead. Reported
+ * from the field in the worst possible case: Vision mode selected, a
+ * screenshot attached, and the send going out with no image at all.
+ *
+ * Queued rather than sent immediately, because they belong to a turn: the
+ * transport hands over text and files together, and a file left over from an
+ * abandoned turn must not ride along with the next one.
+ */
+let pendingFiles: string[] = [];
+
+export function queueAttachments(paths: string[]): void {
+  pendingFiles = paths.filter((p) => p && fs.existsSync(p));
+}
+
+/** Put the queued files in the composer and wait for the page to take them. */
+async function attachPending(page: Page): Promise<void> {
+  const files = pendingFiles;
+  pendingFiles = [];
+  if (!files.length) return;
+
+  const input = await page.waitForSelector("input[type=file]", { state: "attached", timeout: 15_000 }).catch(() => null);
+  if (!input) {
+    logger.warn("deepseek", "no file input on the page; the turn goes without its attachments", {
+      files: files.length,
+    });
+    return;
+  }
+  await input.setInputFiles(files);
+
+  // Wait for the page to show them. Sending before the upload finishes is how
+  // a turn arrives describing an image that is not there — the failure this
+  // whole path exists to avoid, and it is silent.
+  const names = files.map((f) => path.basename(f));
+  // A polled read rather than waitForFunction: this package builds without
+  // the DOM library, so nothing here may name `document` in a callback.
+  let ok = false;
+  for (let i = 0; i < 50 && !ok; i++) {
+    await page.waitForTimeout(1_200);
+    const seen = (await page
+      .evaluate("document.body ? document.body.innerText : ''")
+      .catch(() => "")) as string;
+    ok = names.every((n) => seen.includes(n));
+  }
+  logger.info("deepseek", "attached files", { count: files.length, confirmed: ok });
+  if (!ok) {
+    logger.warn("deepseek", "the page never showed the attachments; sending anyway", { names });
+  }
+  // A moment for the upload to finish server-side after the chip appears.
+  await page.waitForTimeout(1_200);
 }

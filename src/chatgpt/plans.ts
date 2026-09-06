@@ -58,6 +58,24 @@ const CHARS_PER_TOKEN = 4;
 export const COMPOSER_CEILING_CHARS = 28_000;
 
 /**
+ * The same ceiling for DeepSeek, which is a different number.
+ *
+ * ChatGPT's 28k is set by what its composer will take before typing becomes
+ * unpredictable. DeepSeek's composer is not the constraint at all — measured,
+ * it accepted 200,000 characters without truncating — so the question is what
+ * its server accepts, and that was measured too: 80,069 characters sent in
+ * one turn, with a token planted at the very end coming back in the reply, so
+ * the whole thing arrived and was read. Ten and a half seconds.
+ *
+ * 45k leaves the system prompt (about 21k) and a reply comfortable room
+ * inside that proven 80k, and compacts a good deal less often than 28k would.
+ * Deliberately short of the proven figure rather than at it: the measurement
+ * is one send on one day, and the cost of being wrong is a turn that silently
+ * loses its oldest context.
+ */
+export const DEEPSEEK_CEILING_CHARS = 45_000;
+
+/**
  * The ceiling once a turn too large to type is uploaded instead.
  *
  * Typing was the binding constraint, so the plan never got to be. With the

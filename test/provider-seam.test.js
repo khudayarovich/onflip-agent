@@ -3,12 +3,14 @@
 /**
  * What the seam does with calls a provider cannot answer.
  *
- * The engine asks about Projects, plans, uploads and image replies on
- * ordinary paths — the status payload alone reaches for the plan and the
- * project list, on every tool call. ChatGPT has all of them and DeepSeek has
- * none, so the question is not whether DeepSeek can do these things but what
- * happens when it is asked. Throwing would turn "this service has no
- * projects" into a broken session.
+ * The engine asks about Projects, plans and image replies on ordinary paths —
+ * the status payload alone reaches for the plan and the project list, on every
+ * tool call. ChatGPT has them and DeepSeek does not, so the question is not
+ * whether DeepSeek can do these things but what happens when it is asked.
+ * Throwing would turn "this service has no projects" into a broken session.
+ *
+ * Attachments are not in that group, though they were once: DeepSeek takes
+ * files, and treating that as an absence broke Vision mode.
  *
  * The rule: absence answers with the shape that means nothing is there.
  * Refusal — losing something the user actually asked for — says so out loud.
@@ -67,29 +69,23 @@ test("image replies are an empty list", () => {
   assert.deepEqual(seam.takeReplyImages(), []);
 });
 
-// --- refusal says so --------------------------------------------------------
+// --- attachments, which both services take ---------------------------------
 
-test("attaching files is declined out loud, not swallowed", () => {
-  // The one place silence would be wrong: a file the user attached that never
-  // went anywhere is something they asked for and did not get.
-  use("deepseek");
-  seam.queueAttachments(["C:\\notes\\spec.md"]);
-  const warning = seam.takeComposerWarning();
-  assert.ok(warning, "a warning should be waiting");
-  assert.match(warning, /cannot attach files on DeepSeek/i);
-  assert.match(warning, /read them from disk/i, "and it should say what will happen instead");
-});
-
-test("the warning is taken once, like every other composer warning", () => {
-  use("deepseek");
-  seam.queueAttachments(["a.txt"]);
-  assert.ok(seam.takeComposerWarning());
-  assert.equal(seam.takeComposerWarning(), null);
-});
-
-test("attaching nothing warns about nothing", () => {
+test("attaching files on DeepSeek does not refuse", () => {
+  // It used to. The refusal was written before anyone looked for a file
+  // input, and DeepSeek has one — hidden, multiple, accepting images. The
+  // cost of that mistake was the case that needs it most: Vision mode
+  // selected, a screenshot attached, and the send going out without it.
   use("deepseek");
   seam.queueAttachments([]);
+  assert.equal(seam.takeComposerWarning(), null, "no warning: attaching works here");
+});
+
+test("a path that does not exist is dropped rather than sent", () => {
+  // The driver filters to files that are actually on disk, so a stale path
+  // cannot make a turn fail at the browser.
+  use("deepseek");
+  seam.queueAttachments(["C:\nope\missing.png"]);
   assert.equal(seam.takeComposerWarning(), null);
 });
 
@@ -113,11 +109,11 @@ test("on ChatGPT every one of these reaches the real driver", async () => {
   assert.equal(seam.takeComposerWarning(), null);
 });
 
-test("a DeepSeek warning never leaks into a ChatGPT run", () => {
-  // The warning is held in this module; switching provider must not surface
-  // it on the other service.
+test("queueing on one service does not leave anything for the other", () => {
+  // Each provider's driver holds its own pending files; switching must not
+  // carry one service's attachment into the next turn on the other.
   use("deepseek");
-  seam.queueAttachments(["leak.txt"]);
+  seam.queueAttachments([path.join(HOME, "nothing.png")]);
   use("chatgpt");
-  assert.equal(seam.takeComposerWarning(), null, "ChatGPT should see its own channel, not ours");
+  assert.equal(seam.takeComposerWarning(), null, "ChatGPT sees its own channel, not DeepSeek's");
 });

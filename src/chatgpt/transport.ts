@@ -13,6 +13,7 @@ import {
 } from "./browser-client";
 import { buildTurnPrompt } from "../agent/protocol";
 import { planLimitNote, rationedPlan } from "./plans";
+import { activeProvider } from "../providers/id";
 import { loadConfig, firstPositiveInt } from "../config";
 import { logger } from "../log";
 import {
@@ -221,6 +222,11 @@ export function shouldAttachTurn(state: {
  * plans anyway.
  */
 export function uploadsAvailable(): boolean {
+  // DeepSeek has no upload path at all — its transport types every turn, and
+  // there is no attachment code behind it to fall back to. Saying otherwise
+  // let the compaction budget size itself as though a turn too large to type
+  // had somewhere to go, which on that provider is simply untrue.
+  if (activeProvider() === "deepseek") return false;
   if (rationedPlan(loadConfig().planType)) return false;
   return Number.isFinite(UPLOAD_ABOVE_CHARS) && UPLOAD_ABOVE_CHARS > 0;
 }

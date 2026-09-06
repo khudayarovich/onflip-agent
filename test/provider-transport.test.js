@@ -68,3 +68,30 @@ test("both transports satisfy the contract the loop calls", () => {
     assert.equal(typeof t.name, "string", name + " name");
   }
 });
+
+// --- the shared files that gained provider guards --------------------------
+
+test("uploads stay available on ChatGPT and are off on DeepSeek", () => {
+  // `uploadsAvailable` lives in ChatGPT's own transport and now has a guard
+  // in it, so ChatGPT's answer is pinned here rather than assumed. DeepSeek
+  // has no upload path at all — saying otherwise sized its compaction budget
+  // as though a turn too large to type had somewhere to go.
+  const { uploadsAvailable } = require("../dist/chatgpt/transport");
+
+  write({ provider: "chatgpt" });
+  assert.equal(uploadsAvailable(), true, "ChatGPT is unchanged");
+
+  write({});
+  assert.equal(uploadsAvailable(), true, "and so is an install with no provider set");
+
+  write({ provider: "deepseek" });
+  assert.equal(uploadsAvailable(), false, "DeepSeek types every turn");
+});
+
+test("DeepSeek's ceiling is its own, and larger than the composer's", () => {
+  // 45k, from a measured 80,069-character send that arrived intact — not the
+  // 28k composer ceiling, which is a fact about ChatGPT's composer.
+  const { DEEPSEEK_CEILING_CHARS, COMPOSER_CEILING_CHARS } = require("../dist/chatgpt/plans");
+  assert.equal(DEEPSEEK_CEILING_CHARS, 45_000);
+  assert.ok(DEEPSEEK_CEILING_CHARS > COMPOSER_CEILING_CHARS);
+});
