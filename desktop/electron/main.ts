@@ -18,6 +18,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { Peer } from "../shared/wire";
+import { approvalToastXml, parseApprovalUrl } from "./approval-toast";
 import { runSignIn, clearSignIn } from "./signin";
 import { guardWebContents } from "./chrome-identity";
 import {
@@ -158,7 +159,28 @@ function toastLine(text: string, max = 160): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-function notifyAway(ws: Workspace, kind: NoticeKind, body: string): void {
+/**
+ * Ties a toast to the app run that showed it. Approval ids restart from 1
+ * every launch and Windows keeps toasts in the Action Center after the app
+ * is gone, so without this a stale button could answer today's question.
+ */
+const launchNonce = randomUUID().slice(0, 8);
+
+/** Approval toasts still on screen, closed when their prompt is settled. */
+const approvalToasts = new Map<number, Notification>();
+
+/** The approval was answered somewhere else; take its toast down. */
+function settleApprovalToast(id: number): void {
+  const toast = approvalToasts.get(id);
+  approvalToasts.delete(id);
+  try {
+    toast?.close();
+  } catch {
+    /* already gone */
+  }
+}
+
+function notifyAway(ws: Workspace, kind: NoticeKind, body: string, approvalId?: number): void {
   try {
     const state = loadState();
     if (state.notifications === false) return;
@@ -168,10 +190,26 @@ function notifyAway(ws: Workspace, kind: NoticeKind, body: string): void {
     const away = !win.isVisible() || win.isMinimized() || !win.isFocused();
     if (!away) return;
     const lang = state.language && NOTICE_TITLES[state.language] ? state.language : "en";
+    const title = NOTICE_TITLES[lang][kind];
+    // An approval toast on Windows carries Allow once / Deny buttons, which
+    // Electron's own template cannot: raw toast XML with protocol-activated
+    // actions, answered through the second-instance handler.
+    const buttons = kind === "approval" && approvalId !== undefined && process.platform === "win32";
     const toast = new Notification({
-      title: NOTICE_TITLES[lang][kind],
+      title,
       body: toastLine(body),
       icon: appIcon(),
+      ...(buttons
+        ? {
+            toastXml: approvalToastXml({
+              title,
+              body: toastLine(body),
+              lang,
+              nonce: launchNonce,
+              id: approvalId,
+            }),
+          }
+        : {}),
     });
     toast.on("click", () => {
       if (win.isDestroyed()) return;
@@ -180,10 +218,36 @@ function notifyAway(ws: Workspace, kind: NoticeKind, body: string): void {
       win.focus();
     });
     toast.show();
+    if (kind === "approval" && approvalId !== undefined) {
+      approvalToasts.set(approvalId, toast);
+      toast.on("close", () => approvalToasts.delete(approvalId));
+    }
   } catch (e) {
     // A notification that cannot be shown is not worth a failed turn.
     console.error("[desktop] notification failed:", e instanceof Error ? e.message : String(e));
   }
+}
+
+/**
+ * A toast button was clicked: the protocol launch lands here via
+ * `second-instance`. True when the URL was one of ours from this run — the
+ * window is then left where it is, which is the point of answering from the
+ * toast. A stale nonce (an earlier run's toast) falls through to the plain
+ * bring-the-app-forward behaviour.
+ */
+function answerApprovalFromToast(url: string): boolean {
+  const parsed = parseApprovalUrl(url);
+  if (!parsed || parsed.nonce !== launchNonce) return false;
+  settleApprovalToast(parsed.id);
+  const waiter = approvalWaiters.get(parsed.id);
+  if (!waiter) return true; // ours, but already answered elsewhere
+  approvalWaiters.delete(parsed.id);
+  telegramApprovalDone(parsed.id, parsed.allow ? "allowed here" : "denied here");
+  waiter.resolve({ allow: parsed.allow });
+  // The renderer's dialog is still up for this one; telling it closes it.
+  sendTo(waiter.ws, "approval-settled", { id: parsed.id });
+  setImmediate(refreshIndicator);
+  return true;
 }
 
 const workspaces = new Map<number, Workspace>();
@@ -618,7 +682,10 @@ function startEngine(ws: Workspace, requested?: string): void {
     // must not be credited to a prompt that is no longer open.
     if (event === "approval-cancelled") {
       for (const [id, waiter] of approvalWaiters) {
-        if (waiter.ws === ws) approvalWaiters.delete(id);
+        if (waiter.ws === ws) {
+          approvalWaiters.delete(id);
+          settleApprovalToast(id);
+        }
       }
     }
     // What the turn ended with arrives as an item before the turn-end event;
@@ -692,7 +759,7 @@ function askRendererForApproval(ws: Workspace, request: unknown): Promise<Approv
     // window asked to focus usually only flashes in the taskbar, and the
     // toast is what actually reaches the person.
     const ask = (request ?? {}) as { tool?: string; subject?: string; reason?: string };
-    notifyAway(ws, "approval", [ask.tool, ask.subject].filter(Boolean).join(": ") || ask.reason || "");
+    notifyAway(ws, "approval", [ask.tool, ask.subject].filter(Boolean).join(": ") || ask.reason || "", id);
     if (!ws.win.isDestroyed()) {
       ws.win.show();
       ws.win.focus();
@@ -722,7 +789,10 @@ async function stopEngine(ws: Workspace): Promise<void> {
   ws.peer = null;
   wire?.close("The engine is restarting.");
   for (const [id, waiter] of approvalWaiters) {
-    if (waiter.ws === ws) approvalWaiters.delete(id);
+    if (waiter.ws === ws) {
+      approvalWaiters.delete(id);
+      settleApprovalToast(id);
+    }
   }
   // Already dead, or never started (no pid) — after a crash the renderer's
   // own restart used to sit through the full grace period waiting for an
@@ -971,6 +1041,7 @@ function registerIpc(): void {
     if (approvalWaiters.has(payload.id)) {
       telegramApprovalDone(payload.id, payload.decision.allow ? "allowed here" : "denied here");
     }
+    settleApprovalToast(payload.id);
     const waiter = approvalWaiters.get(payload.id);
     setImmediate(refreshIndicator);
     if (!waiter) return;
@@ -1587,13 +1658,26 @@ if (!singleInstance) {
 } else {
   // Launching the app again — from the Start Menu, or the installer's
   // shortcut — surfaces the running instance, including out of the tray.
-  app.on("second-instance", () => {
+  // A launch that carries an onflip:// URL is not a person at the Start
+  // Menu, it is an approval toast's button answering through the protocol;
+  // the window then stays where it is, which is the point of the button.
+  app.on("second-instance", (_e, argv) => {
+    const url = argv?.find((a) => typeof a === "string" && a.startsWith("onflip://"));
+    if (url && answerApprovalFromToast(url)) return;
     showWindow();
   });
 
   // Windows shows toasts only for an app with an AppUserModelID; the
   // installer gives the shortcut this one, and a dev checkout needs it set.
   if (process.platform === "win32") app.setAppUserModelId("com.onflip.desktop");
+
+  // The approval toast's buttons launch onflip:// URLs, so the app must own
+  // the protocol. Per-user registry on Windows; a dev checkout registers the
+  // electron binary plus the app path, the way Electron documents it.
+  if (process.platform === "win32") {
+    if (app.isPackaged) app.setAsDefaultProtocolClient("onflip");
+    else app.setAsDefaultProtocolClient("onflip", process.execPath, [path.resolve(process.argv[1])]);
+  }
 
   // Every web-facing window, popups included, introduces itself as Chrome.
   // Registered before the app is ready so no window can be created ahead of
@@ -1642,6 +1726,7 @@ if (!singleInstance) {
         const waiter = approvalWaiters.get(id);
         if (!waiter) return false;
         approvalWaiters.delete(id);
+        settleApprovalToast(id);
         waiter.resolve(decision);
         // The app's own dialog is still on screen for this one; telling the
         // renderer closes it rather than leaving a prompt nobody can answer.
