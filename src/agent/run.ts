@@ -2,6 +2,7 @@ import { ChatMessage, ToolCall, ToolResult, SessionState } from "../types";
 import { listJobs, ToolRegistry } from "../tools";
 import { isTerminalTool, TerminalToolName, TERMINAL_TOOL_NAMES } from "../tools/terminal";
 import { Transport, SendOptions, TransportReply, ReplyMeta } from "../chatgpt/transport";
+import { COMPOSER_CEILING_CHARS } from "../chatgpt/plans";
 import { newMessage, parseTurn, formatToolResult, isUserRequest } from "./protocol";
 import {
   turnReminder,
@@ -1445,7 +1446,10 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<Chat
   // budget, so a compacted session can take several more turns before it
   // needs compacting again. Without this the brief filled the budget by
   // itself and every tool call started another round.
-  const budget = opts.compactAfterChars ?? 28_000;
+  // The caller normally passes a budget sized from the plan; this fallback
+  // tracks the composer ceiling rather than repeating it, so raising one
+  // cannot leave the other behind.
+  const budget = opts.compactAfterChars ?? COMPOSER_CEILING_CHARS;
   const target = Math.max(2_000, Math.floor(budget * 0.2));
 
   let summary = "";

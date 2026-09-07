@@ -54,8 +54,27 @@ const CHARS_PER_TOKEN = 4;
  *
  * Without a known plan the composer ceiling stands on its own, which is what
  * OnFlip did before it could read the plan at all.
+ *
+ * 40k, raised from 28k, and the reason is that this number now governs where
+ * it used to be a fallback. While large turns were uploaded as files the
+ * budget came from `UPLOAD_CEILING_CHARS`; uploads are off by default now —
+ * they were multiplying the requests a turn costs and getting accounts
+ * throttled — so every plan sizes its transcript from this line, and 28k
+ * against a ~17k system prompt left so little room that sessions compacted
+ * every few turns. Reported as exactly that.
+ *
+ * What bounds it is one measurement: the composer accepted 60,831 characters
+ * typed and answered normally, and refused 112,586. An ordinary turn only
+ * types the new messages, but a *fresh thread* replays the system prompt plus
+ * the whole transcript, so that replay — about 17k + this number — is the
+ * payload that has to stay inside the proven figure. 40k puts the worst case
+ * near 57k, under it with room to spare, and `MAX_PAYLOAD_CHARS` (80k) is
+ * still the backstop behind that.
+ *
+ * Plans whose own window is smaller than this are unaffected: `compactionBudget`
+ * takes the lower of the two, so Free still sizes itself from its window.
  */
-export const COMPOSER_CEILING_CHARS = 28_000;
+export const COMPOSER_CEILING_CHARS = 40_000;
 
 /**
  * The same ceiling for DeepSeek, which is a different number.
