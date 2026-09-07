@@ -144,6 +144,33 @@ const MAX_NUDGES_PER_TURN = 6;
 /** Replies ChatGPT reported as cut off that are re-requested before being used as they are. */
 const MAX_TRUNCATION_NUDGES = 2;
 
+/** Steps granted past the budget when the tail of the turn was productive. */
+export const STEP_EXTENSION = 20;
+/** The steps consulted to decide whether the turn earned that extension. */
+const PRODUCTIVE_WINDOW = 5;
+
+/**
+ * Was the end of the turn real work rather than thrash?
+ *
+ * The step budget exists to stop two different things, and only one of them
+ * deserves to be stopped. A turn that is thrashing — refusing the protocol,
+ * repeating failing calls, being nudged every other step — should stop hard:
+ * more steps buy more of the same, and every step is a real request on the
+ * user's account. A turn that runs out of budget with its last steps all
+ * landing is just a big job, and stopping it costs the user a "continue" and
+ * a restart of the model's momentum.
+ *
+ * "Productive" is at most one shaky step in the last five: a single failed
+ * edit followed by its fix is the normal texture of work (16% of all tool
+ * calls fail, measured), while two or more — or any protocol nudge — is the
+ * start of the pattern the budget exists to cut off.
+ */
+export function productiveTail(log: ReadonlyArray<"ok" | "shaky">): boolean {
+  if (log.length < PRODUCTIVE_WINDOW) return false;
+  const tail = log.slice(-PRODUCTIVE_WINDOW);
+  return tail.filter((s) => s === "ok").length >= PRODUCTIVE_WINDOW - 1;
+}
+
 /**
  * Run one user turn to completion.
  *
@@ -225,8 +252,38 @@ export async function runTurn(
   let compactionExhausted = false;
   /** Commands killed at their time limit this turn, however they were written. */
   let timeouts = 0;
+  /**
+   * How each step ended, oldest first — "ok" for a step whose tool calls
+   * landed, "shaky" for one that needed a nudge, failed all its calls, or
+   * repeated a failure. Consulted only when the budget runs out, to tell a
+   * turn stopped mid-work from one stopped mid-thrash.
+   */
+  const stepLog: ("ok" | "shaky")[] = [];
+  /** The budget, plus the one extension a productive turn can earn. */
+  let allowed = budget;
+  let extendedOnce = false;
 
-  for (let iteration = 1; iteration <= budget; iteration++) {
+  for (let iteration = 1; ; iteration++) {
+    if (iteration > allowed) {
+      // The budget is a fuse against thrash, not a cap on honest work. A
+      // turn whose last steps were all landing gets one bounded extension —
+      // once, so a slow-motion loop that stays just productive-looking
+      // cannot ratchet forever.
+      if (!extendedOnce && productiveTail(stepLog)) {
+        extendedOnce = true;
+        allowed += STEP_EXTENSION;
+        logger.info("agent", "step budget extended", {
+          budget,
+          extension: STEP_EXTENSION,
+          tail: stepLog.slice(-PRODUCTIVE_WINDOW),
+        });
+        events.onNotice?.(
+          `Reached the ${budget}-step budget mid-work — the last steps were all landing, so continuing for up to ${STEP_EXTENSION} more. This happens once per turn.`
+        );
+      } else {
+        return finish("exhausted", "", iteration - 1);
+      }
+    }
     if (opts.signal.aborted) return finish("interrupted", "", iteration - 1);
 
     // Checked before every send, not once per user turn. A single turn can run
@@ -300,6 +357,7 @@ export async function runTurn(
         `ChatGPT's reply was cut off at its length limit — asking for it again (${truncationNudges} of ${MAX_TRUNCATION_NUDGES}).`
       );
       history.push(newMessage("user", truncationNudge({ attempt: truncationNudges })));
+      stepLog.push("shaky");
       continue;
     }
 
@@ -316,6 +374,10 @@ export async function runTurn(
       if (text.trim()) events.onNarration?.(text.trim());
 
       const resultBlocks: string[] = [];
+      // For the step log: did anything land, and did anything repeat a
+      // failure it had already been shown?
+      let anyLanded = false;
+      let sawRepeat = false;
       for (const call of realCalls) {
         if (opts.signal.aborted) {
           // Keep whatever already ran so the transcript stays truthful.
@@ -353,6 +415,7 @@ export async function runTurn(
         events.onToolEnd?.(call, result);
         executedCalls++;
         if (result.denied) deniedCalls++;
+        if (!result.error && !result.denied) anyLanded = true;
 
         // Watching a model send the same failing call four times in a row is
         // watching it spend the step budget on a result it has already been
@@ -363,7 +426,10 @@ export async function runTurn(
           const signature = `${call.tool}:${JSON.stringify(call.arguments ?? {})}`;
           const attempts = (failedCalls.get(signature) ?? 0) + 1;
           failedCalls.set(signature, attempts);
-          if (attempts > 1) output = `${output}\n\n${repeatedCallAdvice(call.tool, attempts)}`;
+          if (attempts > 1) {
+            sawRepeat = true;
+            output = `${output}\n\n${repeatedCallAdvice(call.tool, attempts)}`;
+          }
         }
         // Counted apart from the signature above, because the shape that runs
         // away is not one command repeated — it is several variations on one
@@ -372,7 +438,10 @@ export async function runTurn(
         // first killed command had left Word running and holding the file.
         if (result.timedOut) {
           timeouts++;
-          if (timeouts > 1) output = `${output}\n\n${repeatedTimeoutAdvice(timeouts)}`;
+          if (timeouts > 1) {
+            sawRepeat = true;
+            output = `${output}\n\n${repeatedTimeoutAdvice(timeouts)}`;
+          }
         }
 
         resultBlocks.push(formatToolResult(call, output, Boolean(result.error)));
@@ -393,6 +462,7 @@ export async function runTurn(
       history.push(
         newMessage("user", resultBlocks.join("\n\n"), { toolName: realCalls[0].tool })
       );
+      stepLog.push(anyLanded && !sawRepeat ? "ok" : "shaky");
       continue;
     }
 
@@ -447,6 +517,7 @@ export async function runTurn(
             })
           )
         );
+        stepLog.push("shaky");
         continue;
       }
       if (name === "done") {
@@ -461,6 +532,7 @@ export async function runTurn(
             `ChatGPT said it was done with ${open} task${open === 1 ? "" : "s"} still open on its list — asking it to finish or close them.`
           );
           history.push(newMessage("user", doneWithOpenTodosNudge({ openTodos, openCount: open })));
+          stepLog.push("shaky");
           continue;
         }
         const summary = stringArgument(terminal.arguments.summary);
@@ -499,6 +571,7 @@ export async function runTurn(
       history.push(
         newMessage("user", protocolCorrection(malformed, { attempt: protocolCorrections }))
       );
+      stepLog.push("shaky");
       continue;
     }
     // Out of retries on a call that never parsed. The reply is a broken tool
@@ -574,6 +647,7 @@ export async function runTurn(
           })
         )
       );
+      stepLog.push("shaky");
       continue;
     }
 
@@ -609,8 +683,6 @@ export async function runTurn(
     events.onFinal?.(final, { kind: "prose", openTodos: open });
     return finish(repeated ? "repeat" : "prose", final, iteration);
   }
-
-  return finish("exhausted", "", budget);
 }
 
 /**

@@ -1234,11 +1234,17 @@ export class Engine {
         this.stallRestart = false;
         this.peer.emit("turn", { state: "end", interrupted: true, iterations: result.iterations });
       } else if (result.exhausted) {
+        // More iterations than the budget means the turn earned its one
+        // mid-work extension and used that up too — say so, or "60 of 40"
+        // reads like a counting bug.
+        const extended = result.iterations > this.maxIterations;
         this.peer.emit("turn", {
           state: "end",
           exhausted: true,
           iterations: result.iterations,
-          error: `Stopped after ${result.iterations} of ${this.maxIterations} steps without finishing. Say "continue" to keep going, or raise the step budget in Settings.`,
+          error: extended
+            ? `Stopped after ${result.iterations} steps — the ${this.maxIterations}-step budget plus one mid-work extension — without finishing. Say "continue" to keep going, or raise the step budget in Settings.`
+            : `Stopped after ${result.iterations} of ${this.maxIterations} steps without finishing. Say "continue" to keep going, or raise the step budget in Settings.`,
         });
       } else {
         this.autoResumes = 0;
