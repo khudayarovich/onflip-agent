@@ -726,6 +726,9 @@ a:hover {
   z-index: 30;
   height: 0;
   display: flex;
+  /* the anchor is 0-tall so the transcript doesn't jump; without this the
+     default stretch squashes the pill to that height too */
+  align-items: flex-start;
   justify-content: flex-end;
   padding: 0 22px;
 }
