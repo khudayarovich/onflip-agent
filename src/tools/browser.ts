@@ -59,6 +59,20 @@ async function attachEmbedded(endpoint: string, mark: string): Promise<Page | nu
         if (!candidate.url().includes(mark)) continue;
         context = ctx;
         embedded = true;
+        // Attaching must leave the view sized by its window and nothing else.
+        // Playwright can carry a viewport of its own into a CDP-attached
+        // page, and an earlier run of this session may have left an override
+        // behind; either one renders the page at a size the frame does not
+        // have. Clearing costs one message and heals a view already wrong.
+        try {
+          const cdp = await ctx.newCDPSession(candidate);
+          await cdp.send("Emulation.clearDeviceMetricsOverride");
+          await cdp.detach().catch(() => {});
+        } catch (e) {
+          logger.debug("browser-tool", "could not clear the view's metrics override", {
+            error: e instanceof Error ? e.message.slice(0, 120) : String(e),
+          });
+        }
         logger.info("browser-tool", "attached to the desktop's browser view", { endpoint });
         return candidate;
       }
@@ -120,6 +134,14 @@ export async function setBrowserViewport(width: number, height: number, scale?: 
   };
   if (next.width === viewport.width && next.height === viewport.height) return;
   viewport = next;
+  // The docked view is sized by the window itself, so nothing here may
+  // emulate its metrics. `setViewportSize` is `Emulation.setDeviceMetricsOverride`
+  // underneath, which pins the page to one render size inside a frame that
+  // goes on being resized — the page then sits misaligned with its own panel
+  // and stays that way, which is what a resized panel did to the real view.
+  // The size is still recorded above: the fallback browser launches from it,
+  // and that one genuinely needs the override.
+  if (embedded) return;
   if (page && !page.isClosed()) {
     await page.setViewportSize(next).catch(() => {
       /* the page is busy; the next launch picks it up */
