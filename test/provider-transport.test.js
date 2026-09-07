@@ -98,10 +98,26 @@ test("uploads are off by default everywhere, and opt-in never reaches DeepSeek",
   }
 });
 
-test("DeepSeek's ceiling is its own, and larger than the composer's", () => {
-  // 45k, from a measured 80,069-character send that arrived intact — not the
-  // 28k composer ceiling, which is a fact about ChatGPT's composer.
+test("DeepSeek's ceiling is its own, and far larger than the composer's", () => {
+  // DeepSeek's transport applies no clamp and its composer took 200,000
+  // characters without truncating, so its ceiling is not a fact about
+  // ChatGPT's composer and must never be tied to one.
   const { DEEPSEEK_CEILING_CHARS, COMPOSER_CEILING_CHARS } = require("../dist/chatgpt/plans");
-  assert.equal(DEEPSEEK_CEILING_CHARS, 45_000);
+  assert.equal(DEEPSEEK_CEILING_CHARS, 150_000);
   assert.ok(DEEPSEEK_CEILING_CHARS > COMPOSER_CEILING_CHARS);
+});
+
+test("ChatGPT's ceiling stays inside what one typed message can carry", () => {
+  // The guard that matters: ChatGPT's transport clamps a single message at
+  // 80,000 characters, silently, keeping the head and tail and dropping the
+  // middle. A fresh thread replays the system prompt plus the transcript, so
+  // that sum is what has to stay under the clamp — raising this ceiling to a
+  // DeepSeek-sized number would corrupt long conversations invisibly.
+  const { COMPOSER_CEILING_CHARS } = require("../dist/chatgpt/plans");
+  const CLAMP = 80_000;
+  const BIGGEST_SYSTEM_PROMPT = 21_000;
+  assert.ok(
+    COMPOSER_CEILING_CHARS + BIGGEST_SYSTEM_PROMPT < CLAMP,
+    `a fresh-thread replay of ${COMPOSER_CEILING_CHARS + BIGGEST_SYSTEM_PROMPT} would be clamped at ${CLAMP}`
+  );
 });

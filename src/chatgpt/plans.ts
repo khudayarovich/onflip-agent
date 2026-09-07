@@ -77,22 +77,30 @@ const CHARS_PER_TOKEN = 4;
 export const COMPOSER_CEILING_CHARS = 40_000;
 
 /**
- * The same ceiling for DeepSeek, which is a different number.
+ * The same ceiling for DeepSeek, which is a different number — and a much
+ * larger one, because nothing on this path truncates behind your back.
  *
- * ChatGPT's 28k is set by what its composer will take before typing becomes
- * unpredictable. DeepSeek's composer is not the constraint at all — measured,
- * it accepted 200,000 characters without truncating — so the question is what
- * its server accepts, and that was measured too: 80,069 characters sent in
- * one turn, with a token planted at the very end coming back in the reply, so
- * the whole thing arrived and was read. Ten and a half seconds.
+ * ChatGPT's ceiling is set by what its composer will take before typing
+ * becomes unpredictable, and by the 80k clamp its transport applies to a
+ * single message. DeepSeek has neither. Its composer is not the constraint —
+ * measured, it accepted 200,000 characters without truncating — and its
+ * transport has no clamp at all, so a body is handed over whole or not at
+ * all. The composer fill checks what was actually accepted and warns when it
+ * falls short, so a payload that is too large says so in the log rather than
+ * arriving quietly gutted.
  *
- * 45k leaves the system prompt (about 21k) and a reply comfortable room
- * inside that proven 80k, and compacts a good deal less often than 28k would.
- * Deliberately short of the proven figure rather than at it: the measurement
- * is one send on one day, and the cost of being wrong is a turn that silently
- * loses its oldest context.
+ * 150k, raised from 45k, on the owner's instruction and after a session at a
+ * far higher setting ran without trouble. It is above the figure that was
+ * measured end to end — 80,069 characters sent in one turn, with a token
+ * planted at the very end coming back in the reply, so the whole thing
+ * arrived and was read — so treat this as chosen rather than proven. The
+ * signal to watch is `the composer truncated the turn` in the log; that line
+ * is what says the number has gone too far.
+ *
+ * Only a fresh thread ever sends a transcript this size: an ordinary turn
+ * carries just the new messages.
  */
-export const DEEPSEEK_CEILING_CHARS = 45_000;
+export const DEEPSEEK_CEILING_CHARS = 150_000;
 
 /**
  * The ceiling once a turn too large to type is uploaded instead.
