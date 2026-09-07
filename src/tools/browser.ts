@@ -163,7 +163,17 @@ function shotsDir(): string {
  * ChatGPT, where a familiar browser earns its Cloudflare clearance more
  * easily. `ONFLIP_BROWSER_CHANNEL` overrides this when a site needs Chrome.
  */
+/**
+ * Set when a launch failed in a way this session cannot recover from — no
+ * Chrome, no Edge, and the bundled download failed too. A session in the
+ * field tried browser verification three separate times, minutes apart, and
+ * paid the full download timeout for each; the machine had not grown a
+ * browser in between. The first failure is the answer for the whole session.
+ */
+let launchDeadReason: string | null = null;
+
 async function launch(headless: boolean): Promise<BrowserContext> {
+  if (launchDeadReason) throw new Error(launchDeadReason);
   const preferred = process.env.ONFLIP_BROWSER_CHANNEL ?? "chromium";
   const mobile = isMobileShape(viewport.width);
   // Phone shapes always render at 2× like a real phone; desktop shapes
@@ -206,9 +216,13 @@ async function launch(headless: boolean): Promise<BrowserContext> {
     if (await ensureBundledBrowser(undefined, headless)) {
       return await chromium.launchPersistentContext(profileDir(), options);
     }
+    launchDeadReason =
+      "The agent's browser could not start earlier this session: Chrome and Edge are not installed, and the bundled browser could not be downloaded. " +
+      "That will not change until Google Chrome is installed (or the network is back) and OnFlip is restarted. Do not call browser tools again this session — verify another way.";
     throw new Error(
       "The agent's browser could not start: Chrome and Edge are not installed, and the bundled browser could not be downloaded. " +
-        "Check the network, or install Google Chrome. Running `npx playwright install` will not help — OnFlip fetches its own copy."
+        "Check the network, or install Google Chrome. Running `npx playwright install` will not help — OnFlip fetches its own copy. " +
+        "Until one of those changes, browser tools cannot work — verify another way instead of retrying."
     );
   }
 }
