@@ -66,10 +66,21 @@ function keyInput(e: React.KeyboardEvent): Record<string, unknown> | null {
 
 export function BrowserPanel({
   open,
+  covered,
   frame,
   onClose,
 }: {
   open: boolean;
+  /**
+   * Something is drawn over this panel — a modal, or the approval dialog.
+   *
+   * The docked view is a native view Chromium composites *above* the window's
+   * own web contents, so it is not in the page and no `z-index` can put
+   * anything in front of it. Settings opened behind the browser because of
+   * exactly that. While a modal is up the view is parked off screen and put
+   * back afterwards, which is the only way a native view yields to HTML.
+   */
+  covered?: boolean;
   frame: BrowserFrameDTO | null;
   onClose: () => void;
 }): React.ReactElement {
@@ -145,7 +156,10 @@ export function BrowserPanel({
   useEffect(() => {
     if (embedded === null) return;
     const el = bodyRef.current;
-    if (!open || !el) {
+    // `covered` parks the view for the same reason `!open` does, and only the
+    // real view needs it: the screencast is an <img> in the page, which a
+    // modal covers by ordinary stacking.
+    if (!open || covered || !el) {
       // Off screen, not unloaded: the agent may still be working in the page,
       // and a half-filled form nobody can see is still a form.
       if (embedded) void window.onflip.browserViewHide?.().catch(() => {});
@@ -238,7 +252,9 @@ export function BrowserPanel({
       observer.disconnect();
       window.removeEventListener("resize", report);
     };
-  }, [open, embedded]);
+    // `covered` belongs here: leaving it out would park the view when a modal
+    // opened and never put it back when it closed.
+  }, [open, covered, embedded]);
 
   const host = (() => {
     if (!frame?.url) return "";

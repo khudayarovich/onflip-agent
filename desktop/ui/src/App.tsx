@@ -1310,6 +1310,10 @@ export function App(): React.ReactElement {
 
       <BrowserPanel
         open={browserOpen}
+        // The docked browser is a native view composited above the page, so
+        // nothing drawn in HTML can cover it — it has to be taken off screen
+        // by hand while anything is over it.
+        covered={modal !== null || approval !== null || confirm !== null}
         frame={browserFrame}
         onClose={() => setBrowserOpen(false)}
       />

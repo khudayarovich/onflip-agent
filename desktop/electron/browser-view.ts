@@ -305,6 +305,8 @@ export function setViewBounds(win: BrowserWindow, bounds: ViewBounds): boolean {
     width: Math.max(0, Math.round(bounds.width)),
     height: Math.max(0, Math.round(bounds.height)),
   });
+  // Placing it is also what brings it back after a modal has had the screen.
+  view.setVisible?.(true);
   return true;
 }
 
@@ -312,12 +314,26 @@ export function setViewBounds(win: BrowserWindow, bounds: ViewBounds): boolean {
  * Take the view off screen without unloading it.
  *
  * Closing the panel must not throw the page away: the agent may still be
- * working in it, and a half-filled form nobody can see is still a form. Zero
- * bounds hide it and keep it running.
+ * working in it, and a half-filled form nobody can see is still a form.
+ *
+ * `setVisible(false)` is what actually takes it out of the picture, and zero
+ * bounds are kept beside it rather than instead of it. A native view is
+ * composited above the window's own web contents, so nothing drawn in HTML
+ * can cover it and no `z-index` applies — which is why a modal opened behind
+ * the browser. Bounds alone were not enough to rely on: a zero-area view
+ * paints nothing, but the page behind it keeps its old layout and the view
+ * stays in the window's stack, so the state was neither reliably hidden nor
+ * observably so. Visibility is the property that answers the question being
+ * asked, and the page reports it — `document.visibilityState` goes to
+ * `hidden`, which is how this is tested.
+ *
+ * Optional-called because the method arrived in a later Electron than the
+ * one this shipped on first; without it the zero bounds still apply.
  */
 export function hideView(win: BrowserWindow): void {
   const view = views.get(win);
   if (view && !view.webContents.isDestroyed()) {
+    view.setVisible?.(false);
     view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
   }
 }
