@@ -1447,7 +1447,19 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<Chat
           // of it — so it has to carry the fact that they are gone.
           "The file contents you saw earlier are NOT in this conversation any more. Before editing any file, read it again: an `old_string` written from memory will not match.",
           "",
-          "Continue from here. The tool protocol and every instruction above still applies.",
+          // The compacted transcript also loses every worked example of the
+          // block syntax, and a session in the field showed what that costs:
+          // straight after its first compaction the model stopped emitting
+          // blocks entirely, decided "the OnFlip execution channel is not
+          // being accepted", and refused its way through the rest of the
+          // step budget. The roster plus one concrete block is the same
+          // evidence the protocol corrections use, applied before the slip
+          // instead of after it.
+          `Continue from here. The tool protocol and every instruction above still applies, and the tools attached to this conversation are unchanged: ${opts.tools.list.map((t) => t.name).join(", ")}. The block you type IS the call — nothing needs to be granted or attached first. End your next reply with the onflip block for the next step, e.g.:`,
+          "",
+          "```onflip",
+          "tool: todo_read",
+          "```",
         ].join("\n")
       )
     );
