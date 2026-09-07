@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.3
+# OnFlip Desktop 0.10.4
 
-**The agent knows when you are asking from your phone.** Ask over Telegram for a file and the file arrives, instead of the path to it. Plus a turn that can no longer spend itself retrying one thing that cannot work, and the bot showing three dots while it thinks.
+**The DeepSeek sign-in you completed now counts.** Successful sign-ins were being reported as failures on Windows and macOS alike — fixed, and the sign-in window now closes itself the moment the session lands, the way ChatGPT's does. Plus Allow once / Deny buttons right on the Windows approval toast, and the find-in-chat bar has its height back.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,27 +8,29 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.3.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.3/OnFlip-Setup-0.10.3.exe) | ~84 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.3-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.3/OnFlip-0.10.3-mac-arm64.dmg) | ~101 MB |
-| **macOS** · Intel | [OnFlip-0.10.3-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.3/OnFlip-0.10.3-mac-x64.dmg) | ~108 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.4.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.4/OnFlip-Setup-0.10.4.exe) | ~84 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.4-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.4/OnFlip-0.10.4-mac-arm64.dmg) | ~101 MB |
+| **macOS** · Intel | [OnFlip-0.10.4-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.4/OnFlip-0.10.4-mac-x64.dmg) | ~108 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
 
 **On 0.8.7 or later?** You should not need this page: the app offers the update itself.
 
-## What's new
-
-**A request from Telegram now says so.** Asked over the bot to send a file, the agent used to save it and answer with its path — the right answer for someone at the keyboard, and no answer at all for someone holding a phone, who then had to ask a second time. The turn now carries where it came from: the model is told the person is not at this computer, cannot open a path on it, and that anything they asked for goes to them as a file. Answers from the bot are kept short enough to read on a phone. A request typed at the desktop is unaffected — there a path is exactly right.
-
-**The bot shows it is thinking.** Three dots in the chat header for as long as the turn runs, refreshed every four seconds, gone the moment it ends. An agent turn is minutes, and the gap between "Working…" and the answer used to look like nothing happening.
-
 ## Fixed
 
-**A turn can no longer spend itself on one thing that cannot work.** From a real log: a Word document to export as PDF, on a machine where Word's COM export never returned. The agent tried it four ways — direct export, a retry wrapper, LibreOffice, SaveAs — each killed at the two-minute limit, and each attempt made the next worse, because killing a command does not kill the Word process it started and that process kept the document open. Identical-call detection could not see it: four spellings of one idea are not the same call. Timeouts are counted on their own now, and from the second one the model is told what it actually needs — that a timeout is a command that never came back, that whatever it started is still running and still holding its files, and to take a different route or stop and say what is blocking it.
+**Signing in to DeepSeek works.** The sign-in itself always did — the app then threw the success away, expecting a detail only the ChatGPT flow reports, and the dialog dropped back with no message as though nothing had happened. If you signed in before this fix and gave up: your session is very likely already in the app's profile, and 0.10.4 will simply find it — check the account menu before signing in again.
 
-**PowerShell parse errors are no longer unreadable.** They are written before the command runs, so the prelude that switches the console to UTF-8 has not executed and they arrive in the wrong codepage as a drift of replacement characters. A model that cannot read its own syntax error cannot fix it, so it guesses — which is how the loop above began. Those are now recognised and flagged as unreliable text.
+**The DeepSeek sign-in window closes itself.** Sign in, and the window is closed for you the moment the session reaches the profile — no more closing it by hand or hunting for the Done button. The window is also closed the way Chrome's own Quit closes it, and the app waits for it to be truly gone before checking, so a session can no longer be lost to a race with the browser writing it out.
 
-**And the syntax error itself:** a here-string whose closing `'@` was indented with the rest of the script. That is a parse error every time, and writing a script inside an indented block is exactly the situation that produces it, so the shell tool now says the rule out loud — along with the one about Office applications outliving the command that opened them.
+## What's new
+
+**Answer approvals from the toast (Windows).** When OnFlip needs your approval while you are in another window, the notification now carries **Allow once** and **Deny** buttons — answer without switching apps, and the window stays where it is. Answering in the app, or from Telegram, takes the toast down so nobody is left holding live buttons for a settled question.
+
+## Also fixed
+
+**Find in chat had been squashed flat** — the search bar now renders at its full height.
+
+**Two more ways a turn could spend its whole step budget on nothing are closed.** On a machine with no usable browser, the first failed browser start is now the answer for the session instead of being retried at full cost; and after the conversation is compacted, the model gets its tool roster and a worked example back — the moment a session in the field fell off the protocol and refused its way to the step limit.
 
 Everything here works the same on ChatGPT and DeepSeek.
 
@@ -36,4 +38,4 @@ Everything here works the same on ChatGPT and DeepSeek.
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.2...desktop-v0.10.3](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.2...desktop-v0.10.3)
+**Full changelog:** [desktop-v0.10.3...desktop-v0.10.4](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.3...desktop-v0.10.4)
