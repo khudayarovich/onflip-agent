@@ -166,6 +166,9 @@ function clampPayload(text: string): string {
 // all. 45k keeps a wide margin under the proven figure while leaving the
 // file path for turns that are genuinely large — and `MAX_PAYLOAD_CHARS`
 // (80k) is still the backstop behind both.
+//
+// The threshold only matters when the upload path is opted into at all —
+// see `uploadsAvailable`, which is where the off-by-default decision lives.
 const UPLOAD_ABOVE_CHARS = Number(process.env.ONFLIP_UPLOAD_ABOVE ?? 45_000);
 
 /**
@@ -212,23 +215,34 @@ export function shouldAttachTurn(state: {
  * Whether a turn too large to type has somewhere else to go.
  *
  * The compaction budget turns on this: with uploads the account's window is
- * the limit, without them the composer is. ONFLIP_UPLOAD_ABOVE=0 turns the
- * path off and goes back to typing everything.
+ * the limit, without them the composer is.
  *
- * The plan has the last word. On Free and Go an upload spends a small rationed
- * allowance while typing spends nothing, so there is no size at which
- * uploading is the better trade — see `rationedPlan`. Compaction picks the
- * composer ceiling as a consequence, which is the correct budget for those
- * plans anyway.
+ * Off for every plan since 2026-09: a Pro account in the field hit HTTP 429
+ * on `/backend-api/f/conversation` with retry-after 180 — the account
+ * throttled outright. The upload path multiplies the backend requests a turn
+ * costs (the file upload rides beside the send), it was already measured four
+ * times slower end to end, and once a session's transcript outgrew the
+ * threshold it attached a file on *every* fresh-thread replay. Typing spends
+ * one request per turn on every plan, so every plan types; the budget falls
+ * back to the composer ceiling, which compacts more often and still costs
+ * far fewer requests than a file per turn.
+ *
+ * `ONFLIP_UPLOAD_ABOVE=<chars>` opts back in, for anyone who prefers the old
+ * trade. The plan still has the last word even then: on Free and Go an upload
+ * spends a small rationed allowance while typing spends nothing — see
+ * `rationedPlan` — and DeepSeek has no upload path at all; its transport
+ * types every turn, and there is no attachment code behind it to fall back
+ * to.
  */
 export function uploadsAvailable(): boolean {
-  // DeepSeek has no upload path at all — its transport types every turn, and
-  // there is no attachment code behind it to fall back to. Saying otherwise
-  // let the compaction budget size itself as though a turn too large to type
-  // had somewhere to go, which on that provider is simply untrue.
   if (activeProvider() === "deepseek") return false;
   if (rationedPlan(loadConfig().planType)) return false;
-  return Number.isFinite(UPLOAD_ABOVE_CHARS) && UPLOAD_ABOVE_CHARS > 0;
+  // Read live rather than from the module constant, so a test — or a session
+  // launched with the override — answers for its own environment.
+  const raw = process.env.ONFLIP_UPLOAD_ABOVE?.trim();
+  if (!raw) return false;
+  const above = Number(raw);
+  return Number.isFinite(above) && above > 0;
 }
 
 /**

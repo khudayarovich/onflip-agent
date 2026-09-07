@@ -23,8 +23,10 @@ const path = require("node:path");
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-plan-"));
 process.env.USERPROFILE = HOME;
 process.env.HOME = HOME;
-// The upload path must be on by default, or "off on Free" would prove nothing.
-delete process.env.ONFLIP_UPLOAD_ABOVE;
+// Uploads are off by default for every plan now, so the plan gating being
+// tested here only shows with the path opted back in — otherwise "off on
+// Free" would prove nothing.
+process.env.ONFLIP_UPLOAD_ABOVE = "45000";
 
 const CONFIG_DIR = path.join(HOME, ".onflip");
 fs.mkdirSync(CONFIG_DIR, { recursive: true });
@@ -55,16 +57,26 @@ test("a Free account never uploads a turn, however large", () => {
   assert.equal(uploadsAvailable(), false);
 });
 
-test("a paid account still uploads", () => {
+test("a paid account can upload once opted in", () => {
   setPlan("chatgptplusplan", MODELS);
   assert.equal(uploadsAvailable(), true);
 });
 
-test("an unread plan keeps the old behaviour", () => {
+test("an unread plan follows the opt-in the same way", () => {
   // The plan is not known on the first turn of a fresh install, and assuming
   // Free there would downgrade every account until it was read.
   setPlan(undefined, MODELS);
   assert.equal(uploadsAvailable(), true);
+});
+
+test("without the opt-in even a paid account types every turn", () => {
+  delete process.env.ONFLIP_UPLOAD_ABOVE;
+  try {
+    setPlan("chatgptproplan", MODELS);
+    assert.equal(uploadsAvailable(), false);
+  } finally {
+    process.env.ONFLIP_UPLOAD_ABOVE = "45000";
+  }
 });
 
 test("attachments are refused on Free and allowed on Plus", () => {

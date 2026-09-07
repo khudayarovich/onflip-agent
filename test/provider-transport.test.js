@@ -71,21 +71,31 @@ test("both transports satisfy the contract the loop calls", () => {
 
 // --- the shared files that gained provider guards --------------------------
 
-test("uploads stay available on ChatGPT and are off on DeepSeek", () => {
-  // `uploadsAvailable` lives in ChatGPT's own transport and now has a guard
-  // in it, so ChatGPT's answer is pinned here rather than assumed. DeepSeek
-  // has no upload path at all — saying otherwise sized its compaction budget
-  // as though a turn too large to type had somewhere to go.
+test("uploads are off by default everywhere, and opt-in never reaches DeepSeek", () => {
+  // Every plan types every turn since the Pro-account throttling report —
+  // the upload path multiplied backend requests per turn. The env override
+  // opts back in, but DeepSeek has no upload path at all, so even the
+  // override must not size its compaction budget as though a turn too large
+  // to type had somewhere to go.
   const { uploadsAvailable } = require("../dist/chatgpt/transport");
 
+  delete process.env.ONFLIP_UPLOAD_ABOVE;
   write({ provider: "chatgpt" });
-  assert.equal(uploadsAvailable(), true, "ChatGPT is unchanged");
+  assert.equal(uploadsAvailable(), false, "ChatGPT types every turn by default");
 
-  write({});
-  assert.equal(uploadsAvailable(), true, "and so is an install with no provider set");
+  process.env.ONFLIP_UPLOAD_ABOVE = "45000";
+  try {
+    write({ provider: "chatgpt" });
+    assert.equal(uploadsAvailable(), true, "the env override opts ChatGPT back in");
 
-  write({ provider: "deepseek" });
-  assert.equal(uploadsAvailable(), false, "DeepSeek types every turn");
+    write({});
+    assert.equal(uploadsAvailable(), true, "and an install with no provider set");
+
+    write({ provider: "deepseek" });
+    assert.equal(uploadsAvailable(), false, "DeepSeek types every turn regardless");
+  } finally {
+    delete process.env.ONFLIP_UPLOAD_ABOVE;
+  }
 });
 
 test("DeepSeek's ceiling is its own, and larger than the composer's", () => {
