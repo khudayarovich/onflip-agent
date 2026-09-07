@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.6
+# OnFlip Desktop 0.10.7
 
-**Switching services mid-turn can no longer mix them.** Switching to DeepSeek while a ChatGPT turn was still running could leave DeepSeek showing the ChatGPT account's name, with the two services' settings written into each other's space. Fixed at both ends.
+**The built-in browser sits straight in its panel again, and sessions keep far more of the conversation before compacting.** Two fixes reported straight after 0.10.6: the browser page ending up misaligned with the frame around it, and the transcript being summarised every few turns.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.6.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.6/OnFlip-Setup-0.10.6.exe) | ~84 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.6-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.6/OnFlip-0.10.6-mac-arm64.dmg) | ~101 MB |
-| **macOS** · Intel | [OnFlip-0.10.6-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.6/OnFlip-0.10.6-mac-x64.dmg) | ~108 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.7.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.7/OnFlip-Setup-0.10.7.exe) | ~84 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.7-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.7/OnFlip-0.10.7-mac-arm64.dmg) | ~101 MB |
+| **macOS** · Intel | [OnFlip-0.10.7-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.7/OnFlip-0.10.7-mac-x64.dmg) | ~108 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
 
@@ -18,12 +18,12 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 ## Fixed
 
-**A service switch during a running turn mixed the two services.** The switch wrote the new service into the settings and restarted the app — but did not stop the agent that was still mid-turn on the old service. For that window, the running agent followed the new service's settings and wrote its own account details into the wrong service's space, which is how DeepSeek could come up wearing the ChatGPT account's name. Now every engine is stopped before the switch is written, and each engine is pinned for its whole life to the service it started on, so no future race of this shape can cross the two. A name misfiled by an older build corrects itself the next time this version reads that service's own account.
+**The built-in browser no longer fights its own frame.** Scrolling worked, but the page could end up rendering at a size the panel does not have — text cut off at the edge, the page sitting out of step with the frame around it. Resizing the panel was applying a fixed render size to a view whose size the window already sets, and it stayed fixed from then on. Measured in the app: the page was rendering 650 pixels wide inside a 430-pixel frame. The panel now leaves the real view to the window, and opening the browser clears the mismatch on a session that already has one — no restart needed.
 
-One footnote from the same report: DeepSeek's model answering "I am a GPT-4 class model" when asked what it is does not mean your chat went to ChatGPT — DeepSeek's models often mis-identify themselves that way. The account name in the sidebar is the thing to trust, and it is what this release fixes.
+**Sessions keep much more of the conversation.** 0.10.5 stopped sending large turns as files, which is what was getting accounts rate-limited — but it also left every plan sizing its transcript from the smaller typed limit, so conversations were being summarised every few turns and losing their thread. The budget goes from 28,000 to 40,000 characters, which is about 43% more conversation before anything is compacted, and still inside what the composer is proven to accept in one go. Accounts whose own context window is smaller than that are unchanged — they were never limited by this number.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.5...desktop-v0.10.6](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.5...desktop-v0.10.6)
+**Full changelog:** [desktop-v0.10.6...desktop-v0.10.7](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.6...desktop-v0.10.7)
