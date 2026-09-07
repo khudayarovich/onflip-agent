@@ -10,7 +10,7 @@ const STATUSES: TodoStatus[] = ["pending", "in_progress", "completed", "cancelle
 export const todoWriteTool: ToolDefinition = {
   name: "todo_write",
   description:
-    "Create or update the task list for the current job. Send the complete list every time — it replaces the previous one. Use it for any task needing three or more steps: write the plan first, then mark exactly one item in_progress as you work, and completed the moment it is done.",
+    "Create or update the task list for the current job. Send the complete list every time — it replaces the previous one. Use it for any task needing three or more distinct steps: write the plan first, then mark exactly one item in_progress as you work, and completed the moment it is done. Do NOT use it for a small change, a follow-up tweak, or anything one or two steps long — just make the change and finish; a list for those only slows the turn down.",
   parameters: {
     type: "object",
     properties: {
