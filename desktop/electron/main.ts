@@ -521,7 +521,19 @@ function spawnEngine(cwd: string): ChildProcess {
   // ONFLIP_EMBEDDED_* is how the engine finds the view to drive. Absent
   // when the DevTools port never opened, and the engine then launches a
   // browser of its own exactly as it used to.
-  const env = { ...process.env, ONFLIP_ELECTRON_PATH: process.execPath, ...embeddedEnv() };
+  //
+  // ONFLIP_PROVIDER pins the engine to the provider it was born on. Both
+  // `activeProvider()` and the config's own scoping read the pin first, and
+  // without it they follow the config *file* — so a provider switch written
+  // mid-turn had the still-running engine filing its session and account
+  // into the other service's room. Seen in the field as DeepSeek showing
+  // the ChatGPT account's name.
+  const env = {
+    ...process.env,
+    ONFLIP_ELECTRON_PATH: process.execPath,
+    ONFLIP_PROVIDER: activeProvider(),
+    ...embeddedEnv(),
+  };
   try {
     const child = spawn(nodeBin, args, {
       cwd,
@@ -541,7 +553,12 @@ function spawnEngineViaElectron(args: string[], cwd: string): ChildProcess {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
     windowsHide: true,
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1", ...embeddedEnv() },
+    env: {
+      ...process.env,
+      ELECTRON_RUN_AS_NODE: "1",
+      ONFLIP_PROVIDER: activeProvider(),
+      ...embeddedEnv(),
+    },
   });
 }
 
@@ -1388,10 +1405,17 @@ function registerIpc(): void {
     all: PROVIDER_IDS.map((id) => ({ id, label: providerLabel(id) })),
   }));
 
-  ipcMain.handle("provider-set", (_e, payload: { id?: string }) => {
+  ipcMain.handle("provider-set", async (_e, payload: { id?: string }) => {
     const id = payload?.id;
     if (!isProviderId(id)) return { ok: false, reason: "Unknown provider." };
     if (id === activeProvider()) return { ok: false, reason: "Already on that provider." };
+    // Every engine stops BEFORE the config flips. A switch mid-turn used to
+    // leave the old provider's engine running against a config that already
+    // named the new one, and its last writes filed the session and account
+    // into the wrong service's room. If the renderer races a restart into
+    // the gap, that engine is env-pinned to the old provider and files
+    // correctly until the relaunch takes everything down.
+    await Promise.all([...workspaces.values()].map((ws) => stopEngine(ws).catch(() => {})));
     saveConfig({ provider: id });
     // Relaunch after this call has returned, so the renderer is not waiting on
     // a reply from a process that is exiting.
