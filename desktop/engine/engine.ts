@@ -1852,7 +1852,12 @@ export class Engine {
   async signInWithBrowser(): Promise<{ ok: boolean; reason?: string; browser?: string }> {
     this.assertIdle();
     const result = await signInWithRealBrowser((state) => this.peer.emit("sign-in", { state }));
-    if (!result.ok || !result.browser) return { ok: false, reason: result.reason };
+    // `browser` is ChatGPT's flow naming which browser it opened; DeepSeek's
+    // succeeds without one. Requiring it here turned every successful
+    // DeepSeek sign-in into a silent failure — ok:false with no reason, the
+    // modal dropping back to idle as though nothing had happened — on every
+    // platform, while the session sat in the profile the whole time.
+    if (!result.ok) return { ok: false, reason: result.reason };
 
     clearConfigKeys([
       "sessionToken",
@@ -1865,7 +1870,7 @@ export class Engine {
     saveConfig({
       signedOut: false,
       persistProfile: true,
-      browserChannel: result.browser.channel,
+      ...(result.browser ? { browserChannel: result.browser.channel } : {}),
     });
     this.config = loadConfig();
     if (this.auth) {
@@ -1879,10 +1884,10 @@ export class Engine {
     this.maybeIdentifyAccount();
     this.emitConnect("ready");
     this.notice(
-      `Signed in to ${providerLabel()} with ${result.browser.name}. The session lives in OnFlip's own browser profile and is kept between launches.`
+      `Signed in to ${providerLabel()}${result.browser ? ` with ${result.browser.name}` : ""}. The session lives in OnFlip's own browser profile and is kept between launches.`
     );
     this.pushStatus();
-    return { ok: true, browser: result.browser.name };
+    return { ok: true, browser: result.browser?.name };
   }
 
   finishBrowserSignIn(): boolean {

@@ -69,8 +69,10 @@ export async function signInWithRealBrowser(
 ): Promise<Awaited<ReturnType<typeof chatgpt.signInWithRealBrowser>>> {
   if (!onDeepSeek()) return chatgpt.signInWithRealBrowser(onProgress);
   const result = await dsSignIn.signInWithRealBrowser((state) => onProgress?.(state));
-  // The shape ChatGPT's returns, minus the browser record it reports; the
-  // caller only ever reads `ok` and `reason` from it.
+  // The shape ChatGPT's returns, minus the browser record it reports.
+  // `browser` is absent BY DESIGN and a caller must not require it on
+  // success: the desktop engine once did, and every successful DeepSeek
+  // sign-in came back as a silent failure.
   return { ok: result.ok, reason: result.reason };
 }
 
