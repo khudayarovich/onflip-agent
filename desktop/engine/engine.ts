@@ -174,6 +174,20 @@ const SILENCE_RESUME_MS = 420_000;
 const MAX_AUTO_RESUMES = 3;
 
 /**
+ * Steps a turn may take before it stops and asks to carry on.
+ *
+ * 100, raised from 40. The budget is a fuse against a turn spending the
+ * account on nothing, and 40 was cutting off real work as often as it caught
+ * a runaway — a build, a test run and a couple of fixes is dozens of steps
+ * before anything has gone wrong. What made the higher number affordable is
+ * that the loop can now tell thrash from work: repeated failures and protocol
+ * nudges are counted, a turn stopped mid-stride earns one bounded extension,
+ * and a spinning turn still stops. Written once because four places used to
+ * spell it out and a default that disagrees with itself is a bug waiting.
+ */
+const DEFAULT_STEP_BUDGET = 100;
+
+/**
  * How long stop is given to land before the browser is closed to force it.
  *
  * Stopping works by aborting a signal, which only stops anything if something
@@ -324,7 +338,7 @@ export class Engine {
     this.networkEnabled = cfg.network ?? true;
     this.maxIterations = firstPositiveInt(
       [process.env.ONFLIP_MAX_ITERATIONS, cfg.maxIterations],
-      40
+      DEFAULT_STEP_BUDGET
     );
   }
 
@@ -2125,7 +2139,7 @@ export class Engine {
       // Matches the tool's own default: windowless, since the desktop
       // mirrors that browser in its panel.
       browserHeadless: cfg.browserHeadless ?? true,
-      maxIterations: firstPositiveInt([cfg.maxIterations], 40),
+      maxIterations: firstPositiveInt([cfg.maxIterations], DEFAULT_STEP_BUDGET),
       replyTimeout: firstPositiveInt([cfg.replyTimeout], 600),
       // The effective value, not a hardcoded default: with nothing set, the
       // budget is sized from the plan and the model, and showing "45000"
@@ -2244,7 +2258,7 @@ export class Engine {
       headed: (v) => ({ headed: Boolean(v) }),
       browserHeadless: (v) => ({ browserHeadless: Boolean(v) }),
       autoResume: (v) => ({ autoResume: Boolean(v) }),
-      maxIterations: (v) => ({ maxIterations: firstPositiveInt([v as number], 40) }),
+      maxIterations: (v) => ({ maxIterations: firstPositiveInt([v as number], DEFAULT_STEP_BUDGET) }),
       replyTimeout: (v) => ({ replyTimeout: firstPositiveInt([v as number], 600) }),
       compactAfterChars: (v) => ({ compactAfterChars: firstPositiveInt([v as number], 45_000) }),
       allowedCommands: (v) => ({ allowedCommands: Array.isArray(v) ? v.map(String) : [] }),
@@ -2255,7 +2269,7 @@ export class Engine {
     saveConfig(patch);
     this.config = loadConfig();
     if (key === "maxIterations") {
-      this.maxIterations = firstPositiveInt([this.config.maxIterations], 40);
+      this.maxIterations = firstPositiveInt([this.config.maxIterations], DEFAULT_STEP_BUDGET);
     }
     if (key === "headed") {
       configureBrowser({
