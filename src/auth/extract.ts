@@ -78,15 +78,50 @@ function runtimeCandidates(): string[] {
 }
 
 /**
+ * Is this the sqlite binding refusing the runtime, rather than a browser
+ * refusing its cookies?
+ *
+ * Three spellings of one fault: Node's own load error, the wording a
+ * different Node uses for it, and the sentence openCookieDb writes when it
+ * has already fallen back and found no shipped binding either. Telling them
+ * apart from "no session" is the whole point - one is about this machine's
+ * runtime, the other about whether anyone is logged in.
+ */
+export function bindingMismatch(text: string): boolean {
+  return /NODE_MODULE_VERSION|was compiled against a different Node\.js version|sqlite binding does not match this runtime/i.test(
+    text
+  );
+}
+
+/**
  * Both ways the cookie reader can be unavailable rather than unsuccessful:
  * no Node to run it (ENOENT on every candidate), or a Node whose ABI the
  * prebuilt binding does not match. Neither says anything about whether the
  * user has a ChatGPT session, so neither may be reported as if it did.
  */
 function readerUnavailable(message: string): boolean {
+  return bindingMismatch(message) || /ENOENT/.test(message);
+}
+
+/**
+ * Did this runtime fail on every browser it looked at, and for its binding?
+ *
+ * The worker running and finding nothing is normally a real answer about the
+ * machine, and the loop stops there rather than asking a second runtime the
+ * same question. It is not an answer when nothing could be *opened*: an ABI
+ * the shipped binding does not match is a fact about the runtime, and the
+ * next candidate may be the one the binding was built for.
+ *
+ * Reported from macOS, where this cost someone a working session. Electron
+ * is tried first by design, no darwin binding shipped for its ABI, so every
+ * browser came back with the same load error - and the machine's own Node,
+ * next in the list, was never asked. The user was told they had no session
+ * while Firefox was holding one.
+ */
+export function bindingFailedEverywhere(report: BrowserReport[]): boolean {
   return (
-    /NODE_MODULE_VERSION|was compiled against a different Node\.js version/i.test(message) ||
-    /ENOENT/.test(message)
+    report.length > 0 &&
+    report.every((r) => r.outcome === "error" && bindingMismatch(r.detail ?? ""))
   );
 }
 
@@ -127,6 +162,16 @@ export function spawnExtractToken(): ExtractedToken | null {
         });
         return parsed;
       }
+      // Nothing could be opened, and the binding is why: this runtime's own
+      // failure wearing the answer's clothes. Ask the next candidate instead.
+      if (bindingFailedEverywhere(lastReport)) {
+        logger.warn("auth", "the sqlite binding does not match this runtime", {
+          runtime,
+          report: lastReport,
+        });
+        failures.push(runtime + ": " + describeReport(lastReport).slice(0, 300));
+        continue;
+      }
       // The worker ran and found nothing: a real answer, not a failure of
       // this runtime. Trying another Node would find the same nothing.
       logger.info("auth", "no browser session found", { runtime, report: lastReport });
@@ -150,10 +195,13 @@ export function spawnExtractToken(): ExtractedToken | null {
   // OnFlip did not need, so the caller gets a null and falls through to its
   // other sources.
   const joined = failures.join(" | ");
-  lastExtractError = readerUnavailable(joined)
-    ? "Importing cookies from your browser needs Node.js 20+ on this machine, which the cookie reader could not find here. " +
-      "Use “Sign in to ChatGPT” in the app instead — it needs nothing extra."
-    : joined || "no runtime could run the cookie reader";
+  lastExtractError = bindingMismatch(joined)
+    ? "OnFlip's cookie reader could not run here: the sqlite binding does not match any runtime it tried. " +
+      "That is a gap in OnFlip's own packaging rather than a missing login — use “Sign in to ChatGPT” in the app, which needs nothing set up."
+    : readerUnavailable(joined)
+      ? "Importing cookies from your browser needs Node.js 20+ on this machine, which the cookie reader could not find here. " +
+        "Use “Sign in to ChatGPT” in the app instead — it needs nothing extra."
+      : joined || "no runtime could run the cookie reader";
   logger.warn("auth", "could not read browser cookies", { failures });
   return null;
 }
