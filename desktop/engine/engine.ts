@@ -2202,7 +2202,10 @@ export class Engine {
     add("thinking", this.thinking ?? "off");
     add("context", `${reducibleChars(this.history)} of ${this.contextBudgetChars()} chars`);
     add("transport", this.transport?.name);
-    add("uploads", uploadsAvailable() ? "available" : "unavailable");
+    // Not about the paperclip - attaching files still works, and is gated by
+    // the plan instead. This is whether a turn too large to type is handed
+    // over as a file, which every plan now declines by default.
+    add("large turns", uploadsAvailable() ? "sent as a file" : "typed into the composer");
     add("signed in", this.hasSession() ? "yes" : "no");
     add("cooldown", cooldown > 0 ? `${Math.ceil(cooldown / 1000)}s remaining` : "none");
     lines.push("");
