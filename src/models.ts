@@ -301,6 +301,21 @@ export function isKnownModel(slug: string): boolean {
   return modelSlugs().includes(slug);
 }
 
+/**
+ * Does this slug belong to the service that is running?
+ *
+ * Deliberately coarser than `isKnownModel`, which asks whether a slug is in
+ * the list right now. That is the wrong question for a model restored from
+ * an old session: ChatGPT's list is discovered per account and a slug the
+ * user typed by hand is legitimate even when it is not in it. The only
+ * thing worth refusing is a slug that plainly belongs to the *other*
+ * service, because nothing here can serve it.
+ */
+export function modelBelongsToProvider(slug: string): boolean {
+  const deepseek = slug.startsWith("deepseek-");
+  return activeProvider() === "deepseek" ? deepseek : !deepseek;
+}
+
 /** A slug has to at least look like one before it is worth sending. */
 export function looksLikeSlug(value: string): boolean {
   return /^[a-z0-9][a-z0-9._-]*$/i.test(value);

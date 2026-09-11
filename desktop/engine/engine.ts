@@ -17,6 +17,7 @@ import {
   defaultModel,
   effectiveModel,
   modelContextTokens,
+  modelBelongsToProvider,
   isThinkingLevel,
   cacheModels,
   ThinkingLevel,
@@ -616,7 +617,25 @@ export class Engine {
     this.toolState = createSessionState();
     this.toolState.todos = restored.todos ?? [];
     this.toolState.snapshots = restored.snapshots ?? [];
-    if (restored.model) this.model = restored.model;
+    // A session remembers the model it ran on, and a model belongs to a
+    // service. Adopting it unconditionally is how DeepSeek ended up
+    // reporting a gpt slug: sessions written before the provider scoping
+    // was tightened can carry one in DeepSeek's own folder, and opening one
+    // pinned the run to a model this service has never heard of. The chip
+    // then showed that slug - the picker has no label for it, so it falls
+    // back to the raw text - while the transport quietly ran its default,
+    // so the label was not just wrong, it disagreed with what was running.
+    // Mended here rather than saved: a save on open would bump the session
+    // up the sidebar, and opening a session must never move it.
+    if (restored.model && modelBelongsToProvider(restored.model)) {
+      this.model = restored.model;
+    } else if (restored.model) {
+      logger.warn("session", "stored model belongs to another service; keeping this one", {
+        stored: restored.model,
+        using: this.model,
+      });
+      restored.model = this.model;
+    }
     // What was loaded is what is on disk — a save with nothing new must not
     // bump the session's place in the sidebar.
     this.savedFingerprint = this.fingerprint();
