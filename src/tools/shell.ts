@@ -12,6 +12,34 @@ const MAX_OUTPUT_LINES = 400;
 /** Marker used to read the shell's final working directory back out. */
 const CWD_MARKER = "__ONFLIP_CWD__";
 
+/**
+ * The shell the `bash` tool actually runs under.
+ *
+ * It used to take $SHELL only when that string contained "bash", and fall
+ * back to /bin/sh otherwise - so on any machine whose login shell is zsh,
+ * which is every macOS install since Catalina, the tool named `bash` ran
+ * under /bin/sh: no [[ ]], no arrays, no ${var^^}, different word splitting.
+ * The tool description promises bash, and the model writes bash because of
+ * it. Reported from a live macOS install.
+ *
+ * A real bash is looked for by name first; $SHELL is trusted only when it is
+ * itself a bash. /bin/sh remains the last resort, because a shell that exists
+ * beats a promise that does not.
+ */
+function posixShell(): string {
+  const fromEnv = process.env.SHELL;
+  if (fromEnv && fromEnv.includes("bash") && fs.existsSync(fromEnv)) return fromEnv;
+  for (const candidate of [
+    "/bin/bash",
+    "/usr/bin/bash",
+    "/usr/local/bin/bash",
+    "/opt/homebrew/bin/bash",
+  ]) {
+    if (fs.existsSync(candidate)) return candidate;
+  }
+  return fromEnv && fs.existsSync(fromEnv) ? fromEnv : "/bin/sh";
+}
+
 export interface ShellHost {
   file: string;
   args: (command: string) => string[];
@@ -113,7 +141,7 @@ export function shellHost(): ShellHost {
         `; Write-Output ("${CWD_MARKER}:" + $__rc + ":" + (Get-Location).Path)`,
     };
   }
-  const file = process.env.SHELL && process.env.SHELL.includes("bash") ? process.env.SHELL : "/bin/sh";
+  const file = posixShell();
   return {
     name: path.basename(file),
     file,
