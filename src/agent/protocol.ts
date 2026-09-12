@@ -969,10 +969,28 @@ function detectAttempt(
     const start = line.match(/^\s*tool\s*:\s*(\w.*)$/i);
     return start !== null && known(bareToolName(start[1]));
   });
+  // A reply that is *only* a JSON object, does not parse, and names a tool
+  // this conversation has: no protocol marker anywhere in it, but plainly an
+  // attempt at a call rather than an answer. Without this it was shown to the
+  // user as the reply - a broken JSON blob presented as the work.
+  //
+  // Deliberately narrow, because every detector here costs a round trip when
+  // it is wrong: the whole reply must be the object, not merely contain one,
+  // so a model showing someone a JSON file is untouched. A well-formed call
+  // never reaches this, having already been parsed by the bare-JSON layer.
+  const trimmed = raw.trim();
+  const named = /"(?:tool|name)"\s*:\s*"([\w.-]+)"/i.exec(trimmed);
+  const jsonAttempt =
+    trimmed.startsWith("{") &&
+    trimmed.endsWith("}") &&
+    named !== null &&
+    known(bareToolName(named[1]));
+
   const mentionsProtocol =
     outsideFences.includes("onflip:tool") ||
     hasTopLevelFence(raw, [FENCE_TAG, "onflip:tool"]) ||
-    hasUnfencedBlock;
+    hasUnfencedBlock ||
+    jsonAttempt;
   if (!mentionsProtocol) return null;
 
   const detail = problems.length ? problems[0] : "the tool call could not be parsed";
