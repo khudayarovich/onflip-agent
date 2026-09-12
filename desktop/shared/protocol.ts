@@ -175,6 +175,17 @@ export interface EngineStatus {
   contextChars?: number;
   contextBudget?: number;
   /**
+   * Where the budget came from, in a few words.
+   *
+   * The meter showed the number and never where it came from, and a
+   * number is only obviously wrong if you know what it should be: a
+   * stale plan sized the transcript at 4,000 characters for weeks
+   * behind a meter that was working correctly the whole time.
+   */
+  contextBudgetSource?: string;
+  /** The transcript has less room than the instructions ahead of it. */
+  contextCrowded?: boolean;
+  /**
    * The account is on a plan whose extras are rationed (Free, Go): uploads,
    * reasoning variants and the metered models are all turned off so the run
    * stays on the unlimited path. The UI greys out what it cannot offer.

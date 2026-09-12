@@ -55,3 +55,19 @@ test("an unread plan is not treated as Free", () => {
   assert.equal(compactionBudget(undefined, false, null, SYSTEM), COMPOSER_CEILING_CHARS);
   assert.equal(compactionBudget("", false, null, SYSTEM), COMPOSER_CEILING_CHARS);
 });
+
+test("a stale Free plan trips the crowded warning; a paid one does not", () => {
+  // The condition the meter now shows: when the conversation gets less room
+  // than the instructions ahead of it, the chat summarises itself almost
+  // every turn — and every summary opens a fresh chat and replays everything.
+  // This was silently true for weeks behind a meter that worked correctly,
+  // because the meter showed a percentage and never what it was a percentage
+  // OF, or where that number came from.
+  const crowded = (plan) => compactionBudget(plan, false, null, SYSTEM) < SYSTEM;
+
+  assert.equal(crowded("free"), true, "4,000 chars against a 20,000-char prompt");
+  for (const plan of ["plus", "prolite", "pro", "team"]) {
+    assert.equal(crowded(plan), false, plan);
+  }
+  assert.equal(crowded(undefined), false, "an unread plan must not raise a false alarm");
+});

@@ -242,6 +242,9 @@ const en = {
   contextTip: "Context usage",
   contextUsed: "In context",
   contextCompactsAt: "Compacts at",
+  contextSizedBy: "Sized by",
+  contextCrowded:
+    "This is smaller than OnFlip's own instructions, so the chat will summarise itself almost every turn. Check the plan shown in About, or set a size in Settings.",
   modelWorkOnly: "ChatGPT Work only",
   browserInteractTip: "Click, type and scroll — this drives the agent's browser",
   workedFor: "Worked for {time}",
@@ -597,6 +600,9 @@ const ru: Partial<Record<StringKey, string>> = {
   contextTip: "Заполнение контекста",
   contextUsed: "В контексте",
   contextCompactsAt: "Сжатие при",
+  contextSizedBy: "Определено",
+  contextCrowded:
+    "Это меньше, чем собственные инструкции OnFlip, поэтому чат будет сжиматься почти каждый ход. Проверьте план в «О программе» или задайте размер в настройках.",
   modelWorkOnly: "Только ChatGPT Work",
   browserInteractTip: "Кликайте, печатайте, прокручивайте — это управляет браузером агента",
   workedFor: "Работал {time}",
@@ -947,6 +953,9 @@ const uz: Partial<Record<StringKey, string>> = {
   contextTip: "Kontekst hajmi",
   contextUsed: "Kontekstda",
   contextCompactsAt: "Siqish chegarasi",
+  contextSizedBy: "Nimaga qarab",
+  contextCrowded:
+    "Bu OnFlip ning o'z ko'rsatmalaridan kichik, shuning uchun suhbat deyarli har qadamda siqiladi. Dastur haqida bo'limidagi rejani tekshiring yoki sozlamalarda hajmni belgilang.",
   modelWorkOnly: "Faqat ChatGPT Work",
   browserInteractTip: "Bosing, yozing, aylantiring — bu agent brauzerini boshqaradi",
   workedFor: "{time} ishladi",

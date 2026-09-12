@@ -656,6 +656,21 @@ export function Composer({
               label: t("contextCompactsAt"),
               hint: formatKChars(status.contextBudget ?? 0),
             },
+            // Where the number came from. Without this the meter is a
+            // percentage of something unexplained, and a budget that is
+            // far too small looks exactly like a long conversation.
+            ...(status.contextBudgetSource
+              ? [
+                  {
+                    key: "_source",
+                    label: t("contextSizedBy"),
+                    hint: status.contextBudgetSource,
+                  },
+                ]
+              : []),
+            ...(status.contextCrowded
+              ? [{ key: "_crowded", label: t("contextCrowded"), hint: "" }]
+              : []),
           ]}
         />
       )}

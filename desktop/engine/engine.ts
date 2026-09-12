@@ -31,6 +31,7 @@ import { chooseTransport, Transport } from "onflip/dist/providers/transport";
 import { discoverModels } from "onflip/dist/chatgpt/models-api";
 import {
   compactionBudget,
+  COMPOSER_CEILING_CHARS,
   DEEPSEEK_CEILING_CHARS,
   describePlan,
   planLimitCard,
@@ -769,6 +770,28 @@ export class Engine {
     return this.history[0]?.role === "system" ? this.history[0].content.length : 0;
   }
 
+  /**
+   * Where the compaction budget came from, for the meter to say out loud.
+   *
+   * Mirrors contextBudgetChars step for step. A number with no provenance
+   * cannot be sanity-checked by the person looking at it - which is how a
+   * config still claiming the Free plan sized the transcript at a tenth of
+   * what the account was entitled to, with the meter dutifully reporting a
+   * full bar every turn and nobody able to tell why.
+   */
+  private contextBudgetSource(): string {
+    if (this.config.compactAfterChars) return "your own setting";
+    if (activeProvider() === "deepseek") return "DeepSeek's own limit";
+    // With turns typed rather than uploaded, what one message can carry is
+    // usually the binding limit and the plan only matters when it is
+    // smaller - which is exactly the case worth naming.
+    if (this.contextBudgetChars() >= COMPOSER_CEILING_CHARS) {
+      return "what one message can carry";
+    }
+    const described = describePlan(loadConfig().planType);
+    const plan = described ? described.split(" \u00b7")[0] : null;
+    return plan ? `your ${plan} plan` : "the default for an unread plan";
+  }
   private contextBudgetChars(): number {
     // An explicit setting wins; otherwise the model's published window,
     // then the plan, size the budget — 45k on a million-token Sol was
@@ -807,6 +830,12 @@ export class Engine {
       // gauge half-full on an empty conversation.
       contextChars: reducibleChars(this.history),
       contextBudget: this.contextBudgetChars(),
+      contextBudgetSource: this.contextBudgetSource(),
+      // Less room for the conversation than for the instructions that
+      // precede it means compacting almost every turn, and every
+      // compaction opens a fresh chat and replays everything into it.
+      contextCrowded:
+        this.systemPromptChars() > 0 && this.contextBudgetChars() < this.systemPromptChars(),
       provider: activeProvider(),
       planRationed: rationedPlan(cfg.planType) || undefined,
       planLimitTitle: planLimitCard(cfg.planType)?.title,
