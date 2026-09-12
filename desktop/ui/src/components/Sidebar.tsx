@@ -8,7 +8,7 @@ import type {
 import { Menu, useMenu, relativeTime, baseName } from "./common";
 import { ChatGptMark, ChevronDown, Clock, Close, DeepSeekMark, Folder, Plus } from "./icons";
 import { useT } from "../i18n";
-import { providerLabel } from "../provider-label";
+import { serviceLabel } from "../../../shared/providers";
 
 export function Sidebar({
   status,
@@ -480,7 +480,7 @@ function AccountBar({
   // providerGet answers over IPC and the engine's status arrives sooner, so
   // the status is the better first source. Neither is guessed at: "ChatGPT"
   // as a default put that name on a DeepSeek install's own account bar.
-  const providerName = provider?.label ?? providerLabel(status?.provider);
+  const providerName = provider?.label ?? serviceLabel(status?.provider);
   // For sentences that need a word in the gap; the account bar above shows
   // no service name at all rather than a placeholder one.
   const serviceName = providerName ?? t("serviceGeneric");

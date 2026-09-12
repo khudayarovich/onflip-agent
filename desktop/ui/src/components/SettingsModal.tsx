@@ -191,7 +191,9 @@ export function SettingsModal({
         <h3>{t("setBrowser")}</h3>
         <div className="setting-row">
           <div className="info">
-            <div className="name">{t("setHeaded", { service: serviceLabel(status?.provider) })}</div>
+            <div className="name">
+              {t("setHeaded", { service: serviceLabel(status?.provider) ?? t("serviceGeneric") })}
+            </div>
             <div className="desc">{t("setHeadedDesc")}</div>
           </div>
           <Toggle on={config?.headed ?? false} onChange={(on) => setValue("headed", on)} />

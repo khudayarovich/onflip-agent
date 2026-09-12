@@ -1014,7 +1014,9 @@ export function App(): React.ReactElement {
         onOpenSchedules={() => setModal("schedules")}
         onSignOut={() =>
           setConfirm({
-            message: t("signOutConfirm", { service: serviceLabel(status?.provider) }),
+            message: t("signOutConfirm", {
+              service: serviceLabel(status?.provider) ?? t("serviceGeneric"),
+            }),
             danger: true,
             action: () => {
               void window.onflip
