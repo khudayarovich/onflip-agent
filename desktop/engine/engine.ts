@@ -415,6 +415,7 @@ export class Engine {
     setActiveProject(this.currentProject());
 
     this.context = loadProjectContext(this.cwd);
+    this.reportSkippedInstructions();
     this.policy = createPolicy(this.cwd, this.approvalMode, {
       commands: this.config.allowedCommands,
       writeDirs: this.config.allowedWriteDirs,
@@ -628,6 +629,28 @@ export class Engine {
       );
     } catch (e) {
       this.emitConnect("error", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Say when a project instruction file was found and then left out.
+   *
+   * Instructions are re-sent with every turn and come off the transcript
+   * budget before it is divided, so the size cap earns its keep - but it used
+   * to skip in silence, which is the part that costs. OnFlip working in its
+   * own tree is the example: AGENTS.md is 89 KB against a 32 KB cap, so the
+   * most useful document in the repository was dropped from every prompt and
+   * nothing said so. The fix a person can act on is to split the file, and
+   * they can only act on it once told.
+   */
+  private reportSkippedInstructions(): void {
+    const skipped = this.context?.instructionsSkipped ?? [];
+    if (skipped.length === 0) return;
+    logger.warn("engine", "instruction files were too large to load", { skipped });
+    for (const { file, bytes } of skipped) {
+      this.notice(
+        `${file} is ${Math.round(bytes / 1000)}KB, over the ${32}KB limit for instruction files, so it was not loaded. Instructions are re-sent every turn and come out of the conversation budget — split it into smaller files to have it read.`
+      );
     }
   }
 

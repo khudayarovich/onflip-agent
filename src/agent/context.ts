@@ -29,6 +29,8 @@ export interface ProjectContext {
   cwd: string;
   /** Concatenated instruction files, empty when the project ships none. */
   instructions: string;
+  /** Instruction files found but left out for being over the size cap. */
+  instructionsSkipped: { file: string; bytes: number }[];
   /** Which files the instructions came from, for display. */
   instructionSources: string[];
   git: GitInfo | null;
@@ -42,10 +44,30 @@ export interface GitInfo {
   recentCommits: string[];
 }
 
+/**
+ * Instruction files that were found and then left out for being too large.
+ *
+ * Collected per load so the skip can be said out loud. It used to be
+ * silent, and silence is the whole problem: this repo's own AGENTS.md is
+ * 89 KB against a 32 KB cap, so the single most useful document in the tree
+ * was dropped from every prompt and nothing anywhere said so.
+ *
+ * The cap itself stays. Instructions are re-sent with every turn and are
+ * subtracted from the transcript budget before it is divided, so an 89 KB
+ * file would not merely be expensive - it is larger than the whole budget a
+ * paid plan gets. The answer to a file over the cap is to split it, which is
+ * advice nobody can act on without being told.
+ */
+let skipped: { file: string; bytes: number }[] = [];
+
 function readIfSmall(file: string): string | null {
   try {
     const stat = fs.statSync(file);
-    if (!stat.isFile() || stat.size > MAX_INSTRUCTION_BYTES) return null;
+    if (!stat.isFile()) return null;
+    if (stat.size > MAX_INSTRUCTION_BYTES) {
+      skipped.push({ file, bytes: stat.size });
+      return null;
+    }
     return fs.readFileSync(file, "utf8");
   } catch {
     return null;
@@ -53,10 +75,15 @@ function readIfSmall(file: string): string | null {
 }
 
 /** Walk from cwd up to the repo/home root collecting instruction files. */
-function collectInstructions(cwd: string): { text: string; sources: string[] } {
+function collectInstructions(cwd: string): {
+  text: string;
+  sources: string[];
+  skipped: { file: string; bytes: number }[];
+} {
   const chunks: string[] = [];
   const sources: string[] = [];
   const seen = new Set<string>();
+  skipped = [];
 
   // A global file applies to every project the user runs the agent in.
   const globalFile = path.join(configDir(), "AGENTS.md");
@@ -90,7 +117,7 @@ function collectInstructions(cwd: string): { text: string; sources: string[] } {
     }
   }
 
-  return { text: chunks.join("\n\n---\n\n"), sources };
+  return { text: chunks.join("\n\n---\n\n"), sources, skipped };
 }
 
 function git(cwd: string, args: string[]): string | null {
@@ -156,11 +183,12 @@ function describeEnvironment(cwd: string, info: GitInfo | null): string {
 
 export function loadProjectContext(cwd: string): ProjectContext {
   const info = gitInfo(cwd);
-  const { text, sources } = collectInstructions(cwd);
+  const { text, sources, skipped: skippedFiles } = collectInstructions(cwd);
   return {
     cwd,
     instructions: text,
     instructionSources: sources,
+    instructionsSkipped: skippedFiles,
     git: info,
     environment: describeEnvironment(cwd, info),
   };
