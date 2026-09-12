@@ -148,6 +148,17 @@ function encode(token: string): { token?: string; tokenEnc?: string } {
   } catch {
     /* fall through to plain */
   }
+  // A feature that refuses to work is worse than one whose secret sits in a
+  // file only this user can read - but that defence is only true if the file
+  // really is only readable by this user, and it was not: writeFileSync
+  // without a mode lands at 0644 on macOS, so the token was world-readable.
+  // persist() now forces 0600. Saying so is the other half: a bot token is
+  // full control of that bot, and a silent downgrade to plaintext is not
+  // something to discover later in a file listing.
+  console.warn(
+    "[telegram] this system has no encrypted storage available, so the bot token is saved " +
+      "in plain text at " + file() + " (readable only by you). Remove the token from Settings to clear it."
+  );
   return { token };
 }
 
@@ -198,8 +209,18 @@ function persist(): void {
         },
         null,
         2
-      )
+      ),
+      // 0600, because this file can hold a Telegram bot token in the clear
+      // when the system has no encrypted storage - and a bot token is full
+      // control of that bot, including every message routed through it.
+      // Without a mode this landed at 0644: world-readable, which is exactly
+      // what the plaintext fallback assumed was not the case.
+      { mode: 0o600 }
     );
+    // writeFileSync only applies its mode when it creates the file, so an
+    // install that already has a 0644 one from an earlier build keeps it
+    // until this runs.
+    fs.chmodSync(file(), 0o600);
   } catch {
     /* best-effort */
   }
