@@ -161,6 +161,49 @@ export function commandKey(command: string): string {
  * splits too, which costs the user a prompt rather than a bypass.
  */
 /**
+ * Remove the bodies of here-documents before anything is split.
+ *
+ * A here-doc body is not quoted, so quote-aware splitting walks straight
+ * into it and treats every line as another command. Reported from a live
+ * install where the allowlist had grown to 112 entries holding prose -
+ * `five`, `each`, `appreciated.`, `0.10.10` - because a bug report had been
+ * written to disk with `cat > report.md <<'EOF'` and each line of it was
+ * read as a command that had just been approved.
+ *
+ * The validator cannot catch this: `five` is a perfectly plausible command
+ * name and there is no way to tell it from one. The body has to not be
+ * parsed in the first place.
+ *
+ * Bodies are dropped rather than kept, because nothing inside one is ever a
+ * command to remember - it is data on its way to a file.
+ */
+export function stripHeredocBodies(command: string): string {
+  const lines = command.split("\n");
+  const kept: string[] = [];
+  let index = 0;
+
+  while (index < lines.length) {
+    const line = lines[index];
+    kept.push(line);
+    index++;
+
+    // Several on one line is legal: `cmd <<A <<B`. Each body follows in
+    // the order its delimiter was named.
+    const delimiters = [...line.matchAll(/(?<!<)<<(?!<)-?\s*(?:(['"])([A-Za-z_][\w]*)\1|([A-Za-z_][\w]*))/g)]
+      .map((match) => match[2] ?? match[3])
+      .filter(Boolean);
+
+    for (const delimiter of delimiters) {
+      while (index < lines.length) {
+        const body = lines[index];
+        index++;
+        if (body.trim() === delimiter) break;
+      }
+    }
+  }
+  return kept.join("\n");
+}
+/**
  * Split a line into the commands it actually runs.
  *
  * Quote-aware, which the regex this replaces was not. Splitting blindly on
@@ -249,7 +292,7 @@ export function isStorableCommandKey(key: string): boolean {
 /** The allowlist key of every command on the line, in order. */
 export function commandKeys(command: string): string[] {
   const keys: string[] = [];
-  for (const segment of splitCommands(command)) {
+  for (const segment of splitCommands(stripHeredocBodies(command))) {
     const key = commandKey(segment);
     if (key) keys.push(key);
   }

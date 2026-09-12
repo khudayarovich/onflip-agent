@@ -94,3 +94,49 @@ test("a stored allowlist is filtered on load, so old junk clears itself", () => 
   });
   assert.deepEqual([...policy.allowedCommands].sort(), ["git commit", "node"]);
 });
+
+test("a here-document body is not a list of commands", () => {
+  // Reported from a live install: the allowlist had grown to 112 entries
+  // holding prose - `five`, `each`, `appreciated.`, `0.10.10` - because a bug
+  // report had been written to disk with `cat > report.md <<'EOF'` and every
+  // line of it was read as a command that had just been approved.
+  const q = String.fromCharCode(39);
+  const cmd = [
+    `cat > report.md <<${q}EOF${q}`,
+    "Five findings, each with the exact file.",
+    "0.10.10 appreciated. sha256sums alongside",
+    "NEVER_REMEMBER covers sudo",
+    "EOF",
+    "echo done",
+  ].join("\n");
+  assert.deepEqual(commandKeys(cmd), ["cat", "echo"]);
+});
+
+test("the validator could not have caught it, which is why the body is skipped", () => {
+  // Every one of these is a plausible command name. There is no rule that
+  // separates them from `node` or `grep`, so the body must not be parsed.
+  for (const word of ["five", "each", "sha256sums", "alongside", "never_remember"]) {
+    assert.equal(isStorableCommandKey(word), true, word);
+  }
+});
+
+test("an unquoted and an indented here-doc are both skipped", () => {
+  assert.deepEqual(commandKeys("cat <<EOF\nrm -rf /\nEOF\nls"), ["cat", "ls"]);
+  assert.deepEqual(commandKeys("cat <<-END\n\tsudo su\n\tEND\nls"), ["cat", "ls"]);
+});
+
+test("two here-docs on one line consume two bodies in order", () => {
+  const cmd = ["diff <<A <<B", "first body", "A", "second body", "B", "echo after"].join("\n");
+  assert.deepEqual(commandKeys(cmd), ["diff", "echo"]);
+});
+
+test("a here-doc that is never terminated does not leak its tail", () => {
+  // A truncated command must not start handing out keys from whatever
+  // follows it.
+  assert.deepEqual(commandKeys("cat <<EOF\nstray line\nanother"), ["cat"]);
+});
+
+test("a here-string is not a here-doc", () => {
+  // `<<<` feeds one word, and the line after it is an ordinary command.
+  assert.deepEqual(commandKeys("grep x <<<'text'\nls"), ["grep", "ls"]);
+});
