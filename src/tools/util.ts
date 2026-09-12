@@ -129,14 +129,55 @@ export function relative(cwd: string, target: string): string {
  * Heuristic binary check: a NUL byte in the first 8KB, or a high proportion
  * of bytes outside the printable/UTF-8 continuation ranges.
  */
+/**
+ * Does this sample decode as UTF-8?
+ *
+ * The 8 KB sample usually cuts a longer file mid-character, and that tail
+ * alone would fail a strict decode, so a trailing continuation run and the
+ * lead byte in front of it are trimmed before asking.
+ */
+function decodesAsUtf8(sample: Buffer, truncated: boolean): boolean {
+  let end = sample.length;
+  if (truncated) {
+    let walked = 0;
+    while (end > 0 && walked < 4 && (sample[end - 1] & 0xc0) === 0x80) {
+      end--;
+      walked++;
+    }
+    if (end > 0 && (sample[end - 1] & 0x80) !== 0) end--;
+  }
+  try {
+    new TextDecoder("utf-8", { fatal: true }).decode(sample.subarray(0, end));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Is this file binary?
+ *
+ * It used to count every byte >= 128 as printable, which left control
+ * characters as the only bytes it could ever find suspicious - so it
+ * measured control-character density, not binary-ness. A file of uniformly
+ * random bytes has about half its bytes above 127, every one of them
+ * excused, and lands near 15% suspicious against a 30% threshold:
+ * comfortably "text". Most binaries were handed to the model as text.
+ *
+ * High bytes are ordinary in UTF-8 and meaningless in a JPEG, and the way
+ * to tell those apart is to decode. So a sample has to decode as UTF-8
+ * before it counts as text at all, and only then are control characters
+ * worth counting.
+ */
 export function isProbablyBinary(buf: Buffer): boolean {
   const sample = buf.subarray(0, 8192);
   if (sample.length === 0) return false;
+  if (sample.includes(0)) return true;
+  if (!decodesAsUtf8(sample, buf.length > sample.length)) return true;
+
   let suspicious = 0;
   for (const byte of sample) {
-    if (byte === 0) return true;
-    const printable =
-      byte === 9 || byte === 10 || byte === 13 || (byte >= 32 && byte <= 126) || byte >= 128;
+    const printable = byte === 9 || byte === 10 || byte === 13 || byte >= 32;
     if (!printable) suspicious++;
   }
   return suspicious / sample.length > 0.3;
