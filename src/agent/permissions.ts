@@ -160,12 +160,96 @@ export function commandKey(command: string): string {
  * newlines and both command substitutions all split. A `|` inside quotes
  * splits too, which costs the user a prompt rather than a bypass.
  */
-const COMMAND_SEPARATOR = /\|\||&&|;|\||\r?\n|\$\(|`/;
+/**
+ * Split a line into the commands it actually runs.
+ *
+ * Quote-aware, which the regex this replaces was not. Splitting blindly on
+ * `;` `|` and newlines cut straight through quoted arguments, and each
+ * fragment was then treated as a command in its own right - so approving
+ * `sqlite3 db "select ... ; ... vnc"` stored `"select` and `vnc"` as
+ * allowlist keys. Found in two live configs: quote fragments on one machine,
+ * and `$os`, `$path`, `$magick` on another, where PowerShell assignments
+ * split on newlines and each variable name became a "command".
+ *
+ * Text inside single or double quotes is now carried along whole, so a
+ * separator only separates when the shell would treat it as one.
+ */
+export function splitCommands(command: string): string[] {
+  const segments: string[] = [];
+  let current = "";
+  let quote: string | null = null;
+
+  for (let i = 0; i < command.length; i++) {
+    const ch = command[i];
+
+    if (quote) {
+      current += ch;
+      // A backslash escapes the closing quote in double quotes only; inside
+      // single quotes the shell takes every character literally.
+      if (ch === quote && !(quote === '"' && command[i - 1] === "\\")) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      current += ch;
+      continue;
+    }
+
+    const pair = command.slice(i, i + 2);
+    if (pair === "||" || pair === "&&" || pair === "$(") {
+      segments.push(current);
+      current = "";
+      i++;
+      continue;
+    }
+    if (ch === ";" || ch === "|" || ch === "\n" || ch === "\r" || ch === "`") {
+      segments.push(current);
+      current = "";
+      continue;
+    }
+    current += ch;
+  }
+  segments.push(current);
+  return segments;
+}
+
+/**
+ * Shell control words, which must never become allowlist keys.
+ *
+ * Clearing `if` would clear every compound command that begins with one,
+ * which is not what anyone means by approving a command. They reached the
+ * list the same way the quote fragments did.
+ */
+const CONTROL_WORDS = new Set([
+  "if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done",
+  "case", "esac", "select", "function", "in",
+]);
+
+/** Privilege escalation is never remembered, whatever the mode. */
+const NEVER_REMEMBER = new Set(["sudo", "su", "doas", "runas"]);
+
+/**
+ * Is this key a command name worth storing?
+ *
+ * The allowlist only ever grows, so anything junk that gets in stays in and
+ * widens the permission surface for the rest of the install's life. A key
+ * has to look like a command: no shell punctuation, not a bare sigil, not a
+ * variable assignment, long enough to mean something, and not a control word
+ * or a way to become root.
+ */
+export function isStorableCommandKey(key: string): boolean {
+  if (key.length < 2) return false;
+  if (/["'`;|&$()<>*?=]/.test(key)) return false;
+  const head = key.split(" ")[0];
+  if (CONTROL_WORDS.has(head) || NEVER_REMEMBER.has(head)) return false;
+  // A bare name, a path, or a name and its subcommand.
+  return /^[a-z0-9._\/\\:+-]+( [a-z0-9._-]+)?$/i.test(key);
+}
 
 /** The allowlist key of every command on the line, in order. */
 export function commandKeys(command: string): string[] {
   const keys: string[] = [];
-  for (const segment of command.split(COMMAND_SEPARATOR)) {
+  for (const segment of splitCommands(command)) {
     const key = commandKey(segment);
     if (key) keys.push(key);
   }
@@ -192,7 +276,10 @@ export function createPolicy(
   return {
     mode,
     workspace: path.resolve(workspace),
-    allowedCommands: new Set(seed?.commands ?? []),
+    // Filtered, not trusted: every install that ran an earlier build has
+    // junk in here already, and it is written back on the next save, so
+    // dropping it on load is what actually clears it.
+    allowedCommands: new Set((seed?.commands ?? []).filter(isStorableCommandKey)),
     allowedWriteDirs: new Set((seed?.writeDirs ?? []).map((d) => path.resolve(d))),
     bashRules: seed?.bashRules,
   };
@@ -289,8 +376,13 @@ export function evaluate(policy: PolicyState, req: PermissionRequest): PolicyVer
 /** Record an "always allow" answer against the policy. */
 export function remember(policy: PolicyState, req: PermissionRequest): void {
   if (req.kind === "command") {
-    // The user cleared the whole line, so each command on it is cleared.
-    for (const key of commandKeys(req.subject)) policy.allowedCommands.add(key);
+    // The user cleared the whole line, so each command on it is cleared -
+    // except the ones that are not commands. A key that cannot be stored is
+    // still allowed for this call; it simply is not written down, so the
+    // line is asked about again rather than widening the allowlist for good.
+    for (const key of commandKeys(req.subject)) {
+      if (isStorableCommandKey(key)) policy.allowedCommands.add(key);
+    }
   } else if (req.kind === "write" && req.targetPath) {
     policy.allowedWriteDirs.add(path.dirname(path.resolve(req.targetPath)));
   }
