@@ -35,7 +35,7 @@ import {
   watchViewChrome,
   type ViewAction,
 } from "./browser-view";
-import { checkForUpdate } from "./updates";
+import { checkForUpdate, whyNotInstallable } from "./updates";
 import {
   applyUpdate,
   downloadUpdate,
@@ -1331,13 +1331,17 @@ function registerIpc(): void {
    * but the IPC is what actually has to hold.
    */
   ipcMain.handle("start-update", async (event) => {
-    if (updating) return { started: false, reason: "already running" };
+    if (updating) return { started: false, reason: "an update is already running" };
     const info = await checkForUpdate();
-    if (!info.available || !info.installable) {
-      // Nothing to install for this platform or architecture. The caller
-      // falls back to the release page, which is what it did before.
-      return { started: false, reason: "no installable build for this platform" };
-    }
+    // Three different things used to answer "no installable build for this
+    // platform", and only one of them was that. The check re-runs here, and
+    // it reaches api.github.com unauthenticated - 60 requests an hour per
+    // address, shared with the poll on a timer - so the common reason for
+    // landing on the download page is that this request failed, not that
+    // the platform is unsupported. Reported as exactly that, someone would
+    // go looking for a missing artifact that is sitting right there.
+    const why = whyNotInstallable(info);
+    if (why || !info.installable) return { started: false, reason: why ?? "no installable build" };
     updating = true;
     const web = event.sender;
     const report = (p: UpdateProgress) => {

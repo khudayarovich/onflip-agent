@@ -38,6 +38,28 @@ export interface UpdateInfo {
   installable?: { url: string; name: string };
 }
 
+/**
+ * Why an automatic install cannot start, or null when it can.
+ *
+ * Three different situations used to answer "no installable build for this
+ * platform", and only one of them was that. The check re-runs at click time
+ * and reaches api.github.com unauthenticated - 60 requests an hour per
+ * address, shared with the poll on a timer - so the most common reason for
+ * landing on the download page is that this request failed, not that the
+ * platform is unsupported. Told the wrong one, someone goes looking for a
+ * missing artifact that is sitting right there in the release.
+ */
+export function whyNotInstallable(
+  info: Pick<UpdateInfo, "error" | "available" | "installable">,
+  platform: string = process.platform,
+  arch: string = process.arch
+): string | null {
+  if (info.error) return `the update check failed: ${info.error}`;
+  if (!info.available) return "no newer release was found";
+  if (!info.installable) return `this release has no build for ${platform}/${arch}`;
+  return null;
+}
+
 /** "desktop-v0.7.8" and "v0.7.8" and "0.7.8" all mean the same thing. */
 function versionOf(tag: string): string {
   return tag.replace(/^.*?v/, "").trim();

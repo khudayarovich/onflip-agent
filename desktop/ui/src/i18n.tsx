@@ -358,6 +358,10 @@ const en = {
   updateTitle: "Update",
   updateAvailable: "OnFlip {version} is out — you have {current}.",
   updateGet: "Update",
+  updateFellBack:
+    "OnFlip could not install this update itself ({reason}), so the download page is opening instead.",
+  updateFellBackUnknown:
+    "OnFlip could not install this update itself, so the download page is opening instead.",
   updateDismiss: "Not now",
   updateDownloading: "Downloading OnFlip {version}",
   updateInstalling: "Installing",
@@ -706,6 +710,10 @@ const ru: Partial<Record<StringKey, string>> = {
   updateTitle: "Обновление",
   updateAvailable: "Вышла версия OnFlip {version} — у вас {current}.",
   updateGet: "Обновить",
+  updateFellBack:
+    "OnFlip не смог установить обновление сам ({reason}), поэтому открывается страница загрузки.",
+  updateFellBackUnknown:
+    "OnFlip не смог установить обновление сам, поэтому открывается страница загрузки.",
   updateDismiss: "Не сейчас",
   updateDownloading: "Загрузка OnFlip {version}",
   updateInstalling: "Установка",
@@ -1052,6 +1060,10 @@ const uz: Partial<Record<StringKey, string>> = {
   updateTitle: "Yangilanish",
   updateAvailable: "OnFlip {version} chiqdi — sizda {current}.",
   updateGet: "Yangilash",
+  updateFellBack:
+    "OnFlip yangilanishni o'zi o'rnata olmadi ({reason}), shuning uchun yuklab olish sahifasi ochilmoqda.",
+  updateFellBackUnknown:
+    "OnFlip yangilanishni o'zi o'rnata olmadi, shuning uchun yuklab olish sahifasi ochilmoqda.",
   updateDismiss: "Hozir emas",
   updateDownloading: "OnFlip {version} yuklanmoqda",
   updateInstalling: "O'rnatilmoqda",

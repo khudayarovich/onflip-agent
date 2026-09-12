@@ -1127,16 +1127,25 @@ export function App(): React.ReactElement {
                 // an architecture this release skipped. The modal opens on the
                 // first progress event rather than optimistically, so a
                 // refusal never leaves a dialog with nothing behind it.
-                if (typeof window.onflip.startUpdate !== "function") {
+                // Falling back is fine; falling back in silence is not. The
+                // browser opening where an install was expected reads as the
+                // feature not existing, when what actually happened is that a
+                // pre-flight check failed - usually the GitHub API, which is
+                // rate-limited per address. Say which, then open the page.
+                const fallBack = (why?: string) => {
+                  notify(why ? t("updateFellBack", { reason: why }) : t("updateFellBackUnknown"));
                   void window.onflip.openRelease(update.url);
+                };
+                if (typeof window.onflip.startUpdate !== "function") {
+                  fallBack();
                   return;
                 }
                 void window.onflip
                   .startUpdate()
                   .then((r) => {
-                    if (!r.started) void window.onflip.openRelease(update.url);
+                    if (!r.started) fallBack(r.reason);
                   })
-                  .catch(() => void window.onflip.openRelease(update.url));
+                  .catch((e: Error) => fallBack(e?.message));
               }}
             >
               {t("updateGet")}
