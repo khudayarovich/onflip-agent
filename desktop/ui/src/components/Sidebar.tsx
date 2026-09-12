@@ -8,6 +8,7 @@ import type {
 import { Menu, useMenu, relativeTime, baseName } from "./common";
 import { ChatGptMark, ChevronDown, Clock, Close, DeepSeekMark, Folder, Plus } from "./icons";
 import { useT } from "../i18n";
+import { providerLabel } from "../provider-label";
 
 export function Sidebar({
   status,
@@ -476,14 +477,22 @@ function AccountBar({
   const t = useT();
   const [open, setOpen] = useState(false);
   const provider = useProvider();
-  const providerName = provider?.label ?? "ChatGPT";
+  // providerGet answers over IPC and the engine's status arrives sooner, so
+  // the status is the better first source. Neither is guessed at: "ChatGPT"
+  // as a default put that name on a DeepSeek install's own account bar.
+  const providerName = provider?.label ?? providerLabel(status?.provider);
+  // For sentences that need a word in the gap; the account bar above shows
+  // no service name at all rather than a placeholder one.
+  const serviceName = providerName ?? t("serviceGeneric");
   const account = status?.account ?? null;
   const usage = status?.usage;
   // Named after whichever service is answering. It said "ChatGPT account"
   // under a DeepSeek session — the placeholder was written when there was
   // only one service to be an account on.
   const displayName =
-    account?.name || account?.email || t("providerAccount", { provider: providerName });
+    account?.name ||
+    account?.email ||
+    (providerName ? t("providerAccount", { provider: providerName }) : t("accountUnknown"));
 
   return (
     <div className="bottom account-bar">
@@ -528,9 +537,9 @@ function AccountBar({
               {usage && usage.since > 0
                 ? t("usageNoteSince", {
                     date: new Date(usage.since).toLocaleDateString(),
-                    service: providerName,
+                    service: serviceName,
                   })
-                : t("usageNote", { service: providerName })}
+                : t("usageNote", { service: serviceName })}
             </div>
 
             <div className="pop-divider" />
@@ -550,7 +559,7 @@ function AccountBar({
                   <line x1="15" y1="12" x2="3" y2="12" />
                 </svg>
               </span>{" "}
-              {t("menuSignIn", { service: providerName })}
+              {t("menuSignIn", { service: serviceName })}
             </button>
               </>
             )}

@@ -42,6 +42,11 @@ const en = {
   engineError: "engine error",
   // account panel
   providerAccount: "{provider} account",
+  // Used only in the moment before the renderer knows which service is
+  // running. Naming none is honest; naming the wrong one is not.
+  accountUnknown: "Account",
+  serviceGeneric: "the service",
+  signInGeneric: "Sign in",
   identifiedAfter: "identified after your first message",
   revealInFolder: "Show in folder",
   usageTitle: "Usage · requests sent via OnFlip",
@@ -397,6 +402,9 @@ const ru: Partial<Record<StringKey, string>> = {
   signedOut: "не выполнен вход",
   engineError: "ошибка движка",
   providerAccount: "Аккаунт {provider}",
+  accountUnknown: "Аккаунт",
+  serviceGeneric: "сервис",
+  signInGeneric: "Вход",
   identifiedAfter: "определится после первого сообщения",
   revealInFolder: "Показать в папке",
   usageTitle: "Расход · запросы через OnFlip",
@@ -740,6 +748,9 @@ const uz: Partial<Record<StringKey, string>> = {
   signedOut: "tizimga kirilmagan",
   engineError: "dvigatel xatosi",
   providerAccount: "{provider} hisobi",
+  accountUnknown: "Hisob",
+  serviceGeneric: "xizmat",
+  signInGeneric: "Kirish",
   identifiedAfter: "birinchi xabardan keyin aniqlanadi",
   revealInFolder: "Papkada ko‘rsatish",
   usageTitle: "Sarf · OnFlip orqali yuborilgan so'rovlar",

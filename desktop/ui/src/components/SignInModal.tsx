@@ -48,10 +48,7 @@ export function SignInModal({
    * login — and the import button offered a Firefox session that could not
    * help, since DeepSeek keeps no cookie to import.
    */
-  const [provider, setProvider] = useState<{ id: string; label: string }>({
-    id: "chatgpt",
-    label: "ChatGPT",
-  });
+  const [provider, setProvider] = useState<{ id: string; label: string } | null>(null);
   const live = useRef(true);
   useEffect(
     () => () => {
@@ -136,16 +133,18 @@ export function SignInModal({
   };
 
   const name = browser?.name ?? "your browser";
-  const service = provider.label;
+  const service = provider?.label ?? null;
   // Importing reads a cookie out of Firefox or Safari, and DeepSeek keeps its
   // session in localStorage instead — there is nothing there to find, so the
   // button is not offered rather than offered and useless.
-  const canImport = provider.id !== "deepseek";
+  // Unknown counts as "not importable": offering a Firefox session that
+  // cannot help is worse than showing the button a moment later.
+  const canImport = provider !== null && provider.id !== "deepseek";
   const busy = phase !== "idle";
 
   return (
     <Modal
-      title={t("signInTitle", { service })}
+      title={service ? t("signInTitle", { service }) : t("signInGeneric")}
       onClose={() => {
         if (busy) cancel();
         onClose();
@@ -176,13 +175,13 @@ export function SignInModal({
         )
       }
     >
-      <p className="modal-note">{t("signInLead", { service })}</p>
+      {service && <p className="modal-note">{t("signInLead", { service })}</p>}
       {browser === null ? (
         <p className="modal-note" style={{ color: "var(--yellow)" }}>
           {t("signInNoBrowser")}
         </p>
       ) : (
-        <p className="modal-note">{t("signInHow", { browser: name, service })}</p>
+        service && <p className="modal-note">{t("signInHow", { browser: name, service })}</p>
       )}
 
       {phase === "waiting" && (
