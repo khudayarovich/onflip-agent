@@ -62,9 +62,17 @@ jobs:
               gh release create "$TAG" --title "OnFlip Desktop $version" --generate-notes
             fi
           fi
+          # A digest anyone can check by hand against what they downloaded.
+          # Deliberately not sold as supply-chain protection: it sits in the
+          # same release as the artifact, so whoever could swap one could
+          # swap both. What it covers is a corrupted or truncated object, and
+          # a copy that came from somewhere other than this release.
+          ( cd desktop/release && sha256sum OnFlip-Setup-*.exe > SHA256SUMS-windows.txt )
+          cat desktop/release/SHA256SUMS-windows.txt
           gh release upload "$TAG" \
             desktop/release/OnFlip-Setup-*.exe \
             desktop/release/OnFlip-Setup-*.exe.blockmap \
+            desktop/release/SHA256SUMS-windows.txt \
             --clobber
 
   build-mac:
@@ -97,7 +105,10 @@ jobs:
         shell: bash
         run: |
           ls -la desktop/release
+          ( cd desktop/release && shasum -a 256 OnFlip-*-mac-*.dmg OnFlip-*-mac-*.zip > SHA256SUMS-macos.txt )
+          cat desktop/release/SHA256SUMS-macos.txt
           gh release upload "$TAG" \
             desktop/release/OnFlip-*-mac-*.dmg \
             desktop/release/OnFlip-*-mac-*.zip \
+            desktop/release/SHA256SUMS-macos.txt \
             --clobber
