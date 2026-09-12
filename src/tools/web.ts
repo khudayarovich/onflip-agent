@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ToolDefinition } from "../types";
 import { err, denied, asBool, asNumber, clip, resolveIn } from "./util";
+import { fetchPublic } from "./net-guard";
 
 const FETCH_TIMEOUT = 30_000;
 const MAX_BYTES = 2_000_000;
@@ -107,12 +108,14 @@ export const webFetchTool: ToolDefinition = {
     ctx.signal.addEventListener("abort", onAbort, { once: true });
 
     try {
-      const res = await fetch(url.href, {
+      // Every redirect hop is checked, not just the URL the model named:
+      // a public address that bounces into a private one is exactly how a
+      // first-URL check gets walked around.
+      const res = await fetchPublic(url, {
         method,
         headers,
         body: typeof args.body === "string" ? args.body : undefined,
         signal: controller.signal,
-        redirect: "follow",
       });
 
       const contentType = res.headers.get("content-type") ?? "";
@@ -409,10 +412,9 @@ export const downloadFileTool: ToolDefinition = {
     ctx.signal.addEventListener("abort", onAbort, { once: true });
 
     try {
-      const res = await fetch(url.href, {
+      const res = await fetchPublic(url, {
         headers: { "user-agent": "OnFlip/1.0 (+https://github.com/onflip)" },
         signal: controller.signal,
-        redirect: "follow",
       });
       if (!res.ok) return err(`Download failed: HTTP ${res.status} ${res.statusText}`);
       const body = await readBodyCapped(res, controller, MAX_DOWNLOAD_BYTES);
