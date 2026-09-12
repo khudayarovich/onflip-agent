@@ -92,7 +92,10 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
     edit_file: "edit",
     str_replace: "edit",
     str_replace_editor: "edit",
-    apply_patch: "edit",
+    // A model reaching for apply_patch is holding a diff, and edit wants an
+    // exact old_string - sending it there guaranteed a failure.
+    apply_patch: "patch",
+    diff: "patch",
     multiedit: "multi_edit",
     list_files: "list",
     ls: "list",

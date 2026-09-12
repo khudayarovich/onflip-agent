@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { ToolDefinition, ToolContext, FileSnapshot } from "../types";
 import { err, ok, denied, asNumber, asBool, asArray, resolveIn, relative, isProbablyBinary, IGNORED_DIRS } from "./util";
+import { applyPatch } from "./patch-apply";
 
 const MAX_READ_BYTES = 400_000;
 const MAX_READ_LINES = 2_000;
@@ -1181,11 +1182,99 @@ export const grepTool: ToolDefinition = {
   },
 };
 
+
+// ---------------------------------------------------------------------------
+// patch
+// ---------------------------------------------------------------------------
+
+export const patchTool: ToolDefinition = {
+  name: "patch",
+  description:
+    "Apply a unified diff to a file. Preferred over `edit` for anything non-trivial: the diff carries its own line numbers and context, so it is placed by searching rather than by reproducing a span of the file byte for byte. Hunks are `@@ -old,count +new,count @@` followed by lines prefixed with a space (context), `-` (remove) or `+` (add). Two or three lines of context either side is enough. The file comes from `path`; any `---`/`+++` headers are ignored. All hunks apply or none do.",
+  mutates: true,
+  parameters: {
+    type: "object",
+    properties: {
+      path: { type: "string", description: "File path, absolute or relative to the working directory" },
+      patch: { type: "string", description: "The unified diff to apply" },
+    },
+    required: ["path", "patch"],
+  },
+  async run(args, ctx) {
+    const file = resolveIn(ctx.cwd, args.path);
+    let beforeRevision: FileRevision;
+    try {
+      beforeRevision = captureFileRevision(file);
+    } catch (e) {
+      return err(`Cannot inspect ${relative(ctx.cwd, file)}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    const before = beforeRevision.contents;
+    if (before === null) return err(`File not found: ${relative(ctx.cwd, file)}`);
+
+    const patchText = String(args.patch ?? "");
+    if (!patchText.trim()) return err("`patch` must be a unified diff. Use the `write` tool to create a file.");
+
+    const result = applyPatch(before, patchText);
+    if (!result.ok) return err(result.error);
+    if (result.text === before) {
+      return err("The patch applied but changed nothing — the file already looks like this.");
+    }
+
+    const decision = await ctx.requestPermission({
+      kind: "write",
+      tool: "patch",
+      subject: relative(ctx.cwd, file),
+      targetPath: file,
+      detail: [`${result.applied.length} hunk${result.applied.length === 1 ? "" : "s"}`],
+    });
+    if (!decision.allow) return denied("Patch", decision.reason);
+    if (changedDuringApproval(file, beforeRevision)) return approvalRaceError(ctx, file);
+
+    const stale = staleReadWarning(ctx, file);
+    fs.writeFileSync(file, result.text, "utf8");
+    snapshot(ctx, file, before, result.text, "patch");
+    ctx.session.readFiles.set(file, Date.now());
+
+    // Say when a hunk had to be moved or loosened to fit. The change is
+    // right, but the model's picture of the file has drifted, and the next
+    // patch written from the same picture will drift further.
+    const moved = result.applied.filter((h) => h.offset !== 0);
+    const loosened = result.applied.filter((h) => h.relaxed !== null);
+    const notes = [
+      moved.length
+        ? `${moved.length} hunk${moved.length === 1 ? " was" : "s were"} found away from the line the patch gave (by ${moved
+            .map((h) => (h.offset > 0 ? `+${h.offset}` : String(h.offset)))
+            .join(", ")} lines).`
+        : null,
+      loosened.length
+        ? `${loosened.length} hunk${loosened.length === 1 ? "" : "s"} matched only after ignoring ${[
+            ...new Set(loosened.map((h) => (h.relaxed === "indentation" ? "indentation" : "trailing whitespace"))),
+          ].join(" and ")}; the file's own indentation was kept.`
+        : null,
+      moved.length || loosened.length
+        ? "Read the file again before the next edit so the following patch matches what is there."
+        : null,
+      stale,
+    ].filter(Boolean);
+
+    return ok(
+      [`Applied ${result.applied.length} hunk${result.applied.length === 1 ? "" : "s"} to ${relative(ctx.cwd, file)}`, ...notes].join(
+        "\n"
+      ),
+      {
+        title: relative(ctx.cwd, file),
+        display: { kind: "diff", path: file, oldText: before, newText: result.text },
+      }
+    );
+  },
+};
+
 export const FS_TOOLS: ToolDefinition[] = [
   readTool,
   writeTool,
   editTool,
   multiEditTool,
+  patchTool,
   listTool,
   globTool,
   grepTool,
