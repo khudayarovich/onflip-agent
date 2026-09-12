@@ -1419,6 +1419,8 @@ export class Engine {
   }
 
   private accountFetchInFlight = false;
+  /** Whether this run has read the account from the service itself. */
+  private accountVerified = false;
 
   /**
    * Identify the account through the page when the Node-side session read
@@ -1426,17 +1428,30 @@ export class Engine {
    * turn, when the browser is already warm, and only until it succeeds.
    */
   private maybeIdentifyAccount(): void {
-    if (this.accountFetchInFlight || this.account) return;
+    // Once a run, not once ever. The cached name is shown immediately so the
+    // sidebar is not blank, but it is only a cache - and a wrong one survived
+    // for good, because this used to stop the moment an account existed. A
+    // ChatGPT name written into DeepSeek's room by an older build therefore
+    // stayed on screen through every restart, on the service it did not
+    // belong to. Verifying once a turn-end costs nothing here: the browser is
+    // already open by then.
+    if (this.accountFetchInFlight || this.accountVerified) return;
     if (!this.transport || this.transport.name !== "browser") return;
     this.accountFetchInFlight = true;
     setTimeout(() => {
       void (async () => {
         try {
-          if (this.busy || this.account) return;
+          if (this.busy) return;
           const user = await pageSessionUser(this.auth.cookies);
+          // An answer, even an empty one, settles it for this run: a service
+          // that has no name to give would otherwise be asked again at the
+          // end of every turn. A throw leaves it unset, so a genuinely
+          // transient failure still gets another go.
+          this.accountVerified = true;
           if (!user) return;
+          const changed = user.name !== this.account?.name || user.email !== this.account?.email;
           this.account = user;
-          saveConfig({ accountName: user.name, accountEmail: user.email });
+          if (changed) saveConfig({ accountName: user.name, accountEmail: user.email });
           // Requests counted before the account was known belong to it.
           associateAccount(this.accountKey());
           this.pushStatus();
@@ -2076,6 +2091,15 @@ export class Engine {
   }
 
   async refreshModels(): Promise<ModelDTO[]> {
+    // Discovery is ChatGPT's, all the way down: it asks ChatGPT's endpoint
+    // through ChatGPT's browser, with ChatGPT's cookies. DeepSeek's three
+    // modes are a built-in list that is never discovered, so running this
+    // there does nothing useful and a great deal of harm - measured on a
+    // DeepSeek start: ChatGPT's browser opened one second after DeepSeek's
+    // and put 53 stored cookies into a profile. Worse, start() awaits this,
+    // so a ChatGPT page that is slow or being challenged holds the whole
+    // engine short of ready and every message sits at "sending".
+    if (activeProvider() === "deepseek") return allModels();
     const result = await discoverModels(this.auth);
     cacheModels(result.models.map((m) => ({ slug: m.slug, title: m.title, description: m.description })));
     return allModels();

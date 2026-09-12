@@ -255,6 +255,20 @@ const CHATGPT_SESSION = [
   "accessTokenExpiry",
 ] as const satisfies readonly (keyof OnFlipConfig)[];
 
+/**
+ * ChatGPT's alone, whichever room a previous version filed them in.
+ *
+ * The session is obvious. `discoveredModels` belongs here for the same
+ * reason and was missed: it is the answer from ChatGPT's own model-discovery
+ * endpoint, and DeepSeek's models are a fixed built-in list that is never
+ * discovered at all. So a copy of it inside another service's room is always
+ * misfiled - found in the field holding nineteen gpt-* slugs under
+ * `providers.deepseek`, written there by the cross-provider bleed that
+ * `ONFLIP_PROVIDER` pinning later closed.
+ */
+const CHATGPT_ONLY = [...CHATGPT_SESSION, "discoveredModels"] as const satisfies
+  readonly (keyof OnFlipConfig)[];
+
 /** Everything another service must not read out of ChatGPT's top level. */
 const PROVIDER_SCOPED = [...PROVIDER_SETTINGS, ...CHATGPT_SESSION] as const;
 
@@ -370,7 +384,7 @@ export function loadConfig(): OnFlipConfig {
     // there was misfiled by an earlier version, and reading it back is the
     // reported symptom itself: DeepSeek announcing a connected account on a
     // service that had never been signed in to.
-    for (const key of CHATGPT_SESSION) delete config[key];
+    for (const key of CHATGPT_ONLY) delete config[key];
   }
 
   // `sandbox` used to mean "shell allowed". Keep old configs working.
@@ -440,7 +454,7 @@ export function saveConfig(patch: OnFlipConfig): void {
   }
   const providers = { ...(stored.providers ?? {}) };
   const room: OnFlipConfig = { ...(providers[scope] ?? {}), ...scoped };
-  for (const key of CHATGPT_SESSION) delete room[key];
+  for (const key of CHATGPT_ONLY) delete room[key];
   providers[scope] = room;
   writeConfig({ ...stored, ...shared, providers }, "saving config");
 }

@@ -102,3 +102,42 @@ test("a model is refused only when it plainly belongs to the other service", () 
     assert.equal(modelBelongsToProvider("gpt-9-unreleased"), true);
   });
 });
+
+test("ChatGPT's identity misfiled into another service's room is ignored", () => {
+  // The shape found on a real machine: a cross-provider bleed from before
+  // ONFLIP_PROVIDER pinning had written ChatGPT's account and its discovered
+  // model list into providers.deepseek, and the app read them straight back
+  // out - so DeepSeek wore a ChatGPT name through every restart.
+  fs.writeFileSync(
+    path.join(CONFIG_DIR, "config.json"),
+    JSON.stringify({
+      provider: "deepseek",
+      accountName: "Someone ChatGPT",
+      accountEmail: "chatgpt@example.com",
+      sessionToken: "chatgpt-session",
+      providers: {
+        deepseek: {
+          model: "deepseek-instant",
+          accountName: "Someone ChatGPT",
+          accountEmail: "chatgpt@example.com",
+          discoveredModels: [{ slug: "gpt-5-6", title: "GPT-5.6 Sol", description: "" }],
+        },
+      },
+    })
+  );
+
+  const cfg = loadConfig();
+  // discoveredModels is ChatGPT's own endpoint speaking; DeepSeek's list is a
+  // built-in constant, so a copy in its room is always misfiled.
+  assert.equal(cfg.discoveredModels, undefined, "a gpt model list must not be read on DeepSeek");
+  assert.equal(cfg.sessionToken, undefined, "nor a ChatGPT session");
+  assert.equal(cfg.model, "deepseek-instant", "the room's own model still reads");
+  // The picker is unaffected either way - it never consults the cache here.
+  assert.deepEqual(
+    allModels().map((m) => m.slug),
+    ["deepseek-instant", "deepseek-expert", "deepseek-vision"]
+  );
+  // The account name is NOT dropped: both services have accounts, so this one
+  // is corrected by re-reading it from the service, not by deleting it here.
+  assert.equal(cfg.accountName, "Someone ChatGPT");
+});
