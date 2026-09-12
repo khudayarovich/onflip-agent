@@ -476,11 +476,36 @@ export class Engine {
     // own schedule: gating it behind the model list meant an account that
     // already knew its models — every account after the first run — would
     // never read its plan at all.
-    if (!cfg.planType) {
+    //
+    // And asked every start, not only when nothing is stored. The stored
+    // value is a cache of something the service owns, and a stale one is
+    // expensive in a way nothing on screen explains: a config still saying
+    // "free" on a Pro Lite account is compacted at 4,000 characters instead
+    // of 40,000 - measured, ten times smaller - so it summarises itself
+    // almost every turn, and every summary opens a fresh conversation and
+    // replays the transcript into it. Found on a live install, where the
+    // config said free and the account's own token said prolite.
+    {
       try {
         const plan = await fetchAccountPlan(this.auth.cookies);
-        if (plan) {
+        // Null is "this service has no plans to report" (DeepSeek) or a
+        // request that did not land - neither is a reason to forget a good
+        // stored value.
+        if (plan && plan !== cfg.planType) {
+          const was = cfg.planType;
           saveConfig({ planType: plan });
+          this.config = loadConfig();
+          if (was) {
+            logger.warn("engine", "the stored plan was out of date", {
+              was,
+              now: plan,
+              budgetWas: compactionBudget(was, false, null, this.systemPromptChars()),
+              budgetNow: compactionBudget(plan, false, null, this.systemPromptChars()),
+            });
+            this.notice(
+              `Your plan reads as ${describePlan(plan) ?? plan}, but OnFlip had "${was}" stored and was sizing the conversation from it. Corrected — long chats will now keep more before summarising.`
+            );
+          }
           const crowded = promptCrowdsPlan(plan, this.systemPromptChars());
           if (crowded) {
             this.notice(
