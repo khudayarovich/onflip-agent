@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.9
+# OnFlip Desktop 0.10.10
 
-**DeepSeek starts as DeepSeek.** Quitting and reopening the app on DeepSeek could bring it back showing the ChatGPT account, and then leave a message sitting at "sending". Fixed at the root: a DeepSeek run no longer starts ChatGPT's browser behind your back.
+**Longer conversations, a `bash` tool that is actually bash, and the agent's own fetches kept on the public internet.** Seven fixes, all of them from a close audit of a live install — including one that had been quietly costing paid accounts ten times their conversation length.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.9.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.9/OnFlip-Setup-0.10.9.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.9-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.9/OnFlip-0.10.9-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.9-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.9/OnFlip-0.10.9-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.10.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.10/OnFlip-Setup-0.10.10.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.10-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.10/OnFlip-0.10.10-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.10-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.10/OnFlip-0.10.10-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
 
@@ -18,14 +18,22 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 ## Fixed
 
-**A message no longer sits at "sending" on DeepSeek.** On startup OnFlip asks the account for its list of models when it has none saved — and that question is ChatGPT's, asked through ChatGPT's own browser. On DeepSeek it was still being asked. DeepSeek's three modes are a fixed list that is never looked up, so the call did nothing useful, opened the wrong service's browser, and — because startup waits for it — could hold the whole engine short of ready while a ChatGPT page loaded or was challenged. A message sent in that state simply waits. DeepSeek never touches ChatGPT's browser now, and starts noticeably quicker for it.
+**Your conversations may get ten times longer.** OnFlip sizes how much conversation it keeps from your account's plan — and it only ever asked for that plan when it had nothing stored, so a value that went stale was never corrected. An account recorded as Free while actually on a paid plan kept **4,000 characters** of conversation instead of 40,000, which means summarising itself almost every turn, and every summary starts a fresh chat and re-sends everything. The plan is now checked at each start and corrected, with a note telling you it happened. If this was you, long chats will feel markedly different.
 
-**DeepSeek stops showing the ChatGPT account.** The account name is remembered between launches so the sidebar is not blank while it loads, but it was only ever checked when nothing was remembered — so a name written into the wrong service's settings by an older version stayed on screen through every restart. The remembered name is now checked against the service itself once per run, and corrected. It repairs itself the first time you complete a turn on this version, with nothing to reset by hand.
+**The `bash` tool now runs bash.** It used your login shell only when that shell was itself bash, and fell back to `/bin/sh` otherwise — so on any Mac (where the login shell is zsh) the tool named `bash` had never been bash. No `[[ ]]`, no arrays, different word splitting, and failures that looked like the agent writing bad commands when the commands were fine.
 
-**And the leftovers behind both.** An older version could file ChatGPT's model list into DeepSeek's settings; it is now ignored on sight and cleared out the next time anything is saved. This is the last of the damage from that bug — 0.10.6 stopped it happening, and this clears what it left.
+**The command allowlist stops collecting things that are not commands.** Approved commands were split into parts by a rule that knew nothing about quotes, so `sqlite3 db "select … ; … vnc"` was cut inside the quoted text and each fragment stored as a command you had approved. Real installs had `"`, `"select` and `vnc"` in the list — and on Windows, PowerShell variable names like `$os` and `$path`. Splitting now understands quotes, an entry has to look like a command to be stored at all, and `sudo` is never remembered. Existing lists are cleaned automatically on the next save.
+
+**The agent's own fetches stay on the public internet.** `web_fetch` and `download_file` would reach anything — services on your own machine, the network around it, and the cloud metadata address that hands out credentials — with no prompt under full-auto. Private and loopback addresses are refused now, judged by what a name actually resolves to, and every redirect hop is checked rather than only the first address. If you deliberately point the agent at a local server, `ONFLIP_ALLOW_PRIVATE_FETCH=1` allows it again, and the refusal says so.
+
+**Binary files are recognised as binary.** The check counted every high byte as ordinary text, so it was really measuring control characters — and handed most binaries to the model as text. It now decodes.
+
+**An instruction file too large to load says so.** `AGENTS.md` and its siblings are skipped above 32KB, because they are re-sent every turn and come out of your conversation budget — but the skip was silent. OnFlip's own repository was the example: an 89KB `AGENTS.md`, dropped from every prompt, with nothing anywhere saying so. It now tells you, with the file and its size, so you can split it.
+
+**A broken tool call is no longer shown as the answer.** A reply that was nothing but malformed JSON was treated as ordinary prose and handed to you as the work.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.8...desktop-v0.10.9](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.8...desktop-v0.10.9)
+**Full changelog:** [desktop-v0.10.9...desktop-v0.10.10](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.9...desktop-v0.10.10)
