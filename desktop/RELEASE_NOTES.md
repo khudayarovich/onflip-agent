@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.12
+# OnFlip Desktop 0.10.13
 
-**A new way to edit files that actually works, and skills — instructions the agent reads only when a task needs them.** Plus the update button finally says why it sometimes sends you to a browser.
+**Two fixes found by auditing the last release.** Writing a document with a here-document no longer fills your approved-commands list with the words in it, and the last place that guessed "ChatGPT" when it did not know the service is gone.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,37 +8,26 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.12.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.12/OnFlip-Setup-0.10.12.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.12-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.12/OnFlip-0.10.12-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.12-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.12/OnFlip-0.10.12-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.13.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.13/OnFlip-Setup-0.10.13.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.13-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.13/OnFlip-0.10.13-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.13-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.13/OnFlip-0.10.13-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside if you want to check a download by hand.
 
 **On 0.8.7 or later?** You should not need this page: the app offers the update itself.
 
-## What's new
-
-**File edits should fail far less often.** Measured across real sessions: 16% of all the agent's tool calls failed, and the editing tool alone failed **57% of the time** — the worst number in the product, and every failure costs a wasted exchange with the model. The cause was the contract rather than a bug: editing asked the model to reproduce a chunk of your file exactly, character for character, which it cannot reliably do once the file has scrolled out of its memory. It would rebuild the chunk from recollection and miss by a space.
-
-There is now a `patch` tool that takes an ordinary diff instead. A diff carries its own line numbers and surrounding context, so OnFlip can go and *find* the right place rather than demanding a perfect match — and when the file has moved on underneath, it says so instead of refusing. If a patch cannot be applied, nothing is written and the agent is told which part did not fit, what it expected, and what is actually there.
-
-**Skills.** Put a `SKILL.md` in `.onflip/skills/<name>/` in a project, or in `~/.onflip/skills/` for every project, and OnFlip will know it exists and read it when a task matches. Give it a name and a one-line description at the top:
-
-```
----
-name: deploy
-description: Ship a build to staging. Use when asked to deploy or release.
----
-```
-
-The point is what it *doesn't* cost. Instructions in `AGENTS.md` are re-sent to the model on every single turn and eat into how much conversation OnFlip can keep — which is why there is a size limit on them, and why a large one is skipped entirely. A skill only puts its name and that one line in front of the model; the body stays on disk until it is actually needed. Three skills cost about 700 characters. Their bodies can be any size at all. If you have an instruction file that grew too large to load, this is where the rest of it goes.
-
 ## Fixed
 
-**The update button says why it sometimes opens your browser.** OnFlip does install updates by itself, on both Windows and macOS. When it cannot, it falls back to the download page — and it used to do that in silence, which reads as the feature not existing. It now tells you what stopped it. The reason was also wrong: three different situations all claimed "no installable build for this platform", when the usual cause is simply that the check to GitHub failed, which is rate-limited and shared with the automatic check on a timer.
+**Writing a file no longer adds its contents to your approved commands.** When the agent writes a document by piping text into a file — the ordinary way a shell does it — OnFlip was reading every line of that text as another command you had just approved. One install ended up with 112 approved "commands" that were really words out of a document: `five`, `each`, `appreciated.`, `0.10.10`. Harmless in themselves, but the list is meant to be things you decided to trust, and it had stopped being that.
+
+The text is now skipped entirely rather than parsed. That has to be the fix, because there is no way to tell `five` from a real command by looking at it — it is a perfectly plausible program name.
+
+**If your list already grew this way**, it cannot be cleaned up automatically for the same reason. Deleting the `allowedCommands` line from `~/.onflip/config.json` is safe and is the quickest fix — it only means approving those commands once more.
+
+**The last "ChatGPT" guess is gone.** 0.10.11 stopped the account bar naming the wrong service, but there turned out to be a second place doing the same thing behind the sign-out prompt and a settings line, so an unrecognised service still read as ChatGPT. There is now one piece of code that names the service, and it never invents one: the service when it knows, the name as given when it does not recognise it, and nothing at all before it knows.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.11...desktop-v0.10.12](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.11...desktop-v0.10.12)
+**Full changelog:** [desktop-v0.10.12...desktop-v0.10.13](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.12...desktop-v0.10.13)
