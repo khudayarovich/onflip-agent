@@ -421,6 +421,18 @@ export class Engine {
       writeDirs: this.config.allowedWriteDirs,
       bashRules: this.config.bashRules as BashRules | undefined,
     });
+    // createPolicy drops stored entries that are not commands, but only in
+    // memory - so an install carrying junk stayed ugly on disk until some
+    // later approval happened to write the list back. Written out here
+    // instead, and only when something was actually dropped, so the file
+    // heals on the next launch rather than on the next "always allow".
+    const storedCommands = this.config.allowedCommands ?? [];
+    if (storedCommands.length !== this.policy.allowedCommands.size) {
+      const dropped = storedCommands.filter((c) => !this.policy.allowedCommands.has(c));
+      logger.warn("engine", "dropped stored allowlist entries that are not commands", { dropped });
+      saveConfig({ allowedCommands: [...this.policy.allowedCommands] });
+      this.config = loadConfig();
+    }
 
     const restored = this.adoptableSession(this.cwd);
     if (restored) {
