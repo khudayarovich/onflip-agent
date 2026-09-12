@@ -3,6 +3,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { configDir } from "../config";
+import { discoverSkills, Skill } from "./skills";
 
 /**
  * Project context assembled once per session and prepended to the system
@@ -31,6 +32,13 @@ export interface ProjectContext {
   instructions: string;
   /** Instruction files found but left out for being over the size cap. */
   instructionsSkipped: { file: string; bytes: number }[];
+  /**
+   * Skills available here: names and one-line descriptions only.
+   *
+   * Deliberately not concatenated into `instructions`. The whole point is
+   * that a skill's body stays out of the prompt until a task needs it.
+   */
+  skills: Skill[];
   /** Which files the instructions came from, for display. */
   instructionSources: string[];
   git: GitInfo | null;
@@ -189,6 +197,7 @@ export function loadProjectContext(cwd: string): ProjectContext {
     instructions: text,
     instructionSources: sources,
     instructionsSkipped: skippedFiles,
+    skills: discoverSkills(cwd),
     git: info,
     environment: describeEnvironment(cwd, info),
   };

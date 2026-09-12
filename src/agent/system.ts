@@ -1,6 +1,7 @@
 import { ToolDefinition } from "../types";
 import { ProjectContext } from "./context";
 import { ApprovalMode, APPROVAL_MODEL_GUIDANCE } from "./permissions";
+import { renderSkills } from "./skills";
 
 export interface SystemPromptOptions {
   tools: ToolDefinition[];
@@ -264,6 +265,14 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "- If you could not do something, say so in one plain sentence.",
     ].join("\n")
   );
+
+  // -- skills ---------------------------------------------------------------
+  // Costs nothing when there are none, which is the common case. When there
+  // are, it is names and one line each: the bodies stay on disk until a task
+  // matches one, which is the entire reason skills exist rather than being
+  // more instruction files.
+  const skills = renderSkills(context.skills ?? [], context.cwd);
+  if (skills) sections.push(skills);
 
   // -- project context ------------------------------------------------------
   sections.push(`## Environment\n\n${context.environment}`);
