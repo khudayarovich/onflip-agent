@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.10
+# OnFlip Desktop 0.10.11
 
-**Longer conversations, a `bash` tool that is actually bash, and the agent's own fetches kept on the public internet.** Seven fixes, all of them from a close audit of a live install — including one that had been quietly costing paid accounts ten times their conversation length.
+**The app stops guessing which service you are on, and your Telegram token stops being world-readable.** Four fixes from a close audit of the shipped 0.10.10 build.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,32 +8,26 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.10.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.10/OnFlip-Setup-0.10.10.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.10-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.10/OnFlip-0.10.10-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.10-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.10/OnFlip-0.10.10-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.11.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.11/OnFlip-Setup-0.10.11.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.11-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.11/OnFlip-0.10.11-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.11-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.11/OnFlip-0.10.11-mac-x64.dmg) | ~115 MB |
 
-The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`.
+The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. Each release now also carries a `SHA256SUMS` file, so you can check a download against it by hand.
 
 **On 0.8.7 or later?** You should not need this page: the app offers the update itself.
 
 ## Fixed
 
-**Your conversations may get ten times longer.** OnFlip sizes how much conversation it keeps from your account's plan — and it only ever asked for that plan when it had nothing stored, so a value that went stale was never corrected. An account recorded as Free while actually on a paid plan kept **4,000 characters** of conversation instead of 40,000, which means summarising itself almost every turn, and every summary starts a fresh chat and re-sends everything. The plan is now checked at each start and corrected, with a note telling you it happened. If this was you, long chats will feel markedly different.
+**A DeepSeek install no longer says "ChatGPT".** The app learns which service it is on a moment after the window opens, and until then every place that needed a name used the literal "ChatGPT" — right on most installs, wrong on the rest. It now shows no service name rather than the wrong one, and the sign-in window titles itself plainly until it knows what it is signing in to. Small, but it reads as the app being confused about which account you are on, which is worth not doing.
 
-**The `bash` tool now runs bash.** It used your login shell only when that shell was itself bash, and fell back to `/bin/sh` otherwise — so on any Mac (where the login shell is zsh) the tool named `bash` had never been bash. No `[[ ]]`, no arrays, different word splitting, and failures that looked like the agent writing bad commands when the commands were fine.
+**Your Telegram bot token is no longer readable by other users on the machine.** When a system has no encrypted storage, OnFlip falls back to saving the token in a file — and that file was being created world-readable. It is now written private to you, existing files are corrected on the next save, and the fallback says out loud where the token landed and how to clear it, rather than happening silently.
 
-**The command allowlist stops collecting things that are not commands.** Approved commands were split into parts by a rule that knew nothing about quotes, so `sqlite3 db "select … ; … vnc"` was cut inside the quoted text and each fragment stored as a command you had approved. Real installs had `"`, `"select` and `vnc"` in the list — and on Windows, PowerShell variable names like `$os` and `$path`. Splitting now understands quotes, an entry has to look like a command to be stored at all, and `sudo` is never remembered. Existing lists are cleaned automatically on the next save.
+**Leftover junk in the command allowlist clears itself.** 0.10.10 stopped it being created and ignored what was already there; it is now cleaned from the file at launch too, so it does not survive to confuse a later version.
 
-**The agent's own fetches stay on the public internet.** `web_fetch` and `download_file` would reach anything — services on your own machine, the network around it, and the cloud metadata address that hands out credentials — with no prompt under full-auto. Private and loopback addresses are refused now, judged by what a name actually resolves to, and every redirect hop is checked rather than only the first address. If you deliberately point the agent at a local server, `ONFLIP_ALLOW_PRIVATE_FETCH=1` allows it again, and the refusal says so.
-
-**Binary files are recognised as binary.** The check counted every high byte as ordinary text, so it was really measuring control characters — and handed most binaries to the model as text. It now decodes.
-
-**An instruction file too large to load says so.** `AGENTS.md` and its siblings are skipped above 32KB, because they are re-sent every turn and come out of your conversation budget — but the skip was silent. OnFlip's own repository was the example: an 89KB `AGENTS.md`, dropped from every prompt, with nothing anywhere saying so. It now tells you, with the file and its size, so you can split it.
-
-**A broken tool call is no longer shown as the answer.** A reply that was nothing but malformed JSON was treated as ordinary prose and handed to you as the work.
+**Releases publish a checksum.** A `SHA256SUMS` file ships with each build for anyone who wants to verify a download by hand. To be clear about what it is: it lives in the same release as the file it describes, so it is not protection against a compromised release — it catches a corrupted download, or a copy that came from somewhere else. The thing that would close that gap properly is a signed build, which also stops every update clearing your macOS privacy grants.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.9...desktop-v0.10.10](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.9...desktop-v0.10.10)
+**Full changelog:** [desktop-v0.10.10...desktop-v0.10.11](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.10...desktop-v0.10.11)
