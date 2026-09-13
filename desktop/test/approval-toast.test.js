@@ -12,11 +12,20 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const fs = require("node:fs");
 
 const DIST = path.join(__dirname, "..", "dist", "electron", "approval-toast.js");
+// The engine's CI job builds src/ and not the desktop app, and the root
+// runner discovers every *.test.js in the repository - so this file has to
+// be able to sit out rather than fail. It runs locally and in the desktop
+// job, which does build it.
+const needsBuild = fs.existsSync(DIST)
+  ? false
+  : "desktop/dist is not built (run: cd desktop && npm run build:node)";
+
 const load = () => require(DIST);
 
-test("decision URLs round-trip through the parser", () => {
+test("decision URLs round-trip through the parser", { skip: needsBuild }, () => {
   const { approvalDecisionUrl, parseApprovalUrl } = load();
   for (const allow of [true, false]) {
     const url = approvalDecisionUrl("ab12cd34", 17, allow);
@@ -24,7 +33,7 @@ test("decision URLs round-trip through the parser", () => {
   }
 });
 
-test("anything that is not a decision URL parses to null", () => {
+test("anything that is not a decision URL parses to null", { skip: needsBuild }, () => {
   const { parseApprovalUrl } = load();
   for (const url of [
     "onflip://focus",
@@ -39,7 +48,7 @@ test("anything that is not a decision URL parses to null", () => {
   }
 });
 
-test("the XML carries both buttons and escapes what the engine sent", () => {
+test("the XML carries both buttons and escapes what the engine sent", { skip: needsBuild }, () => {
   const { approvalToastXml } = load();
   const xml = approvalToastXml({
     title: "OnFlip needs your approval",
@@ -56,7 +65,7 @@ test("the XML carries both buttons and escapes what the engine sent", () => {
   assert.ok(xml.includes("&quot;&lt;done&gt; &amp; dusted&quot;"));
 });
 
-test("every language the app speaks has its button labels", () => {
+test("every language the app speaks has its button labels", { skip: needsBuild }, () => {
   const { APPROVAL_TOAST_STRINGS, approvalToastXml } = load();
   for (const lang of ["en", "ru", "uz"]) {
     assert.ok(APPROVAL_TOAST_STRINGS[lang], lang);

@@ -75,9 +75,14 @@ jobs:
         run: npm run build
 
       # The whole suite, from the root, where both packages are now built.
-      # The engine job runs the same command but skips the desktop tests,
-      # because it never builds desktop/dist — this is the job that does.
       # `node --test` with no path is deliberate: a bare directory argument
       # is read as a module path on current Node and fails.
+      #
+      # That means the runner finds desktop/test/*.test.js from the engine
+      # job too, which never builds desktop/dist. Each desktop test carries
+      # its own `needsBuild` guard and skips itself there rather than dying
+      # on a missing module; this is the job where they actually run. A new
+      # desktop test without that guard turns every engine job red, which is
+      # how this workflow spent five days failing on all seven jobs.
       - name: run the test suite, desktop tests included
         run: npm run test:only

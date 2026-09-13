@@ -18,15 +18,26 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
+const fs = require("node:fs");
 
-const { serviceLabel } = require(path.join(__dirname, "..", "dist", "shared", "providers.js"));
+const DIST = path.join(__dirname, "..", "dist", "shared", "providers.js");
+// Skipped rather than failed when the desktop package has not been built:
+// the engine's CI job never builds it, and the root runner finds this file
+// anyway.
+const needsBuild = fs.existsSync(DIST)
+  ? false
+  : "desktop/dist is not built (run: cd desktop && npm run build:node)";
 
-test("the services it knows are spelled the way they spell themselves", () => {
+const load = () => require(DIST).serviceLabel;
+
+test("the services it knows are spelled the way they spell themselves", { skip: needsBuild }, () => {
+  const serviceLabel = load();
   assert.equal(serviceLabel("chatgpt"), "ChatGPT");
   assert.equal(serviceLabel("deepseek"), "DeepSeek");
 });
 
-test("not knowing yet is answered with nothing, not with a service", () => {
+test("not knowing yet is answered with nothing, not with a service", { skip: needsBuild }, () => {
+  const serviceLabel = load();
   // The moment before the status arrives. Every caller supplies its own
   // neutral wording; none of them may be handed a name that might be wrong.
   assert.equal(serviceLabel(undefined), null);
@@ -34,14 +45,16 @@ test("not knowing yet is answered with nothing, not with a service", () => {
   assert.equal(serviceLabel(""), null);
 });
 
-test("an unrecognised service is shown as itself", () => {
+test("an unrecognised service is shown as itself", { skip: needsBuild }, () => {
+  const serviceLabel = load();
   // Honest, and it survives a service being added to the engine before this
   // table hears about it. "ChatGPT" here would be a plain lie.
   assert.equal(serviceLabel("gemini"), "gemini");
   assert.equal(serviceLabel("deepseek-v2"), "deepseek-v2");
 });
 
-test("no input can make it answer ChatGPT except ChatGPT", () => {
+test("no input can make it answer ChatGPT except ChatGPT", { skip: needsBuild }, () => {
+  const serviceLabel = load();
   // The rule the previous two fixes were missing, stated once.
   for (const input of [undefined, null, "", "deepseek", "gemini", "unknown", "0", "false"]) {
     if (input === "chatgpt") continue;
