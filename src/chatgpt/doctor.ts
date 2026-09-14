@@ -46,6 +46,18 @@ export interface DoctorEnvironment {
   /** Node's module ABI, which the cookie reader's native binding must match. */
   moduleAbi: string;
   /** Set when the app can run the cookie reader on its own runtime. */
+  /**
+   * A runtime whose ABI matches the sqlite binding this app ships.
+   *
+   * Two ways to have one, and the check used to know only the first. The
+   * engine under plain Node is handed Electron's path; the engine that
+   * IS Electron, run with ELECTRON_RUN_AS_NODE because no Node was on
+   * PATH, already is one. A macOS app gets a minimal PATH with no
+   * Homebrew and no nvm on it, so that second case is the ordinary one
+   * there - and every Mac was being told its browser import would run on
+   * whatever Node it could find, while it was in fact running on the
+   * right runtime all along.
+   */
   electronPath?: string;
   /** Whether a directory exists and is readable. */
   exists(p: string): boolean;
@@ -205,7 +217,11 @@ export function inspectEnvironment(): DoctorEnvironment {
   return {
     platform: `${process.platform} ${process.arch} ${os.release()}`,
     moduleAbi: process.versions.modules,
-    electronPath: process.env.ONFLIP_ELECTRON_PATH,
+    // `process.versions.electron` is set under ELECTRON_RUN_AS_NODE too,
+    // which is exactly the case the env var does not cover.
+    electronPath:
+      process.env.ONFLIP_ELECTRON_PATH ??
+      (process.versions.electron ? process.execPath : undefined),
     exists: (p) => {
       try {
         return fs.existsSync(p);

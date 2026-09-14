@@ -192,3 +192,28 @@ test("the overall status is the worst single check", () => {
     "a failure must outrank a warning"
   );
 });
+
+test("an engine that IS Electron is not warned about Electron", () => {
+  // Reported from a MacBook's Health page: "Will run on whatever Node is on
+  // PATH (module ABI 130)". It was not. A macOS app is launched with a
+  // minimal PATH — no Homebrew, no nvm — so there is usually no `node` to
+  // find, OnFlip falls back to running the engine inside Electron itself,
+  // and that IS the runtime whose ABI matches the sqlite binding it ships.
+  //
+  // The check only knew about the other route, where plain Node is handed
+  // Electron's path in an environment variable. So every Mac was told its
+  // browser import was at risk while it was running on exactly the right
+  // runtime. `inspectEnvironment` now reports either way of having one.
+  const check = find(runChecks(healthy({ electronPath: "/Applications/OnFlip.app/…/Electron" })), "cookie-reader");
+  assert.equal(check.status, "ok");
+  assert.match(check.message, /the app's own runtime/);
+});
+
+test("and a machine with neither is still warned", () => {
+  // The warning has to keep working, or it was not worth fixing: an engine
+  // under a system Node with no Electron to reach is the case where the ABI
+  // genuinely may not match.
+  const check = find(runChecks(healthy({ electronPath: undefined })), "cookie-reader");
+  assert.equal(check.status, "warn");
+  assert.match(check.message, /whatever Node is on PATH/);
+});

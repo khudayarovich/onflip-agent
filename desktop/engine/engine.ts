@@ -2346,7 +2346,12 @@ export class Engine {
     add("version", ENGINE_VERSION);
     add("platform", `${process.platform} ${process.arch} · ${os.release()}`);
     add("engine", `node ${process.versions.node} · module ABI ${process.versions.modules}`);
-    add("cookie reader", process.env.ONFLIP_ELECTRON_PATH ? "the app's own runtime" : "whatever node is on PATH");
+    add(
+      "cookie reader",
+      process.env.ONFLIP_ELECTRON_PATH || process.versions.electron
+        ? "the app's own runtime"
+        : "whatever node is on PATH"
+    );
     lines.push("");
     add("plan", describePlan(cfg.planType) ?? cfg.planType ?? "not read");
     add("model", `${this.model}${cfg.modelPinned ? " (pinned)" : " (default)"}`);

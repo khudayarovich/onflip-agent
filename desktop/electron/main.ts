@@ -557,6 +557,10 @@ function spawnEngineViaElectron(args: string[], cwd: string): ChildProcess {
     env: {
       ...process.env,
       ELECTRON_RUN_AS_NODE: "1",
+      // True on this route as well, and the engine's own checks read it.
+      // Leaving it out is what had every Mac reporting that its browser
+      // import would run on whatever Node was around.
+      ONFLIP_ELECTRON_PATH: process.execPath,
       ONFLIP_PROVIDER: activeProvider(),
       ...embeddedEnv(),
     },
