@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.17
+# OnFlip Desktop 0.10.18
 
-**DeepSeek was being told it could do things only ChatGPT can do.** The instructions OnFlip sends at the start of every conversation were written when ChatGPT was the only service, and still said so — including a promise about images that DeepSeek had no way to keep.
+**DeepSeek merged its three modes today, and OnFlip went on offering all three.** Choosing one did nothing — quietly. That's fixed, and OnFlip now watches the page so the next time a service moves something, you hear about it.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.17.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.17/OnFlip-Setup-0.10.17.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.17-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.17/OnFlip-0.10.17-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.17-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.17/OnFlip-0.10.17-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.18.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.18/OnFlip-Setup-0.10.18.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.18-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.18/OnFlip-0.10.18-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.18-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.18/OnFlip-0.10.18-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside if you want to check a download by hand.
 
@@ -18,25 +18,22 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 ## Fixed
 
-**DeepSeek is no longer told it can draw pictures into your folder.** When ChatGPT draws an image, OnFlip lifts it off the page and saves it into the working folder — and the instructions spent a paragraph explaining that. DeepSeek has no such thing, so on DeepSeek that paragraph was asking for a file that would never appear, inside instructions whose main theme is never claiming to have saved something you did not save. It is gone there, along with the rules about refusing ChatGPT's own agent products, and the line naming ChatGPT's sandbox now names whichever service is actually answering.
+**The DeepSeek model picker offered three choices that all did the same thing.** On 14 September 2026 DeepSeek unified Instant, Expert and Vision into one model. The control OnFlip clicked to choose between them is gone from the page — checked on the live page, not taken from the announcement. OnFlip kept showing all three, and picking one reached for a control that no longer existed and gave up without saying so.
 
-**A tool that could not work is no longer offered.** `send_file` sends a file to your Telegram chat, and it was described to the model on every single session — including the great majority with no Telegram bot set up. The model would reach for it, wait for a round trip, and be told there was nowhere to send anything. OnFlip now tells the engine whether a bot is actually running, so the tool appears when it would work and not otherwise.
+There is now one DeepSeek model. If you had picked Instant, Expert or Vision, that setting opens the model that replaced all three rather than pointing at a name nothing answers to. **The Expert behaviour moved to the Thinking setting**, which drives DeepThink on the page and still works exactly as before.
 
-## Why this is worth a release
+## New
 
-Those instructions are re-sent in full every time a conversation starts, and their size is subtracted from your context budget — so they decide both what each fresh conversation costs and how soon the chat has to summarise itself. Measured on one machine, the messages carrying them were 36% of everything the app had ever sent.
+**OnFlip watches the service's page and tells you when it changes.** This is the general version of the bug above, and it is the one worth having: ChatGPT and DeepSeek redesign their own pages whenever they like, and the damage is silent by nature — a click that finds nothing does nothing, and nothing is reported.
 
-| | before | after |
-| --- | --- | --- |
-| ChatGPT, no Telegram | 23,172 | 22,542 |
-| ChatGPT with Telegram | 23,172 | 23,172 |
-| **DeepSeek, no Telegram** | 23,172 | **20,985** |
-| DeepSeek with Telegram | 23,172 | 21,615 |
+Every control OnFlip drives is now written down as a contract: the message box, the send button, the DeepThink toggle, the attachment input, where a reply is read from. Each one says whether it should be there. A control that should be present and is missing is a break. A control that was retired and comes back is also news, because it means a choice exists again that OnFlip is not making.
 
-The ChatGPT instructions are otherwise unchanged, deliberately and with a test holding them there: everything in them was learned from things that went wrong on ChatGPT, and none of it moves.
+It runs by itself once per launch, on the first turn, using the page that is already open — so it costs nothing a turn was not already paying, and it can never make a send fail. What it finds appears on the **Health** page as *page controls missing*, and there is a button there to run the deeper check whenever you want an answer now — the one that opens the service's own page and looks.
+
+If that number is ever not zero, something moved and OnFlip needs a fix. That is the point: you find out from the app instead of from a picker that quietly does nothing.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.16...desktop-v0.10.17](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.16...desktop-v0.10.17)
+**Full changelog:** [desktop-v0.10.17...desktop-v0.10.18](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.17...desktop-v0.10.18)
