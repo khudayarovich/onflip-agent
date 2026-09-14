@@ -4,10 +4,30 @@ import * as path from "node:path";
 import { ToolDefinition, ToolResult } from "../types";
 import { err, ok, denied, asNumber, asBool, clip } from "./util";
 import { assessCommand } from "../agent/permissions";
+import { spillText } from "../agent/spill";
 
 const DEFAULT_TIMEOUT = 120_000;
 const MAX_TIMEOUT = 600_000;
 const MAX_OUTPUT_LINES = 400;
+
+/**
+ * Cap a stream for the transcript, keeping the whole of it on disk.
+ *
+ * `clip` is a string function and stays one — the browser and web tools use
+ * it too and want nothing written anywhere. This is the shell's version of
+ * the same cap, and the difference is that a command's output is often the
+ * expensive half of a turn: a test suite, a build, a long search. Losing its
+ * middle here, at the tool's own boundary, meant losing it before the
+ * transcript ever saw it — so nothing later could give it back and the only
+ * way to see it again was to pay for the command twice.
+ */
+function kept(text: string, maxLines: number, label: string): string {
+  const capped = clip(text, maxLines);
+  if (capped.length >= text.length) return capped;
+  const spilled = spillText(text, label);
+  if (!spilled) return capped;
+  return `${capped}\n[full output: ${spilled.path} — read it rather than running this again]`;
+}
 
 /** Marker used to read the shell's final working directory back out. */
 const CWD_MARKER = "__ONFLIP_CWD__";
@@ -481,8 +501,10 @@ export const bashTool: ToolDefinition = {
     const parts: string[] = [];
     const stdout = result.stdout.trimEnd();
     const stderr = result.stderr.trimEnd();
-    if (stdout) parts.push(clip(stdout, MAX_OUTPUT_LINES));
-    if (stderr) parts.push(`[stderr]\n${clip(stderr, Math.floor(MAX_OUTPUT_LINES / 2))}`);
+    if (stdout) parts.push(kept(stdout, MAX_OUTPUT_LINES, "bash-stdout"));
+    if (stderr) {
+      parts.push(`[stderr]\n${kept(stderr, Math.floor(MAX_OUTPUT_LINES / 2), "bash-stderr")}`);
+    }
     if (result.timedOut) parts.push(`[timed out after ${timeout}ms — process killed]`);
     if (looksMisdecoded(result.stdout) || looksMisdecoded(result.stderr)) {
       parts.push(

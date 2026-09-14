@@ -89,6 +89,62 @@ async function gotoChat(page: Page): Promise<void> {
 /** Where an assistant reply lives; user messages have no markdown node. */
 const ASSISTANT_SELECTOR = ".ds-markdown.ds-assistant-message-main-content";
 
+/**
+ * DeepSeek talking, rather than the model answering.
+ *
+ * "Server busy, please try again later." sat on the page, in English, for
+ * the whole ninety seconds OnFlip spent waiting for a reply that was never
+ * coming — and then the turn failed with a sentence about the send not
+ * landing. It had landed. The conversation was created, the question was
+ * in it, and the service had already said why there would be no answer.
+ *
+ * The same channel carries the rest of it: a rate limit, a verification
+ * page, a login wall. None of them are replies, and all of them are
+ * readable in a second rather than a minute and a half.
+ *
+ * Chinese as well as English, because the UI ships in both and an account
+ * set to Chinese gets the Chinese wording.
+ */
+const SERVICE_MESSAGES: { pattern: RegExp; code: FailureCode; retryable: boolean }[] = [
+  // Overloaded rather than refusing us: worth another attempt, but not
+  // worth ninety seconds of silence first.
+  { pattern: /server (is )?busy|系统繁忙|服务器繁忙/i, code: "service-error", retryable: true },
+  // A challenge is for a person to clear. Sending again makes it worse.
+  {
+    pattern: /one more step before you proceed|verify you are human|checking your browser|just a moment/i,
+    code: "refused",
+    retryable: false,
+  },
+  { pattern: /rate limit|too many requests|请求过于频繁/i, code: "throttled", retryable: false },
+];
+
+/**
+ * The service's own words in a page's text, or null when it is just a page.
+ *
+ * Pure, so the patterns can be held against real wording without a browser.
+ */
+export function matchServiceMessage(body: string): { text: string; code: FailureCode } | null {
+  if (!body) return null;
+  for (const rule of SERVICE_MESSAGES) {
+    const hit = rule.pattern.exec(body);
+    if (!hit) continue;
+    const line =
+      body
+        .split(String.fromCharCode(10))
+        .map((l) => l.trim())
+        .find((l) => rule.pattern.test(l)) ?? hit[0];
+    return { text: line, code: rule.code };
+  }
+  return null;
+}
+
+/** The service's own words, when the page is showing some. */
+async function serviceMessage(page: Page): Promise<{ text: string; code: FailureCode } | null> {
+  const body = (await page
+    .evaluate("(document.body && document.body.innerText) || \"\"")
+    .catch(() => "")) as string;
+  return matchServiceMessage(body);
+}
 /** Send, and — while an answer is being written — stop. The same control. */
 const STOP_BUTTON = ".ds-button--primary";
 
@@ -315,6 +371,9 @@ const POLL_MS = 350;
 /** How long the page may show nothing new before the send is called failed. */
 const SILENCE_MS = 90_000;
 
+/** How often to ask the page whether it has already said no. */
+const SERVICE_CHECK_MS = 4_000;
+
 /** The last assistant reply, and how many are mounted, in one read. */
 async function readLast(page: Page): Promise<{ text: string; count: number }> {
   const nodes = (await page.evaluate(EXTRACT_REPLY_SCRIPT).catch(() => null)) as unknown;
@@ -424,6 +483,9 @@ export async function sendTurn(
   let quiet = 0;
   let recovered = false;
   let lastChange = Date.now();
+  // First look a few seconds in: the page needs a moment to render what
+  // it is going to say, and a check at zero would read an empty shell.
+  let lastServiceCheck = Date.now();
   while (Date.now() < deadline) {
     try {
       // Stop means stop. Without this the signal was accepted and ignored:
@@ -438,6 +500,20 @@ export async function sendTurn(
       const now = await readLast(page);
       const fresh = now.count > before.count || now.text !== before.text;
       if (!fresh || !now.text) {
+        // Before waiting the window out: is the page already saying why
+        // nothing is coming? Checked on a slow timer rather than every
+        // poll - reading the whole body three times a second to catch a
+        // sentence that persists would cost more than it saves.
+        if (!last && Date.now() - lastServiceCheck > SERVICE_CHECK_MS) {
+          lastServiceCheck = Date.now();
+          const said = await serviceMessage(page);
+          if (said) {
+            throw new DeepSeekError(
+              `DeepSeek says: ${said.text}`,
+              said.code
+            );
+          }
+        }
         // Nothing has moved. A reply that has not started at all within the
         // silence window is a failure worth reporting, not something to sit
         // on until the ten-minute deadline while the UI says "working".
