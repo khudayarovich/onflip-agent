@@ -89,11 +89,35 @@ function isExcludedSlug(slug: string): boolean {
  * `discoveredModels` cannot help here: it is whatever ChatGPT's account last
  * reported.
  */
+/**
+ * DeepSeek unified Instant, Expert and Vision on 14 September 2026.
+ *
+ * Verified on the live page rather than taken from the announcement:
+ * `[role=radio][data-model-type]` - the control OnFlip clicked to choose
+ * a mode - returns zero elements, and what remains beside the composer
+ * is the DeepThink toggle and Search. So there is one model, and the
+ * Expert behaviour moved to the reasoning setting OnFlip already drives.
+ *
+ * Keeping three entries would have been worse than wrong: the picker
+ * offered a choice, the click found no radio group, and the code read
+ * that absence as the ordinary mid-conversation case and returned
+ * quietly. Three labels, one behaviour, no error.
+ */
 const DEEPSEEK_MODELS: ModelInfo[] = [
-  { slug: "deepseek-instant", label: "Instant", description: "fast answers — DeepSeek's default" },
-  { slug: "deepseek-expert", label: "Expert", description: "slower and more careful on hard problems" },
-  { slug: "deepseek-vision", label: "Vision", description: "reads images as well as text" },
+  {
+    slug: "deepseek-chat",
+    label: "DeepSeek",
+    description:
+      "one model for chat, images and hard problems — set Thinking for what Expert used to do",
+  },
 ];
+
+/** The modes DeepSeek retired, so a stored one still opens something real. */
+const RETIRED_DEEPSEEK: Record<string, string> = {
+  "deepseek-instant": "deepseek-chat",
+  "deepseek-expert": "deepseek-chat",
+  "deepseek-vision": "deepseek-chat",
+};
 
 export function allModels(): ModelInfo[] {
   if (activeProvider() === "deepseek") return DEEPSEEK_MODELS;
@@ -276,6 +300,11 @@ export function normalizeModel(value: string | undefined): string | undefined {
   if (known.includes(v)) return v;
   const dotless = v.replace(/\./g, "-");
   if (known.includes(dotless)) return dotless;
+
+  // A session or a config written before 14 September 2026 can still
+  // name a mode that no longer exists; it opens on the model that
+  // replaced all three rather than on a slug nothing answers to.
+  if (RETIRED_DEEPSEEK[v]) return RETIRED_DEEPSEEK[v];
 
   const ALIASES: Record<string, string> = {
     "gpt-4.1": "gpt-4-1",

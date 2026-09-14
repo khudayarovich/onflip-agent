@@ -71,10 +71,10 @@ test("ChatGPT's model stays at the top level and never leaks into DeepSeek", () 
   // ChatGPT's own setting and must be invisible here.
   assert.equal(loadConfig().model, undefined, "the top-level gpt slug must not be read on DeepSeek");
   assert.equal(loadConfig().thinking, undefined, "nor any other per-service setting");
-  assert.equal(defaultModel(), "deepseek-instant");
+  assert.equal(defaultModel(), "deepseek-chat");
   assert.deepEqual(
     allModels().map((m) => m.slug),
-    ["deepseek-instant", "deepseek-expert", "deepseek-vision"]
+    ["deepseek-chat"]
   );
 });
 
@@ -132,10 +132,11 @@ test("ChatGPT's identity misfiled into another service's room is ignored", () =>
   assert.equal(cfg.discoveredModels, undefined, "a gpt model list must not be read on DeepSeek");
   assert.equal(cfg.sessionToken, undefined, "nor a ChatGPT session");
   assert.equal(cfg.model, "deepseek-instant", "the room's own model still reads");
-  // The picker is unaffected either way - it never consults the cache here.
+  // The picker is unaffected either way - it never consults the cache here,
+  // and it is DeepSeek's own list whatever ChatGPT left lying in the room.
   assert.deepEqual(
     allModels().map((m) => m.slug),
-    ["deepseek-instant", "deepseek-expert", "deepseek-vision"]
+    ["deepseek-chat"]
   );
   // The account name is NOT dropped: both services have accounts, so this one
   // is corrected by re-reading it from the service, not by deleting it here.

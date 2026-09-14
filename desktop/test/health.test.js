@@ -179,3 +179,21 @@ test("outbound messages and their size are counted", { skip: needsBuild }, () =>
   assert.equal(report.sends, 2, "an event with no size is not a send we can measure");
   assert.equal(report.charsSent, 6000);
 });
+
+test("a control that moved on the service's page is counted", { skip: needsBuild }, () => {
+  // The silent class of failure: the service redesigns its page, a click
+  // finds nothing, nothing happens. DeepSeek unified its three modes and
+  // OnFlip offered all three for a day, each doing nothing. Whatever else
+  // changes, this number moving is the signal to go and look.
+  const readHealth = load();
+  const report = readHealth(
+    14,
+    logs([
+      { msg: "the service's page has changed", level: "warn" },
+      { msg: "the deep-thinking toggle was not on the page", level: "warn" },
+      { msg: "could not read the account's model list", level: "warn" },
+      { msg: "done read", data: { error: false } },
+    ])
+  );
+  assert.equal(report.pageControlsMissing, 3);
+});

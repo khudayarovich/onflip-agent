@@ -26,23 +26,27 @@ fs.writeFileSync(path.join(HOME, ".onflip", "config.json"), JSON.stringify({ pro
 const { modeFor, DEEPSEEK_MODES } = require("../dist/providers/deepseek/browser");
 const { allModels, defaultModel } = require("../dist/models");
 
-test("the picker offers exactly the three modes the page has", () => {
+test("the picker offers what the page offers, which is now one model", () => {
+  // Was Instant, Expert and Vision. DeepSeek unified them on
+  // 14 September 2026 and the radio group went with them - verified on
+  // the live page, where [role=radio][data-model-type] returns nothing.
   assert.deepEqual(
     allModels().map((m) => m.label),
-    ["Instant", "Expert", "Vision"]
+    ["DeepSeek"]
   );
 });
 
-test("each slug maps to the page's own data-model-type", () => {
-  // Read off the live radio group: default, expert, vision.
+test("each retired slug still maps to the page's own data-model-type", () => {
+  // Kept against the chooser coming back: the mapping costs four lines
+  // and being wrong about it costs another silent no-op.
   assert.equal(modeFor("deepseek-instant"), "default");
   assert.equal(modeFor("deepseek-expert"), "expert");
   assert.equal(modeFor("deepseek-vision"), "vision");
-  assert.deepEqual(Object.values(DEEPSEEK_MODES).sort(), ["default", "expert", "vision"]);
+  assert.deepEqual([...new Set(Object.values(DEEPSEEK_MODES))].sort(), ["default", "expert", "vision"]);
 });
 
-test("Instant is the default, matching DeepSeek's own", () => {
-  assert.equal(defaultModel(), "deepseek-instant");
+test("the unified model is the default, because it is the only one", () => {
+  assert.equal(defaultModel(), "deepseek-chat");
   assert.equal(modeFor(defaultModel()), "default");
 });
 

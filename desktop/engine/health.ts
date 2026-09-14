@@ -39,6 +39,13 @@ const EVENTS: Record<string, keyof HealthReport> = {
   "payload truncated": "truncations",
   "the composer truncated the turn": "truncations",
   "step budget extended": "budgetExtensions",
+  // A control OnFlip drives was not where it should be. The services
+  // redesign their pages on their own schedule and the breakage is
+  // silent: a click that finds nothing does nothing at all.
+  "the deep-thinking toggle was not on the page": "pageControlsMissing",
+  "the service's page has changed": "pageControlsMissing",
+  "could not read the account's model list": "pageControlsMissing",
+  "the page never produced an access token": "pageControlsMissing",
 };
 
 /**
@@ -72,6 +79,7 @@ export function readHealth(days = 14, dir = logsDir()): HealthReport {
     compactionsThatFailed: 0,
     truncations: 0,
     budgetExtensions: 0,
+    pageControlsMissing: 0,
     sends: 0,
     charsSent: 0,
     reasons: [],

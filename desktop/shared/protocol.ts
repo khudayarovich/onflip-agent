@@ -378,6 +378,15 @@ export interface HealthReportDTO {
   compactionsThatFailed: number;
   truncations: number;
   budgetExtensions: number;
+  /**
+   * Times a control OnFlip drives was not on the service's page.
+   *
+   * The services change their own UI without telling anyone, and the
+   * failure is silent by nature: a click that finds nothing does
+   * nothing. DeepSeek unified its three modes and OnFlip went on
+   * offering all three, each doing nothing, until someone looked.
+   */
+  pageControlsMissing: number;
   /** Messages actually put into the chat - one request against the account. */
   sends: number;
   /**

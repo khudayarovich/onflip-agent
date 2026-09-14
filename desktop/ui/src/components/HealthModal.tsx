@@ -29,6 +29,12 @@ export function HealthModal({ onClose }: { onClose: () => void }): React.ReactEl
   const [report, setReport] = useState<HealthReportDTO | null>(null);
   const [checks, setChecks] = useState<Check[] | null>(null);
   const [failed, setFailed] = useState(false);
+  // The deep check opens the service's own page and holds it against the
+  // list of controls OnFlip drives. It is a button rather than automatic
+  // because it costs a page load, and the answer only matters when
+  // something is behaving oddly - or when the service has just announced
+  // a change.
+  const [deep, setDeep] = useState<"idle" | "running">("idle");
 
   useEffect(() => {
     let live = true;
@@ -57,7 +63,23 @@ export function HealthModal({ onClose }: { onClose: () => void }): React.ReactEl
 
       {checks && checks.length > 0 && (
         <div className="health-section">
-          <div className="health-head">{t("healthChecks")}</div>
+          <div className="health-head">
+            {t("healthChecks")}
+            <button
+              className="btn"
+              disabled={deep === "running"}
+              onClick={() => {
+                setDeep("running");
+                void api
+                  .deepDoctor()
+                  .then((d) => setChecks(d.checks))
+                  .catch(() => {})
+                  .finally(() => setDeep("idle"));
+              }}
+            >
+              {deep === "running" ? t("healthChecking") : t("healthCheckPage")}
+            </button>
+          </div>
           {checks.map((c) => (
             <div key={c.id} className="health-check">
               <span className={`health-dot ${c.status}`} />
@@ -153,6 +175,14 @@ export function HealthModal({ onClose }: { onClose: () => void }): React.ReactEl
                 warnAt={1}
               />
               <Stat label={t("healthTruncations")} value={report.truncations} warnAt={1} />
+              {/* The service redesigned its page and something OnFlip
+                  drives was not there. Silent by nature, so it is worth
+                  a number. */}
+              <Stat
+                label={t("healthPageDrift")}
+                value={report.pageControlsMissing}
+                warnAt={1}
+              />
             </div>
           </div>
 

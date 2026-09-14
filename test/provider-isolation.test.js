@@ -208,14 +208,15 @@ test("signing out of one service does not sign the other out", () => {
 // --- and the two symptoms that were reported --------------------------------
 
 test("the model picker offers DeepSeek's own modes, not ChatGPT's models", () => {
-  // Instant, Expert and Vision — the radio group above DeepSeek's composer,
-  // which is the nearest thing it has to a model list. An earlier version of
-  // this test expected a single "deepseek-chat" entry, which was my reading
-  // of the page before seeing the modes.
+  // Once Instant, Expert and Vision - the radio group above DeepSeek's
+  // composer, which was the nearest thing it had to a model list. DeepSeek
+  // unified them on 14 September 2026, so the list is one entry again.
+  // What this test is really holding is that it is DeepSeek's list and not
+  // ChatGPT's, whatever is in it.
   write({ ...EXISTING, provider: "deepseek" });
   const slugs = allModels().map((m) => m.slug);
-  assert.deepEqual(slugs, ["deepseek-instant", "deepseek-expert", "deepseek-vision"]);
-  assert.equal(defaultModel(), "deepseek-instant");
+  assert.deepEqual(slugs, ["deepseek-chat"]);
+  assert.equal(defaultModel(), "deepseek-chat");
   assert.ok(!slugs.some((s) => s.startsWith("gpt-")), "and nothing of ChatGPT's");
 });
 
@@ -223,5 +224,5 @@ test("and ChatGPT's picker is unaffected", () => {
   write(EXISTING);
   const slugs = allModels().map((m) => m.slug);
   assert.ok(slugs.includes("gpt-5-6"), "its discovered list is still read");
-  assert.ok(!slugs.includes("deepseek-chat"));
+  assert.ok(!slugs.some((s) => s.startsWith("deepseek-")));
 });

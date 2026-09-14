@@ -537,6 +537,68 @@ function noteConversation(url: string): void {
  * needs a census; this one needs a composer to type into and a node to read
  * the answer out of, and if either has moved, nothing else matters.
  */
+/**
+ * The handles OnFlip drives on DeepSeek's page, by name.
+ *
+ * A list rather than scattered queries, because the failure this exists to
+ * catch is silent: the service redesigns its page, a click finds nothing,
+ * and nothing happens. On 14 September 2026 DeepSeek unified Instant,
+ * Expert and Vision; the radio group went with them, and OnFlip's picker
+ * went on offering all three - each one doing nothing at all - because the
+ * old check looked only for the composer.
+ *
+ * `expect` is the point. A control that should be there and is not is a
+ * break. A control that was retired and comes back is also news, because
+ * it means a choice exists again that OnFlip is no longer making.
+ * `optional` is for the parts that only exist once a reply is on screen.
+ */
+const DEEPSEEK_CONTRACT: {
+  id: string;
+  what: string;
+  selector: string;
+  expect: "present" | "absent" | "optional";
+}[] = [
+  { id: "composer", what: "the message box", selector: "textarea", expect: "present" },
+  {
+    id: "sendControl",
+    what: "the send and stop button",
+    selector: ".ds-button--primary",
+    expect: "present",
+  },
+  {
+    id: "deepThink",
+    what: "the DeepThink toggle, which carries the thinking setting",
+    selector: ".ds-toggle-button[aria-pressed]",
+    expect: "present",
+  },
+  {
+    id: "fileInput",
+    what: "the attachment input",
+    selector: "input[type=file]",
+    expect: "present",
+  },
+  {
+    id: "modelChooser",
+    what: "the Instant/Expert/Vision chooser, retired on 14 September 2026",
+    selector: "[role=radio][data-model-type]",
+    expect: "absent",
+  },
+  {
+    id: "assistantReply",
+    what: "where a reply is read from",
+    selector: ".ds-markdown.ds-assistant-message-main-content",
+    expect: "optional",
+  },
+  { id: "codeBlock", what: "a code block in a reply", selector: ".md-code-block", expect: "optional" },
+];
+
+/**
+ * Hold DeepSeek's page against that contract and say what has moved.
+ *
+ * Read-only and safe to run at any time: it counts elements and touches
+ * nothing. The detail is written for someone who will have to fix it, so
+ * it names the control rather than the selector.
+ */
 export async function checkSelectors(): Promise<{
   ok: boolean;
   matches: Record<string, number>;
@@ -544,20 +606,57 @@ export async function checkSelectors(): Promise<{
 }> {
   try {
     const page = await chatPage();
-    const matches = (await page.evaluate(
-      `({
-        composer: document.querySelectorAll("textarea").length,
-        assistant: document.querySelectorAll(".ds-markdown.ds-assistant-message-main-content").length,
-        codeBlock: document.querySelectorAll(".md-code-block").length,
-      })`
-    )) as Record<string, number>;
-    const ok = matches.composer > 0;
+    // The composer mounts after the shell, so a census taken the instant
+    // the document is ready reports a drift that is really a race.
+    await page.waitForSelector("textarea", { timeout: 15_000, state: "attached" }).catch(() => null);
+    // One census in one round trip, built from the contract so a selector
+    // can never be checked here and used somewhere else.
+    const script =
+      "({" +
+      DEEPSEEK_CONTRACT.map(
+        (c) =>
+          JSON.stringify(c.id) +
+          ": document.querySelectorAll(" +
+          JSON.stringify(c.selector) +
+          ").length"
+      ).join(",") +
+      "})";
+    const matches = (await page.evaluate(script)) as Record<string, number>;
+
+    const broken: string[] = [];
+    const returned: string[] = [];
+    for (const c of DEEPSEEK_CONTRACT) {
+      const n = matches[c.id] ?? 0;
+      if (c.expect === "present" && n === 0) broken.push(c.what);
+      if (c.expect === "absent" && n > 0) returned.push(c.what);
+    }
+
+    logger.info("deepseek", "checked the page against the contract", { matches, broken, returned });
+
+    if (broken.length) {
+      return {
+        ok: false,
+        matches,
+        detail:
+          "DeepSeek's page has changed: " +
+          broken.join("; ") +
+          " could not be found. Either the profile is signed out, or the page was redesigned and this part of OnFlip needs updating.",
+      };
+    }
+    if (returned.length) {
+      return {
+        ok: false,
+        matches,
+        detail:
+          "DeepSeek has brought something back: " +
+          returned.join("; ") +
+          " is on the page again, and OnFlip is no longer using it.",
+      };
+    }
     return {
-      ok,
+      ok: true,
       matches,
-      detail: ok
-        ? "DeepSeek's composer is on the page."
-        : "DeepSeek's composer was not found — the page may have changed, or the profile may be signed out.",
+      detail: "Everything OnFlip drives on DeepSeek's page is where it should be.",
     };
   } catch (e) {
     return {
@@ -633,21 +732,16 @@ export async function setDeepThink(on: boolean): Promise<boolean> {
 }
 
 /**
- * DeepSeek's three modes: Instant, Expert and Vision.
+ * The page's own mode names, for a chooser it no longer shows.
  *
- * A real radio group above the composer, and the closest thing DeepSeek has
- * to a model picker — so that is what OnFlip presents them as. Identified by
- * `data-model-type`, which is a stable attribute rather than one of the
- * hashed class names everywhere else on that page, with the current choice in
- * `aria-checked`.
- *
- * The catch that shapes the whole design: the group only exists before a
- * conversation's first message. Once anything has been sent it is gone, and
- * the mode is fixed for that thread. So a mode is applied at the start of a
- * chat and never mid-conversation, and changing it starts a new one — which
- * is what the engine already does when the model changes.
+ * DeepSeek unified the three modes on 14 September 2026 and the radio
+ * group went with them. This is kept rather than deleted because the
+ * cost of keeping it is a few lines and the cost of being wrong about
+ * that is a silent no-op - which is exactly what this file has just
+ * been fixed for. If a chooser comes back, it starts working again.
  */
 export const DEEPSEEK_MODES = {
+  "deepseek-chat": "default",
   "deepseek-instant": "default",
   "deepseek-expert": "expert",
   "deepseek-vision": "vision",
@@ -661,11 +755,18 @@ export function modeFor(slug: string | undefined): string {
 }
 
 /**
- * Choose a mode, if there is still a chat young enough to choose one for.
+ * Choose a mode, when the page is still offering a choice.
  *
- * Answers false when the group is absent, which is the ordinary case
- * mid-conversation rather than a fault — the caller only asks on a fresh
- * chat, and a thread that has already started keeps the mode it was born with.
+ * Answers false when the group is absent, which has two causes and used
+ * to be read as only one. Mid-conversation the control is genuinely gone
+ * and that is not a fault. But since 14 September 2026 it is gone on a
+ * fresh chat too, because DeepSeek unified the modes — and reading that
+ * as the harmless case is how a picker went on offering Instant, Expert
+ * and Vision while every one of them did nothing.
+ *
+ * So absence is now said out loud once per attempt, at info because it
+ * is the expected state today and not a failure, and the caller only
+ * asks when there is more than one model to ask about.
  */
 export async function setMode(mode: string): Promise<boolean> {
   try {
@@ -688,7 +789,14 @@ export async function setMode(mode: string): Promise<boolean> {
       current: string | null;
       missing?: boolean;
     };
-    if (!before.present) return false;
+    if (!before.present) {
+      // The state since the modes were unified. Said at info rather than
+      // warn because it is expected and not a failure - but said, because
+      // the version of this that said nothing is what let a picker go on
+      // offering three choices that did nothing.
+      logger.info("deepseek", "no model chooser on the page", { wanted: mode });
+      return false;
+    }
     if (before.missing) {
       logger.warn("deepseek", "that mode is not offered on this account", { mode });
       return false;

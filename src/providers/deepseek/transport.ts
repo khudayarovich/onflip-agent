@@ -10,6 +10,7 @@ import {
   wantsDeepThink,
   setMode,
   modeFor,
+  checkSelectors,
 } from "./browser";
 
 /**
@@ -26,6 +27,21 @@ import {
  * an attachment is a second failure mode, and this transport has no need of
  * one. `compactAfterChars` is what keeps a transcript inside the composer.
  */
+/**
+ * Has the page been held against its contract since this run started?
+ *
+ * Once per run, on the first turn, when the page is open anyway - the
+ * census is a single evaluate against a document already loaded, so it
+ * costs nothing a turn was not already paying.
+ *
+ * It exists because the services redesign their own pages without
+ * telling anyone and the breakage is silent by nature: a click that
+ * finds nothing does nothing. DeepSeek unified Instant, Expert and
+ * Vision on 14 September 2026 and OnFlip went on offering all three,
+ * each doing nothing, because nothing was watching.
+ */
+let contractChecked = false;
+
 export class DeepSeekTransport implements Transport {
   readonly name = "browser" as const;
   /** How much of the history the live thread already holds. */
@@ -51,6 +67,23 @@ export class DeepSeekTransport implements Transport {
     // set before each turn rather than carried with one — and a turn sent at
     // the wrong effort cannot be taken back.
     await setDeepThink(wantsDeepThink(opts.thinking));
+
+    if (!contractChecked) {
+      contractChecked = true;
+      // Deliberately not awaited into the turn's critical path, and
+      // deliberately never allowed to fail a send: this is a report, not
+      // a gate. Someone whose turn works has no business being stopped by
+      // a census of the page it worked on.
+      void checkSelectors()
+        .then((r) => {
+          if (r.ok) return;
+          logger.warn("deepseek", "the service's page has changed", {
+            detail: r.detail,
+            matches: r.matches,
+          });
+        })
+        .catch(() => {});
+    }
 
     const { reply, ms } = await sendTurn(body, {
       signal: opts.signal,

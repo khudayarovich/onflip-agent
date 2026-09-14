@@ -690,8 +690,14 @@ export class Engine {
     // so the label was not just wrong, it disagreed with what was running.
     // Mended here rather than saved: a save on open would bump the session
     // up the sidebar, and opening a session must never move it.
-    if (restored.model && modelBelongsToProvider(restored.model)) {
-      this.model = restored.model;
+    // Normalised first: a session saved before 14 September 2026 can name
+    // a DeepSeek mode that no longer exists, and it belongs to this
+    // service - so it passes the check below and would pin the run to a
+    // slug the picker has no label for.
+    const restoredModel = restored.model ? normalizeModel(restored.model) : undefined;
+    if (restoredModel && modelBelongsToProvider(restoredModel)) {
+      this.model = restoredModel;
+      restored.model = restoredModel;
     } else if (restored.model) {
       logger.warn("session", "stored model belongs to another service; keeping this one", {
         stored: restored.model,
