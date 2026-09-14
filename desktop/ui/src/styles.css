@@ -4049,3 +4049,136 @@ a:hover {
 .queue-actions button:last-child:hover {
   color: var(--red);
 }
+
+/* The health panel: rates and counts from the app's own logs. */
+.health-section {
+  margin-top: 16px;
+}
+.health-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  margin-bottom: 8px;
+}
+.health-sub {
+  font-weight: 400;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.health-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.health-table td {
+  padding: 5px 0;
+  border-bottom: 1px solid var(--border);
+}
+.health-table tr:last-child td {
+  border-bottom: none;
+}
+.health-tool {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 12px;
+}
+.health-num {
+  text-align: right;
+  width: 72px;
+  font-variant-numeric: tabular-nums;
+  color: var(--text-muted);
+}
+/* A failure rate worth looking at, and one worth stopping at. */
+.health-num.warn {
+  color: var(--yellow);
+}
+.health-num.bad {
+  color: var(--red);
+  font-weight: 600;
+}
+.health-total td {
+  padding-top: 8px;
+  font-weight: 600;
+}
+.health-total .health-num {
+  color: inherit;
+}
+.health-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+}
+.health-stat {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+}
+.health-stat-value {
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.health-stat-value.warn {
+  color: var(--yellow);
+}
+.health-stat-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-top: 2px;
+}
+.health-check {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: 13px;
+  padding: 4px 0;
+}
+.health-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex: none;
+  background: var(--green);
+}
+.health-dot.warn {
+  background: var(--yellow);
+}
+.health-dot.fail {
+  background: var(--red);
+}
+.health-check-title {
+  font-weight: 500;
+}
+.health-check-msg {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+.health-reason {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  padding: 3px 0;
+}
+.health-reason-count {
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+  min-width: 34px;
+  text-align: right;
+}
+.health-reason-text {
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.health-empty,
+.health-foot {
+  color: var(--text-muted);
+  font-size: 12px;
+  margin-top: 14px;
+}

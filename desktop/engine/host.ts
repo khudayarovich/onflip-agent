@@ -11,6 +11,7 @@
  */
 import { Peer } from "../shared/wire";
 import { Engine } from "./engine";
+import { readHealth } from "./health";
 import { ThinkingLevel } from "onflip/dist/models";
 import { ApprovalMode } from "onflip/dist/agent/permissions";
 import { logger } from "onflip/dist/log";
@@ -195,6 +196,9 @@ peer.onRequest = async (method, rawParams) => {
 
     case "diagnostics":
       return engine.diagnostics();
+
+    case "health":
+      return readHealth(params.days as number | undefined);
 
     case "doctor":
       return engine.doctor();

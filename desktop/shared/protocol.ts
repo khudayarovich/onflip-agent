@@ -347,6 +347,41 @@ export interface ExportResult {
   suggestedName: string;
 }
 
+export interface ToolHealthDTO {
+  tool: string;
+  calls: number;
+  failures: number;
+}
+
+/**
+ * The app's own run, read back from the log it already keeps.
+ *
+ * Every field here has been recorded since the first release and read by
+ * nobody. One machine's logs held a 21% tool failure rate, `edit` failing
+ * half the time and `multi_edit` failing every single time it was called -
+ * for weeks, on disk, while the app showed only the one error in front of
+ * you. A number nobody looks at is not a measurement.
+ */
+export interface HealthReportDTO {
+  sessions: number;
+  from?: string;
+  to?: string;
+  days: number;
+  tools: ToolHealthDTO[];
+  totalCalls: number;
+  totalFailures: number;
+  turnFailures: number;
+  retries: number;
+  cooldowns: number;
+  compactions: number;
+  /** Compactions that did not shrink anything - the budget is too small. */
+  compactionsThatFailed: number;
+  truncations: number;
+  budgetExtensions: number;
+  reasons: { tool: string; reason: string; count: number }[];
+  logBytes: number;
+}
+
 /** Everything the renderer can ask of the engine, by method name. */
 export interface EngineMethods {
   init: { params: Record<string, never>; result: EngineStatus };
@@ -467,6 +502,9 @@ export interface EngineMethods {
       checks: { id: string; title: string; status: "ok" | "warn" | "fail"; message: string }[];
     };
   };
+
+  /** Aggregated counts from the session logs, for the health panel. */
+  health: { params: { days?: number }; result: HealthReportDTO };
 
   status: { params: Record<string, never>; result: EngineStatus };
 }

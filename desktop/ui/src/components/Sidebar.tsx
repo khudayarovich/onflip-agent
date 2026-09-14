@@ -29,6 +29,7 @@ export function Sidebar({
   onOpenSettings,
   onOpenAbout,
   onOpenSkills,
+  onOpenHealth,
   onOpenSchedules,
   onSignIn,
   onSignOut,
@@ -55,6 +56,7 @@ export function Sidebar({
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onOpenSkills: () => void;
+  onOpenHealth: () => void;
   onOpenSchedules: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -209,6 +211,7 @@ export function Sidebar({
         onOpenSettings={onOpenSettings}
         onOpenAbout={onOpenAbout}
         onOpenSkills={onOpenSkills}
+        onOpenHealth={onOpenHealth}
         onOpenSchedules={onOpenSchedules}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
@@ -387,6 +390,15 @@ function ProviderSwitchItem({
   );
 }
 
+/** A pulse line: the shape of something watched over time. */
+function HealthIcon(): React.ReactElement {
+  return (
+    <svg {...popIconProps}>
+      <polyline points="3 12 7 12 9 7 13 17 15 12 21 12" />
+    </svg>
+  );
+}
+
 function SkillsIcon(): React.ReactElement {
   return (
     <svg {...popIconProps}>
@@ -459,6 +471,7 @@ function AccountBar({
   onOpenSettings,
   onOpenAbout,
   onOpenSkills,
+  onOpenHealth,
   onOpenSchedules,
   onSignIn,
   onSignOut,
@@ -470,6 +483,7 @@ function AccountBar({
   onOpenSettings: () => void;
   onOpenAbout: () => void;
   onOpenSkills: () => void;
+  onOpenHealth: () => void;
   onOpenSchedules: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
@@ -575,6 +589,18 @@ function AccountBar({
                 <SkillsIcon />
               </span>{" "}
               {t("menuSkills")}
+            </button>
+            <button
+              className="pop-item"
+              onClick={() => {
+                setOpen(false);
+                onOpenHealth();
+              }}
+            >
+              <span className="pop-icon">
+                <HealthIcon />
+              </span>{" "}
+              {t("menuHealth")}
             </button>
             <button
               className="pop-item"

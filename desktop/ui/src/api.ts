@@ -10,6 +10,7 @@ import type {
   RecentProjectDTO,
   RemoteChatDTO,
   RuleAction,
+  HealthReportDTO,
   SessionSummaryDTO,
   ThinkingLevel,
 } from "../../shared/protocol";
@@ -72,6 +73,8 @@ export const api = {
     call<ConfigView>("setRule", { pattern, action }),
   deleteRule: (pattern: string) => call<ConfigView>("deleteRule", { pattern }),
 
+  /** How the app's own runs have been going, from its logs. */
+  health: (days?: number) => call<HealthReportDTO>("health", { days }),
   /** One paste-ready block about this install, for bug reports. */
   diagnostics: () => call<{ text: string }>("diagnostics"),
   doctor: () =>

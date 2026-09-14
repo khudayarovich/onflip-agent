@@ -28,6 +28,7 @@ import { TerminalPanel } from "./components/TerminalPanel";
 import { BrowserPanel, BrowserFrameDTO } from "./components/BrowserPanel";
 import { AboutModal } from "./components/AboutModal";
 import { SkillsModal } from "./components/SkillsModal";
+import { HealthModal } from "./components/HealthModal";
 import { SessionPeekModal } from "./components/SessionPeekModal";
 import { SignInModal } from "./components/SignInModal";
 import { SchedulesModal } from "./components/SchedulesModal";
@@ -44,6 +45,7 @@ type ModalName =
   | "diff"
   | "about"
   | "skills"
+  | "health"
   | "schedules"
   | "signin"
   | null;
@@ -1011,6 +1013,7 @@ export function App(): React.ReactElement {
         onOpenSettings={() => setModal("settings")}
         onOpenAbout={() => setModal("about")}
         onOpenSkills={() => setModal("skills")}
+        onOpenHealth={() => setModal("health")}
         onOpenSchedules={() => setModal("schedules")}
         onSignOut={() =>
           setConfirm({
@@ -1383,6 +1386,8 @@ export function App(): React.ReactElement {
       {modal === "schedules" && (
         <SchedulesModal cwd={status?.cwd ?? null} onClose={() => setModal(null)} />
       )}
+
+      {modal === "health" && <HealthModal onClose={() => setModal(null)} />}
 
       {modal === "skills" && (
         <SkillsModal
