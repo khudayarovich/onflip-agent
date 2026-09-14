@@ -509,6 +509,13 @@ export async function runTurn(
       history.push(
         newMessage("user", resultBlocks.join("\n\n"), { toolName: realCalls[0].tool })
       );
+      // A sub-agent takes the conversation with it: it runs in a chat of its
+      // own and leaves this one abandoned, so the next send opens a fresh
+      // thread that has never heard the protocol. The system prompt goes
+      // with it automatically; the anchor has to be earned again too, or the
+      // first send into that new chat would carry the short reminder — which
+      // is written for a model that has just proved it remembers.
+      if (realCalls.some((c) => opts.tools.canonical(c.tool) === "task")) anchored = false;
       stepLog.push(anyLanded && !sawRepeat ? "ok" : "shaky");
       continue;
     }

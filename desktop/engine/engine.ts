@@ -89,6 +89,7 @@ import {
 import { buildSystemPrompt } from "onflip/dist/agent/system";
 import { loadProjectContext, ProjectContext } from "onflip/dist/agent/context";
 import { newMessage } from "onflip/dist/agent/protocol";
+import type { SubAgentRequest, SubAgentResult } from "onflip/dist/tools/task";
 import { runTurn, compactNow, reducibleChars, AgentOptions } from "onflip/dist/agent/run";
 import {
   ApprovalMode,
@@ -730,6 +731,7 @@ export class Engine {
 
   private buildTools() {
     return createToolRegistry({
+      runSubAgent: (req) => this.runSubAgent(req),
       cwd: this.cwd,
       session: this.toolState,
       signal: this.abort.signal,
@@ -1654,6 +1656,100 @@ export class Engine {
     return null;
   }
 
+  /**
+   * Run a self-contained piece of work in a conversation of its own.
+   *
+   * The point is what does NOT come back. A sub-agent that reads thirty
+   * files returns a paragraph; those thirty files never enter the parent's
+   * transcript, and tool output is - measured, on this machine's own logs -
+   * most of what fills a transcript and forces the summarising that costs a
+   * request, a fresh chat and a full replay.
+   *
+   * The cost is a conversation. OnFlip drives one chat at a time, so the
+   * child takes a new one and the parent's is abandoned: the parent's next
+   * message replays its transcript into a fresh thread. That is about what
+   * one compaction costs, which is why the tool's own description tells the
+   * model not to spend it on a single file read.
+   *
+   * Two things the child deliberately does not get. It has no `task` tool,
+   * so a sub-agent cannot spawn sub-agents - the cost above would compound
+   * with nothing watching. And it has no memory of this conversation, which
+   * is the whole reason its reading stays out of ours; the prompt has to
+   * stand on its own, and the tool says so.
+   */
+  private async runSubAgent(req: SubAgentRequest): Promise<SubAgentResult> {
+    // Its own tool state: a sub-agent's todo list and approvals are its
+    // own, and must not be mixed into the parent's.
+    const childSession = createSessionState();
+    const registry = createToolRegistry({
+      cwd: this.cwd,
+      session: childSession,
+      signal: req.signal,
+      requestPermission: (r) => this.requestPermission(r),
+      readOnly: this.approvalMode === "read-only",
+      disableShell: !this.shellEnabled || this.approvalMode === "read-only",
+      disableNetwork: !this.networkEnabled,
+      // No `task`: one level, on purpose.
+    });
+
+    const history: ChatMessage[] = [
+      newMessage(
+        "system",
+        buildSystemPrompt({
+          tools: registry.list,
+          context: this.context,
+          approvalMode: this.approvalMode,
+          shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
+          provider: activeProvider(),
+        })
+      ),
+      newMessage("user", req.prompt),
+    ];
+
+    const parent = this.agentOptions();
+    // A budget of its own, and smaller: a sub-agent that needs a hundred
+    // steps is not a sub-task, it is the whole job in the wrong place.
+    const budget = Math.max(5, Math.min(25, this.maxIterations));
+
+    this.notice(`Working on a sub-task: ${req.description}`);
+    // The child's chat is its own. The parent's is abandoned here rather
+    // than after, so an interrupt mid-sub-task cannot leave the parent
+    // pointing at the child's thread.
+    this.transport.reset();
+    try {
+      const result = await runTurn(history, {
+        ...parent,
+        tools: registry,
+        session: childSession,
+        maxIterations: budget,
+        signal: req.signal,
+        events: {
+          // Its steps belong to it. What reaches the user is that something
+          // is happening and, at the end, the answer - not thirty tool
+          // cards from a conversation they are not in.
+          onNotice: (text) => req.onProgress?.(text),
+          onThinking: (iteration) => {
+            this.markActivity();
+            req.onProgress?.(`${req.description}: step ${iteration}`);
+          },
+        },
+      });
+      return {
+        answer: result.finalAnswer,
+        steps: result.iterations,
+        stopped: result.interrupted
+          ? "it was interrupted"
+          : result.exhausted
+            ? `it ran out of steps (${budget})`
+            : undefined,
+      };
+    } finally {
+      // Back to a clean thread for the parent, whatever happened. Its next
+      // send replays the transcript, which is the cost this tool is named
+      // for in its own description.
+      this.transport.reset();
+    }
+  }
   private agentOptions(): AgentOptions {
     return {
       transport: this.transport,

@@ -13,6 +13,7 @@ import { WEB_TOOLS } from "./web";
 import { BROWSER_TOOLS } from "./browser";
 import { MEMORY_TOOLS } from "./memory";
 import { TERMINAL_TOOLS } from "./terminal";
+import { taskTools, SubAgentRunner } from "./task";
 import { deliverTools, DeliverFile } from "./deliver";
 import { err } from "./util";
 
@@ -26,6 +27,14 @@ export function createSessionState(): SessionState {
 }
 
 export interface RegistryOptions {
+  /**
+   * Run a self-contained piece of work in a conversation of its own.
+   *
+   * Absent on the CLI, which has no second conversation to give it, and
+   * the `task` tool is then not offered at all - the same rule as
+   * `send_file`: a tool nothing can carry out is worse than no tool.
+   */
+  runSubAgent?: SubAgentRunner;
   /** Working directory tools resolve relative paths against. */
   cwd: string;
   session: SessionState;
@@ -75,6 +84,9 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
   if (!opts.disableNetwork) tools = [...tools, ...WEB_TOOLS, ...BROWSER_TOOLS];
   // Listed last, so the closing blocks sit at the end of the roster the model
   // reads; and present in every mode, since they mutate nothing.
+  // Before the terminal blocks, so the closing tools stay last in the
+  // roster the model reads.
+  tools = [...tools, ...taskTools(opts.runSubAgent)];
   tools = [...tools, ...deliverTools(opts.deliverFile), ...TERMINAL_TOOLS];
   if (opts.readOnly) tools = tools.filter((t) => !t.mutates);
 
