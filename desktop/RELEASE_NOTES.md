@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.22
+# OnFlip Desktop 0.10.23
 
-**When DeepSeek says it cannot answer, OnFlip now says so too.** "Messages stuck at sending" turned out to be OnFlip waiting ninety seconds in front of a page that had already explained itself.
+**OnFlip can hand a piece of work to a second agent and keep only the answer.** Some jobs read a great deal and conclude a little — and everything they read used to stay in your conversation forever.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,26 +8,28 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.22.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.22/OnFlip-Setup-0.10.22.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.22-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.22/OnFlip-0.10.22-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.22-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.22/OnFlip-0.10.22-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.23.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.23/OnFlip-Setup-0.10.23.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.23-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.23/OnFlip-0.10.23-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.23-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.23/OnFlip-0.10.23-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside if you want to check a download by hand.
 
 **On 0.8.7 or later?** You should not need this page: the app offers the update itself.
 
-## Fixed
+## New
 
-**DeepSeek turns that sat on "sending" and then failed for the wrong reason.** The message went through — the conversation was created, the question was in it — and DeepSeek answered with *"Server busy, please try again later."* OnFlip could not see that, waited a minute and a half for a reply that was never coming, and reported that the send had not landed. It had.
+**Sub-agents.** Ask OnFlip to find where something is handled across forty files, or work out why a test fails, and it can now give that job to a second agent with its own conversation. The forty files it reads stay in *that* conversation. Yours gets the answer.
 
-OnFlip now reads the page before waiting the whole window out, and tells you what DeepSeek actually said, word for word. It also knows what each one means: **busy** is worth trying again, a **verification page** is something only you can clear, and a **rate limit** waits rather than pushing. Chinese wording is recognised as well as English, since the site ships in both.
+This matters more than it sounds. What fills a long chat is not the talking — it is the output of tools, and a full chat is what forces OnFlip to summarise itself, which costs a request and a fresh start every time. Work that reads a lot and concludes a little is exactly the work worth doing somewhere else.
 
-If DeepSeek is having a bad day — and it is mid-rollout of a new model this week — you will now see that in a few seconds instead of after ninety.
+It is not free, and OnFlip knows it. Driving one chat at a time means the second agent takes the conversation, and yours is rebuilt on your next message — roughly what one summarisation costs. The agent is told that plainly, so it spends a sub-agent on a survey and not on reading a single file.
 
-**Long command output is kept instead of thrown away.** A build or a test run whose output is too big for the conversation was cut down to fit, and the middle was simply lost — the only way to see it again was to run the command a second time. The whole output is now written to a file first, and the cut says where to find it.
+Some deliberate limits: a sub-agent cannot start sub-agents of its own, it cannot see your conversation (which is the whole point), it cannot stop to ask you a question, and it gets a smaller step budget than the main agent. If it runs out of steps, what comes back says so above its answer — a partial survey should never read as a finished one.
+
+You will see it as a **Task** card in the transcript while it works, and its answer when it is done.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.21...desktop-v0.10.22](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.21...desktop-v0.10.22)
+**Full changelog:** [desktop-v0.10.22...desktop-v0.10.23](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.22...desktop-v0.10.23)
