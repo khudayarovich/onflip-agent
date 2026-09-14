@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.15
+# OnFlip Desktop 0.10.16
 
-**A DeepSeek turn that could have been retried no longer ends.** Four turns in one week's logs died on a failure that the app was allowed to try again — and never did, because of the way the message was worded.
+**A Health page, and the first thing it found fixed.** OnFlip has been writing a detailed log of its own runs since the first release, and nothing ever read it. Now there is a page that does — and the first number it produced was worth acting on immediately.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,24 +8,36 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.15.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.15/OnFlip-Setup-0.10.15.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.15-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.15/OnFlip-0.10.15-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.15-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.15/OnFlip-0.10.15-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.16.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.16/OnFlip-Setup-0.10.16.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.16-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.16/OnFlip-0.10.16-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.16-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.16/OnFlip-0.10.16-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside if you want to check a download by hand.
 
 **On 0.8.7 or later?** You should not need this page: the app offers the update itself.
 
-## Fixed
+## New
 
-**DeepSeek turns that stopped instead of trying again.** When a message went into DeepSeek and no answer started, OnFlip said *"the page may have signed out, or the send did not land"* and ended the turn. The retry was not failing — it was never attempted. OnFlip decides whether a failure is worth retrying, and for this one it decided by reading its own sentence, where the words "signed out" appear inside a hedge about what might have happened. A turn that was one resend away from working was thrown away instead.
+**Health** — in the account menu. Three things:
 
-It no longer guesses. When an answer does not start, OnFlip reads the session straight out of the page: if you really are signed out it says so and stops, because sending again cannot help; if the session is fine it retries, because that is the case that almost always works. The same went for a page that navigated while loading a chat — Playwright calls that "interrupted", which OnFlip was reading as *you* interrupting it.
+- **Tool calls**, with how often each one fails. This is the number that started all of it: on one machine, 21% of every tool call had failed, `edit` had failed 52% of the time and `multi_edit` had failed on all nine of its calls. That had been true for weeks, written to disk, while the app showed you only the one error in front of you at the time.
+- **What it cost to say** — messages sent, characters in each, and the total. This is what request limits are actually spent on.
+- **What happened** — turns that failed, sends retried, cooldowns, compactions, and separately the compactions that did not shrink anything, which is the one that means your context budget is smaller than the conversation needs.
 
-**Session logs no longer swallow whole documents.** Every failed tool call records its arguments, uncapped — so asking the agent to write a document with a shell command put the entire document in the log. One entry held 3.6 KB of it; one session file reached 620 KB. Arguments are now capped at 500 characters each, and the log says how many characters it left out rather than trimming silently. Typed keystrokes are still redacted completely, at any length.
+The page also runs the six diagnostic checks OnFlip has always had and never had a button for — the session, the plan, the browser profile, whether a cooldown is running, whether local storage is writable.
+
+The point is not the numbers on any one day. It is being able to notice when one of them moves.
+
+## Changed
+
+**OnFlip says less to get the same work done.** Every message it sends carries a protocol reminder — the rules that stop a chat model from claiming it cannot reach your computer. It was 2,194 characters and it went out on every single send: 430,000 characters, 30% of everything the app had ever said.
+
+It now arrives in full when it is worth its size — in a conversation that has not heard it yet, which includes every chat opened by a compaction; right after a step that went wrong; and every tenth step regardless. On a step that has just gone perfectly it sends 466 characters instead, carrying the two rules a drifting model actually forgets.
+
+Whether that nets out is a real question, and it is one the Health page can now answer: a reply that drifts costs a whole round trip, and the saving is a fifth of one. The numbers are on the page either way.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT account, a DeepSeek account, or both. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.14...desktop-v0.10.15](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.14...desktop-v0.10.15)
+**Full changelog:** [desktop-v0.10.15...desktop-v0.10.16](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.15...desktop-v0.10.16)
