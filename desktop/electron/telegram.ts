@@ -401,6 +401,17 @@ async function sendPhotoEverywhere(dataUrl: string, caption: string): Promise<bo
  * something it has to be able to tell the user about. Fifty megabytes is
  * Telegram's ceiling for a bot, not ours.
  */
+/**
+ * Is the bot up, so a file sent to it would actually arrive?
+ *
+ * Asked by the engine through the app: with no bot there is nowhere for
+ * `send_file` to send anything, and a tool that cannot work costs a round
+ * trip to discover plus its documentation in every conversation opened.
+ */
+export function telegramRunning(): boolean {
+  return polling;
+}
+
 export async function telegramSendFile(
   file: string,
   caption?: string

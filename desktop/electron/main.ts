@@ -59,6 +59,7 @@ import {
   telegramAskApproval,
   telegramOnEvent,
   telegramPublic,
+  telegramRunning,
   telegramSendFile,
 } from "./telegram";
 import {
@@ -1043,12 +1044,30 @@ function createTray(): void {
 // IPC surface for the renderers
 // ---------------------------------------------------------------------------
 
+/**
+ * Tell one engine whether a file can be delivered off this machine.
+ *
+ * Best effort and deliberately silent: it decides whether `send_file` is
+ * offered at all, and an engine that never hears simply does not offer a
+ * tool that would have failed anyway.
+ */
+function pushDeliverable(ws: Workspace): void {
+  if (!ws.peer || ws.engineExited) return;
+  void ws.peer
+    .request("setDeliverable", { available: telegramRunning() })
+    .catch(() => {});
+}
+
 function registerIpc(): void {
+
   ipcMain.handle("engine-call", async (e, payload: { method: string; params?: unknown }) => {
     const ws = wsOf(e);
     if (!ws?.peer || ws.engineExited) throw new Error("The engine is not running.");
     // A fresh renderer — first load or a reload — announces itself with init.
-    if (payload.method === "init") resendApprovals(ws);
+    if (payload.method === "init") {
+      resendApprovals(ws);
+      pushDeliverable(ws);
+    }
     return await ws.peer.request(payload.method, payload.params ?? {});
   });
 
@@ -1748,6 +1767,10 @@ if (!singleInstance) {
       changed: () => {
         for (const ws of workspaces.values()) {
           if (!ws.win.isDestroyed()) sendTo(ws, "telegram-changed", {});
+          // Turning the bot on or off changes whether `send_file` exists,
+          // so the engines are told too - the next conversation each of
+          // them opens then documents the roster it actually has.
+          pushDeliverable(ws);
         }
       },
       answerApproval: (id, decision) => {

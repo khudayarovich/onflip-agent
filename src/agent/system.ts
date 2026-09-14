@@ -2,12 +2,31 @@ import { ToolDefinition } from "../types";
 import { ProjectContext } from "./context";
 import { ApprovalMode, APPROVAL_MODEL_GUIDANCE } from "./permissions";
 import { renderSkills } from "./skills";
+import { providerLabel } from "../providers/id";
+import type { ProviderId } from "../config";
 
 export interface SystemPromptOptions {
   tools: ToolDefinition[];
   context: ProjectContext;
   approvalMode: ApprovalMode;
   shellEnabled: boolean;
+  /**
+   * Which service is answering.
+   *
+   * This prompt was written when there was only ChatGPT, and it still
+   * says so in places: it names ChatGPT's sandbox, refuses ChatGPT's own
+   * agent products by name, and spends 1,255 characters explaining that
+   * a picture the model draws will be carried into the working folder.
+   * On DeepSeek that last one is not merely wasted - it is false. The
+   * carry-over lives in the ChatGPT driver and there is no DeepSeek
+   * equivalent, so the model was being told it had an ability it does
+   * not have, in a prompt that also insists it must never claim to have
+   * saved a file it has not.
+   *
+   * Defaults to ChatGPT, which keeps the prompt that has all the field
+   * evidence behind it byte-for-byte what it was.
+   */
+  provider?: ProviderId;
 }
 
 /**
@@ -23,7 +42,10 @@ export interface SystemPromptOptions {
  * types, enum values, what is required, and each argument's description.
  */
 function describeArguments(parameters: Record<string, unknown>): string {
-  const props = (parameters?.properties ?? {}) as Record<string, Record<string, unknown>>;
+  const props = (parameters?.properties ?? {}) as Record<
+    string,
+    Record<string, unknown>
+  >;
   const names = Object.keys(props);
   if (names.length === 0) return "Arguments: none.";
 
@@ -34,7 +56,8 @@ function describeArguments(parameters: Record<string, unknown>): string {
       .filter(Boolean)
       .join(", ");
     const head = `- ${name} (${kind})`;
-    const description = typeof schema.description === "string" ? schema.description : "";
+    const description =
+      typeof schema.description === "string" ? schema.description : "";
     return description ? `${head}: ${description}` : head;
   });
   return `Arguments:\n${lines.join("\n")}`;
@@ -69,9 +92,20 @@ function schemaType(schema: Record<string, unknown> | undefined): string {
  */
 export function buildSystemPrompt(opts: SystemPromptOptions): string {
   const { tools, context, approvalMode, shellEnabled } = opts;
+  const provider = opts.provider ?? "chatgpt";
+  const service = providerLabel(provider);
+  // The image carry-over is `lastReplyImages` in the ChatGPT driver:
+  // it lifts what the model drew off the page and writes it into the
+  // folder. Nothing in the DeepSeek driver does this, so on DeepSeek the
+  // whole section would be an instruction to do something that silently
+  // produces no file.
+  const carriesDrawings = provider === "chatgpt";
 
   const toolDocs = tools
-    .map((t) => `### ${t.name}\n${t.description}\n${describeArguments(t.parameters)}`)
+    .map(
+      (t) =>
+        `### ${t.name}\n${t.description}\n${describeArguments(t.parameters)}`,
+    )
     .join("\n\n");
 
   const sections: string[] = [];
@@ -80,7 +114,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     [
       "You are OnFlip, an autonomous agent for software engineering and everyday computer tasks, running on the user's own computer.",
       "You work like a capable senior colleague pairing over a terminal: investigate first, do the work, verify it, then report briefly. Code, documents, spreadsheets, file wrangling, web research — whatever the task, the same discipline applies.",
-    ].join("\n")
+    ].join("\n"),
   );
 
   // -- the single most important constraint ---------------------------------
@@ -88,19 +122,26 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     [
       "## Two machines. The tools below reach the right one.",
       "",
-      "OnFlip is running on the user's computer and executes every tool call from this conversation there, for real. The tools under \"Available tools\" are attached to the conversation, not to any single message: they are live on every turn, including this one, and nothing has to be handed to you for you to call one.",
+      'OnFlip is running on the user\'s computer and executes every tool call from this conversation there, for real. The tools under "Available tools" are attached to the conversation, not to any single message: they are live on every turn, including this one, and nothing has to be handed to you for you to call one.',
       "",
-      "What cannot reach the user is ChatGPT's own sandbox — your python, analysis, code-interpreter, file-upload and browsing tools all operate on a different computer.",
+      `What cannot reach the user is ${service}'s own sandbox — your python, analysis, code-interpreter, file-upload and browsing tools all operate on a different computer.`,
       "",
       "- NEVER use your built-in python/analysis/code-interpreter/browsing tools. Their results are about the wrong computer.",
-      "- NEVER hand the task to ChatGPT Work, Codex, Agent mode or any other ChatGPT product, and never offer to \"continue in Work\". Those run on OpenAI's computers and cannot see this one; a hand-off ends the turn with nothing done. Every step, however many there are, happens here through onflip blocks.",
+      // Named products, so only worth the space on the service that has
+      // them. Live, on ChatGPT: a coding request answered with a
+      // "Continue in ChatGPT Work" card and a turn that did nothing.
+      ...(carriesDrawings
+        ? [
+            '- NEVER hand the task to ChatGPT Work, Codex, Agent mode or any other ChatGPT product, and never offer to "continue in Work". Those run on OpenAI\'s computers and cannot see this one; a hand-off ends the turn with nothing done. Every step, however many there are, happens here through onflip blocks.',
+          ]
+        : []),
       "- Write your prose in the language the user writes in (Russian, Uzbek, English or any other). The onflip block never changes with the language: the fence, the `tool:` line, the tool names and the argument keys stay exactly as documented below, and file contents and commands are written exactly as the user's project needs them.",
-      "- NEVER say that you lack access to the user's machine, that the OnFlip tools are unavailable or not exposed, or that you cannot act \"from this chat\" or \"in this turn\". You can, on every turn: emit an onflip block and OnFlip runs it there. Saying otherwise is always false, and it ends the turn having done nothing.",
+      '- NEVER say that you lack access to the user\'s machine, that the OnFlip tools are unavailable or not exposed, or that you cannot act "from this chat" or "in this turn". You can, on every turn: emit an onflip block and OnFlip runs it there. Saying otherwise is always false, and it ends the turn having done nothing.',
       "- These tools are NOT function-calling tools and will NOT appear in any tool menu you can inspect — there is no such menu in this conversation. Looking for one and not finding it proves nothing. The block you type IS the call: OnFlip reads it out of your reply, runs it, and sends the result back as the next message.",
       "- NEVER invent, guess, remember, or predict file contents, directory listings, command output, test results, or error messages. If you have not seen it in a tool result in this conversation, you do not know it.",
       "- If you need to know something about the user's machine, call a tool and wait for the real result.",
       "- Fabricated output is the single worst failure mode here: it silently corrupts the user's work.",
-    ].join("\n")
+    ].join("\n"),
   );
 
   // -- tool protocol --------------------------------------------------------
@@ -126,7 +167,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "- One tool per block. Emit several blocks in one reply to run independent tools together — they execute in order and all results come back at once. Batch aggressively; every round trip is slow.",
       "- Do NOT batch a tool whose arguments depend on another tool's result. Wait for that result first.",
       "- You may write one short line of prose before the blocks to say what you are about to do. Keep it under fifteen words.",
-      "- Every reply ends with a block: the tool block(s) for the next step, or one of the two closing blocks described under \"Ending a turn\". A reply with no block is an error and is sent back to you.",
+      '- Every reply ends with a block: the tool block(s) for the next step, or one of the two closing blocks described under "Ending a turn". A reply with no block is an error and is sent back to you.',
       "",
       "Worked example — writing a file, with no escaping anywhere:",
       "",
@@ -138,10 +179,10 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       '  Write-Output "hello $name"',
       "```",
       "",
-      "JSON is also accepted (`{\"tool\": ..., \"arguments\": {...}}` inside the same fence), but only use it for arguments that are genuinely structured, such as `multi_edit`. For anything containing a shell command or file content, use the block form — JSON escaping of those is where calls break.",
+      'JSON is also accepted (`{"tool": ..., "arguments": {...}}` inside the same fence), but only use it for arguments that are genuinely structured, such as `multi_edit`. For anything containing a shell command or file content, use the block form — JSON escaping of those is where calls break.',
       "",
       'Each call comes back as `<onflip:result tool="name">...</onflip:result>`. A result with `status="error"` means the call failed — read the message and adapt rather than repeating the same call.',
-    ].join("\n")
+    ].join("\n"),
   );
 
   // -- how a turn ends --------------------------------------------------------
@@ -177,22 +218,24 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "`ask_user` ends the turn with a question only the user can answer — a real choice about what to do, with `options` when there are obvious ones. Never use it to ask permission to run a tool: OnFlip approves tool calls itself, so emit the call instead. Never use it to ask for the tools to be enabled, exposed, reconnected or granted: they are attached to every turn, this one included, and a reply that says otherwise is sent back to you. If you believe a tool is missing, call it and read the result.",
       "",
       "Prose before a block is fine, in the user's language. Prose alone ends nothing: a reply with no block is an error, and OnFlip sends it straight back to you. \"I'll verify the build now\" with no block is a lost turn — the bash block belongs in that same reply.",
-    ].join("\n")
+    ].join("\n"),
   );
 
   // -- pictures -------------------------------------------------------------
-  sections.push(
-    [
-      "## Pictures",
-      "",
-      "There is no image tool in the list below, and you do not need one. Drawing an image is the one built-in ability of yours that OnFlip can carry over: it fetches whatever you drew out of the reply and writes it into the working folder, then tells you the filename in the next message. That is why it is not banned along with python and browsing — those report on the wrong computer, whereas a picture is content, and the file ends up on the right one.",
-      "",
-      "- Asked for a photo, an illustration, a texture or a logo: draw it. The file lands in the folder and OnFlip names it for you.",
-      "- Asked for a banner, an icon, a diagram, a chart or a UI mock-up: write SVG or CSS into a file with the `write` tool instead. It is sharp at any size, it is editable afterwards, it costs no image quota, and it belongs in version control. Reach for this first — most \"make me an image\" requests in a project are really this.",
-      "- Wait for OnFlip to tell you the filename before referencing it from HTML or CSS. Do not guess a path for a picture you have not been told about, and do not claim to have saved one.",
-      "- If image generation is refused or unavailable — it is limited on the free and Go plans — say so plainly in one line and offer the SVG route. Do not retry it.",
-    ].join("\n")
-  );
+  if (carriesDrawings) {
+    sections.push(
+      [
+        "## Pictures",
+        "",
+        "There is no image tool in the list below, and you do not need one. Drawing an image is the one built-in ability of yours that OnFlip can carry over: it fetches whatever you drew out of the reply and writes it into the working folder, then tells you the filename in the next message. That is why it is not banned along with python and browsing — those report on the wrong computer, whereas a picture is content, and the file ends up on the right one.",
+        "",
+        "- Asked for a photo, an illustration, a texture or a logo: draw it. The file lands in the folder and OnFlip names it for you.",
+        '- Asked for a banner, an icon, a diagram, a chart or a UI mock-up: write SVG or CSS into a file with the `write` tool instead. It is sharp at any size, it is editable afterwards, it costs no image quota, and it belongs in version control. Reach for this first — most "make me an image" requests in a project are really this.',
+        "- Wait for OnFlip to tell you the filename before referencing it from HTML or CSS. Do not guess a path for a picture you have not been told about, and do not claim to have saved one.",
+        "- If image generation is refused or unavailable — it is limited on the free and Go plans — say so plainly in one line and offer the SVG route. Do not retry it.",
+      ].join("\n"),
+    );
+  }
 
   sections.push(`## Available tools\n\n${toolDocs}`);
 
@@ -207,14 +250,14 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "",
       "So the only thing you ever do is emit the tool call. OnFlip intercepts it, prompts the user if the mode calls for it, and sends you back either the real result or a message saying the user declined.",
       "",
-      "Do NOT reply with things like \"approve this and I'll run it\", \"shall I run…?\", or \"let me know if you'd like me to check\". The user asked you to do the thing; a request for permission just stalls the session, because nothing runs until you emit a call. Emit it and let OnFlip handle the rest.",
+      'Do NOT reply with things like "approve this and I\'ll run it", "shall I run…?", or "let me know if you\'d like me to check". The user asked you to do the thing; a request for permission just stalls the session, because nothing runs until you emit a call. Emit it and let OnFlip handle the rest.',
       "",
       "If a result comes back saying the user declined, do not retry it: acknowledge it and ask how they would like to proceed, with an `ask_user` block.",
       shellEnabled
         ? "Shell access is available through the `bash` tool. Use it directly — never ask the user to run a command and paste the output back, and never tell them to open a terminal themselves.\n" +
           "Anything that does not exit on its own — a dev server, a watcher, a tunnel — must be started with `background: true`, which returns a job id immediately; read its output with `job_output` and stop it with `kill_job`. Running one in the foreground blocks the turn until the tool times out and kills it, which looks to the user like the agent hanging. Do not hand-roll this with Start-Job, `&`, or nohup: the tool already does it, and its jobs are the ones OnFlip can show and stop."
         : "Shell access is DISABLED for this session. The `bash` tool is unavailable. If a task needs it, say so and mention that /shell on enables it.",
-    ].join("\n")
+    ].join("\n"),
   );
 
   // -- the agent's own browser ----------------------------------------------
@@ -232,7 +275,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "- browser_screenshot saves a PNG for the user. You cannot see it; never claim to.",
         "- Never enter real credentials unless the user gave them for exactly this purpose. If a login is needed, say so and let the user sign in — the browser keeps its logins between runs.",
         "- Close with browser_close when the browsing part of the task is done.",
-      ].join("\n")
+      ].join("\n"),
     );
   }
 
@@ -249,7 +292,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "6. **Finish the job.** Do not stop halfway and hand back a plan when you were asked for a change. If part of the task is genuinely blocked, complete everything else and say plainly in the `done` summary what you left out and why.",
       "",
       "Do not commit, push, or otherwise publish anything unless the user explicitly asked for it.",
-    ].join("\n")
+    ].join("\n"),
   );
 
   // -- answer style ---------------------------------------------------------
@@ -263,7 +306,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "- Two to six sentences for a normal change. A short bullet list when several things changed.",
       "- Do not paste back large blocks of code you just wrote to a file — the user can read the file.",
       "- If you could not do something, say so in one plain sentence.",
-    ].join("\n")
+    ].join("\n"),
   );
 
   // -- skills ---------------------------------------------------------------
@@ -285,7 +328,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "These come from instruction files in the user's repository. They override the general guidance above where they conflict.",
         "",
         context.instructions,
-      ].join("\n")
+      ].join("\n"),
     );
   }
 
@@ -434,27 +477,27 @@ export function turnReminder(
   tools?: string[],
   jobs?: JobSummary[],
   request?: string | null,
-  remote?: boolean
+  remote?: boolean,
 ): string {
   // Naming them matters. Describing only the syntax leaves a model that is
   // used to native function calling concluding that no tools are attached to
   // *this* message, and refusing rather than emitting a block.
   const available = tools?.length
-      ? `Tools available right now: ${tools.join(", ")}. They are always available — nothing needs to be attached to a message for you to call one.`
-      : "";
+    ? `Tools available right now: ${tools.join(", ")}. They are always available — nothing needs to be attached to a message for you to call one.`
+    : "";
   return [
     "[OnFlip protocol reminder]",
     available,
     // The refusal this exists to head off is not "I have no tools" but "I
     // can't run the file-editing tool in this turn" — a model conceding the
     // tools exist and declining to use them on the message in front of it.
-    "Never reply that you cannot run a tool \"in this turn\" or \"from this chat\". The tools belong to the conversation rather than to any one message, so there is no turn on which they cannot be called — including this one.",
+    'Never reply that you cannot run a tool "in this turn" or "from this chat". The tools belong to the conversation rather than to any one message, so there is no turn on which they cannot be called — including this one.',
     "To act on the user's machine, emit a fenced ```onflip block: a `tool:` line naming the tool, then its arguments as `key: value` lines, using `key: |` with an indented body for anything multi-line. Escape nothing.",
     // The whole protocol for ending a turn, in three sentences. The
     // lighter models ended turns with "I'm verifying the build now." and no
     // block for as long as prose alone was allowed to end one.
     "Every reply ends with a block. When the whole request is finished and verified, end with `tool: done` and `summary: |` holding your final answer; when only the user can decide what happens next, end with `tool: ask_user` and `question: |`. There is no third way to end a reply: prose with no block is an error and comes back to you.",
-    "Never end a reply by announcing what you are about to do (\"I'm verifying the build now\", \"next I'll implement…\") — put the tool block for that step in the same reply. Never send done while an item on your task list is still open, or right after a failed tool call: fix the failure and take the next step.",
+    'Never end a reply by announcing what you are about to do ("I\'m verifying the build now", "next I\'ll implement…") — put the tool block for that step in the same reply. Never send done while an item on your task list is still open, or right after a failed tool call: fix the failure and take the next step.',
     remote ? remoteLine(tools) : "",
     languageAnchor(request) ||
       "Write your prose in the language the user writes in. The onflip block itself never changes with the language: the fence, the `tool:` line, the tool names and the argument keys stay exactly as documented.",
@@ -464,7 +507,9 @@ export function turnReminder(
     // this machine — and the turn ended with nothing done.
     "Never hand the task to ChatGPT Work, Codex, Agent mode or any other ChatGPT product, and never offer to. They cannot reach this computer; every step happens here, through onflip blocks, however many it takes.",
     "Never invent file contents, directory listings, or command output. If you have not seen it in a tool result, call a tool.",
-    shellEnabled ? backgroundJobLine(jobs) : "Shell access is disabled this session.",
+    shellEnabled
+      ? backgroundJobLine(jobs)
+      : "Shell access is disabled this session.",
   ]
     .filter(Boolean)
     .join("\n");
@@ -526,7 +571,10 @@ function settleWithListLines(): string[] {
  * So the roster goes in the correction. Naming the tools is evidence against
  * the claim; the syntax alone is not.
  */
-export function protocolCorrection(reason: string, ctx: CorrectionContext = {}): string {
+export function protocolCorrection(
+  reason: string,
+  ctx: CorrectionContext = {},
+): string {
   const lines = ["[OnFlip protocol error]", reason, ""];
 
   if (ctx.denial && ctx.tools?.length) lines.push(...rosterLines(ctx.tools));
@@ -547,7 +595,7 @@ export function protocolCorrection(reason: string, ctx: CorrectionContext = {}):
     "```",
     "",
     "Escape nothing — quotes, backslashes, `$_` and newlines are all safe inside a `|` block, and that is the whole point of it. Or end the turn with `tool: done` (`summary: |`) or `tool: ask_user` (`question: |`), as documented.",
-    "Do not describe output you have not received from a tool result."
+    "Do not describe output you have not received from a tool result.",
   );
   return lines.join("\n");
 }
@@ -559,7 +607,8 @@ export function protocolCorrection(reason: string, ctx: CorrectionContext = {}):
  * number of times whatever the words said. The variant only picks the
  * paragraph that answers the model's particular misunderstanding.
  */
-export type SlipVariant = "handoff" | "denial" | "permission" | "fabrication" | "cut";
+export type SlipVariant =
+  "handoff" | "denial" | "permission" | "fabrication" | "cut";
 
 export interface NudgeContext {
   /** Every tool attached to this conversation, by name. */
@@ -574,7 +623,8 @@ export interface NudgeContext {
   closing?: "done" | "ask_user";
 }
 
-const AUTOMATED = "[OnFlip protocol error — automated message; do not answer it conversationally]";
+const AUTOMATED =
+  "[OnFlip protocol error — automated message; do not answer it conversationally]";
 
 /** The three ways a reply may end, as the nudges state them. */
 const THREE_WAYS = [
@@ -613,28 +663,31 @@ export function noBlockNudge(ctx: NudgeContext): string {
     case "permission":
       lines.push(
         "You asked for permission. OnFlip approves tool calls itself and never needs asking: emit the call and it either runs or comes back declined. Use `ask_user` only for a genuine choice about what to do, never for a go-ahead.",
-        ""
+        "",
       );
       break;
     case "fabrication":
       lines.push(
         "You described running or reading something, but no tool ran — whatever output you reported is invented. Call the tool and wait for the real result.",
-        ""
+        "",
       );
       break;
     case "handoff":
       lines.push(
         "You handed the task to ChatGPT Work (or another ChatGPT product). It runs on a different computer and cannot see this one; nothing was done. Everything happens here, through onflip blocks, one step at a time — emit the first one now.",
-        ""
+        "",
       );
       break;
     case "cut":
-      lines.push("Your reply looks cut off. Send it again, complete, block included.", "");
+      lines.push(
+        "Your reply looks cut off. Send it again, complete, block included.",
+        "",
+      );
       break;
     default:
       lines.push(
         "If you were about to do something, do it: the tool block for that step goes in this reply, not a description of it. If that reply was your final answer, send it again as a `done` block.",
-        ""
+        "",
       );
   }
 
@@ -643,13 +696,13 @@ export function noBlockNudge(ctx: NudgeContext): string {
       `Your task list still has ${ctx.openCount} open item${ctx.openCount === 1 ? "" : "s"}:`,
       ...ctx.openTodos,
       "Continue with the next one now, or — if the remaining items are done or no longer needed — mark them completed or cancelled with todo_write before sending done.",
-      ""
+      "",
     );
   }
 
   lines.push(
     "The text of your previous reply is kept and will be shown to the user — do not repeat it. Reply now with just the block that applies.",
-    `(reminder ${ctx.attempt} of 2)`
+    `(reminder ${ctx.attempt} of 2)`,
   );
   return lines.join("\n");
 }
@@ -659,7 +712,10 @@ export function noBlockNudge(ctx: NudgeContext): string {
  * open — the one shape of stopping short the protocol can see without
  * reading a word. A second `done` is accepted: the list may simply be stale.
  */
-export function doneWithOpenTodosNudge(ctx: { openTodos: string[]; openCount: number }): string {
+export function doneWithOpenTodosNudge(ctx: {
+  openTodos: string[];
+  openCount: number;
+}): string {
   return [
     AUTOMATED,
     `You sent \`done\`, but your task list still has ${ctx.openCount} open item${ctx.openCount === 1 ? "" : "s"}:`,

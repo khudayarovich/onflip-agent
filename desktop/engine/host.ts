@@ -206,6 +206,9 @@ peer.onRequest = async (method, rawParams) => {
     case "deepDoctor":
       return engine.deepDoctor();
 
+    case "setDeliverable":
+      return engine.setDeliverable(Boolean(params.available));
+
     case "status":
       return engine.statusPayload();
 

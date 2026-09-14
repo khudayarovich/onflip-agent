@@ -515,6 +515,17 @@ export interface EngineMethods {
   /** Aggregated counts from the session logs, for the health panel. */
   health: { params: { days?: number }; result: HealthReportDTO };
 
+  /**
+   * Whether a file can actually be delivered off this machine right now.
+   *
+   * `send_file` was documented to the model on every session, whether or
+   * not a Telegram bot existed to receive anything. A tool that cannot
+   * work is worse than an absent one: the model spends a whole round trip
+   * discovering it, and it costs its description in the system prompt of
+   * every conversation opened.
+   */
+  setDeliverable: { params: { available: boolean }; result: null };
+
   status: { params: Record<string, never>; result: EngineStatus };
 }
 

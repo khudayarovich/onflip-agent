@@ -272,6 +272,8 @@ export class Engine {
   private busy = false;
   /** Where the running turn was asked from; absent means the desktop window. */
   private turnOrigin: "telegram" | undefined;
+  /** Set by the app: a Telegram bot is running and can receive files. */
+  private deliverable = false;
   /** `auto` marks a turn OnFlip queued for itself, which stop may cancel. */
   private queue: {
     id: string;
@@ -711,6 +713,10 @@ export class Engine {
       context: this.context,
       approvalMode: this.approvalMode,
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
+      // The prompt says different things to different services: only
+      // ChatGPT has drawings OnFlip can carry into the folder, and only
+      // ChatGPT has its own agent products to refuse by name.
+      provider: activeProvider(),
     });
     if (this.history[0]?.role === "system") this.history[0].content = prompt;
     else this.history.unshift(newMessage("system", prompt));
@@ -732,11 +738,37 @@ export class Engine {
         }
       },
       // The bot lives in the app, not in here, so the tool asks the app to
-      // carry the file and waits for a real answer — "the bot is off" and
-      // "Telegram refused it" are both things the model has to hear.
-      deliverFile: (file, caption) =>
-        this.peer.request<{ ok: boolean; detail: string }>("telegram-file", { file, caption }),
+      // carry the file and waits for a real answer — "Telegram refused it"
+      // is something the model has to hear. "The bot is off" it no longer
+      // hears, because with no bot the tool is not offered at all.
+      deliverFile: this.deliverable
+        ? (file, caption) =>
+            this.peer.request<{ ok: boolean; detail: string }>("telegram-file", {
+              file,
+              caption,
+            })
+        : undefined,
     });
+  }
+
+  /**
+   * Is there anywhere for `send_file` to send a file?
+   *
+   * False until the app says otherwise, which it does on every init and
+   * whenever the Telegram settings change. Defaulting to false is the
+   * safe direction: most installs have no bot, and offering a tool that
+   * cannot work costs a round trip to find out plus its documentation in
+   * every conversation.
+   */
+  setDeliverable(available: boolean): null {
+    if (this.deliverable === available) return null;
+    this.deliverable = available;
+    // Reseed so the next conversation documents the right roster, and
+    // deliberately no transport.reset(): the live chat already holds the
+    // old prompt, and opening a fresh one to correct a single tool would
+    // cost far more than the tool is worth.
+    this.seedSystemPrompt();
+    return null;
   }
 
   private async reattachChat(): Promise<boolean> {
