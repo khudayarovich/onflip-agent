@@ -161,3 +161,21 @@ test("no logs at all is an empty report, not a failure", { skip: needsBuild }, (
   assert.equal(report.sessions, 0);
   assert.deepEqual(report.tools, []);
 });
+
+test("outbound messages and their size are counted", { skip: needsBuild }, () => {
+  // The number the request-economy work is measured against: one `sending`
+  // event is one request against the account, and its chars are what the
+  // composer ceiling is measured against.
+  const readHealth = load();
+  const report = readHealth(
+    14,
+    logs([
+      { msg: "sending", scope: "browser", data: { chars: 2000 } },
+      { msg: "sending", scope: "browser", data: { chars: 4000 } },
+      { msg: "sending", scope: "browser", data: {} },
+      { msg: "done read", data: { error: false } },
+    ])
+  );
+  assert.equal(report.sends, 2, "an event with no size is not a send we can measure");
+  assert.equal(report.charsSent, 6000);
+});

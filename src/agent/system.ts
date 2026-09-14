@@ -406,6 +406,29 @@ function remoteLine(tools: string[] | undefined): string {
   ].join(" ");
 }
 
+/**
+ * The same anchor, cut to what a turn that is going well still needs.
+ *
+ * Measured across twenty-one sessions on one machine: the full reminder
+ * is 2,194 characters and it went out on every single send - 430,000
+ * characters, 30% of everything the app had ever sent. On a step that
+ * followed the protocol perfectly it bought nothing: the model had just
+ * demonstrated it knew all of it.
+ *
+ * What stays is the part a model actually drifts away from - that a reply
+ * ends with a block, and how a block is written. What goes is the part it
+ * has already proved it knows. The full text comes straight back the
+ * moment a step goes shaky, which is the only moment it was ever earning
+ * its size.
+ */
+export function briefReminder(): string {
+  return [
+    "[OnFlip protocol reminder]",
+    "To act on the user's machine, emit a fenced ```onflip block: a `tool:` line naming the tool, then its arguments as `key: value` lines, using `key: |` with an indented body for anything multi-line. Escape nothing.",
+    "Every reply ends with a block: `tool: done` with `summary: |` when the request is finished and verified, `tool: ask_user` with `question: |` when only the user can decide. Prose with no block is an error and comes back to you.",
+  ].join("\n");
+}
+
 export function turnReminder(
   shellEnabled: boolean,
   tools?: string[],

@@ -10,6 +10,7 @@ import {
   noBlockNudge,
   doneWithOpenTodosNudge,
   truncationNudge,
+  briefReminder,
   compactInstruction,
   SlipVariant,
 } from "./system";
@@ -166,6 +167,35 @@ const PRODUCTIVE_WINDOW = 5;
  * calls fail, measured), while two or more — or any protocol nudge — is the
  * start of the pattern the budget exists to cut off.
  */
+/**
+ * Does this send need the full protocol anchor?
+ *
+ * The full reminder is 2,194 characters and it went out on every send -
+ * 30% of everything measured across twenty-one sessions. It earns that when
+ * the conversation has not heard it, which includes every chat opened by a
+ * compaction, and when the last step slipped: a nudge, a failed call, a
+ * repeat. After a step that went cleanly it is two thousand characters
+ * telling a model what it has just finished doing correctly.
+ */
+/**
+ * A periodic re-anchor, however well things are going.
+ *
+ * Insurance against the drift that never trips a slip: a model that is
+ * still emitting blocks but has quietly stopped believing some other part
+ * of the protocol. Ten steps of the short form saves more than one full
+ * reminder costs, so the guard is close to free.
+ */
+export const REANCHOR_EVERY = 10;
+
+export function needsAnchor(
+  anchored: boolean,
+  stepLog: ReadonlyArray<"ok" | "shaky">
+): boolean {
+  if (!anchored) return true;
+  if (stepLog[stepLog.length - 1] === "shaky") return true;
+  return stepLog.length > 0 && stepLog.length % REANCHOR_EVERY === 0;
+}
+
 export function productiveTail(log: ReadonlyArray<"ok" | "shaky">): boolean {
   if (log.length < PRODUCTIVE_WINDOW) return false;
   const tail = log.slice(-PRODUCTIVE_WINDOW);
@@ -260,6 +290,16 @@ export async function runTurn(
    * turn stopped mid-work from one stopped mid-thrash.
    */
   const stepLog: ("ok" | "shaky")[] = [];
+  /**
+   * Has the full protocol reminder gone into the conversation in use?
+   *
+   * It is 2,194 characters on a payload whose measured mean is 7,309, and
+   * it was sent on every step. Re-anchoring is worth that when the model
+   * has not seen it in this chat, or when the last step slipped; after a
+   * step that went cleanly it is 2,194 characters telling a model what it
+   * has just finished doing correctly.
+   */
+  let anchored = false;
   /** The budget, plus the one extension a productive turn can earn. */
   let allowed = budget;
   let extendedOnce = false;
@@ -294,14 +334,19 @@ export async function runTurn(
     // session that ran out of room mid-task: 53 iterations, 219k characters
     // sent, not one compaction.
     if (!compactionExhausted) {
-      compactionExhausted = (await compactIfLarge(history, opts, events)) === "no-gain";
+      const outcome = await compactIfLarge(history, opts, events);
+      compactionExhausted = outcome === "no-gain";
+      // Compaction abandons the conversation and opens a fresh one, so
+      // nothing said in the old chat carries over: anchor the new one.
+      if (outcome === "compacted") anchored = false;
     }
 
     events.onThinking?.(iteration);
 
     let reply: TransportReply;
     try {
-      reply = await sendWithRetry(history, opts, events);
+      reply = await sendWithRetry(history, opts, events, !needsAnchor(anchored, stepLog));
+      anchored = true;
     } catch (e) {
       if (opts.signal.aborted) return finish("interrupted", "", iteration);
       throw e;
@@ -781,8 +826,18 @@ async function compactIfLarge(
 async function sendWithRetry(
   history: ChatMessage[],
   opts: AgentOptions,
-  events: AgentEvents
+  events: AgentEvents,
+  /** The model has the protocol and the last step proved it; send the short form. */
+  brief = false
 ): Promise<TransportReply> {
+  const full = () =>
+    turnReminder(
+      opts.shellEnabled,
+      opts.tools.list.map((t) => t.name),
+      listJobs(),
+      lastUserRequest(history, 200),
+      opts.remote
+    );
   const sendOptions: SendOptions = {
     model: opts.model,
     thinking: opts.thinking,
@@ -790,13 +845,9 @@ async function sendWithRetry(
     onDelta: events.onDelta,
     // Read per step, not once per turn: a job can exit between two steps of
     // the same turn, and the step after it is the one that needs to know.
-    reminder: turnReminder(
-      opts.shellEnabled,
-      opts.tools.list.map((t) => t.name),
-      listJobs(),
-      lastUserRequest(history, 200),
-      opts.remote
-    ),
+    // Which is also why the brief form skips it - a background job that
+    // has exited makes the step shaky, and a shaky step gets the full text.
+    reminder: brief ? briefReminder() : full(),
   };
 
   let lastError: unknown;
@@ -836,6 +887,9 @@ async function sendWithRetry(
       // has a chance.
       if (attempt >= 1 && attempt < MAX_TRANSPORT_RETRIES && /reached the model/.test(message)) {
         opts.transport.reset();
+        // A fresh chat has heard nothing, so the next attempt carries the
+        // whole anchor however well the previous step went.
+        sendOptions.reminder = full();
         events.onNotice?.("That chat keeps failing — the next try starts a fresh one.");
       }
     }

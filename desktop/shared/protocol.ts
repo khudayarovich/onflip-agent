@@ -378,6 +378,15 @@ export interface HealthReportDTO {
   compactionsThatFailed: number;
   truncations: number;
   budgetExtensions: number;
+  /** Messages actually put into the chat - one request against the account. */
+  sends: number;
+  /**
+   * Characters those messages carried.
+   *
+   * The number the request-economy work is measured against: a mean that
+   * falls means the same work is costing less to say.
+   */
+  charsSent: number;
   reasons: { tool: string; reason: string; count: number }[];
   logBytes: number;
 }

@@ -121,6 +121,24 @@ export function HealthModal({ onClose }: { onClose: () => void }): React.ReactEl
           </div>
 
           <div className="health-section">
+            <div className="health-head">{t("healthSending")}</div>
+            <div className="health-grid">
+              <Stat label={t("healthSends")} value={report.sends} />
+              {/* The number the request-economy work moves: the same work
+                  costing less to say. A mean that climbs means the
+                  conversation is carrying more than it needs to. */}
+              <Stat
+                label={t("healthMeanPayload")}
+                value={report.sends > 0 ? Math.round(report.charsSent / report.sends) : 0}
+              />
+              <Stat
+                label={t("healthTotalSent")}
+                value={Math.round(report.charsSent / 1000)}
+              />
+            </div>
+          </div>
+
+          <div className="health-section">
             <div className="health-head">{t("healthEvents")}</div>
             <div className="health-grid">
               <Stat label={t("healthTurnFailures")} value={report.turnFailures} warnAt={1} />

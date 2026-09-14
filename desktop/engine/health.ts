@@ -72,6 +72,8 @@ export function readHealth(days = 14, dir = logsDir()): HealthReport {
     compactionsThatFailed: 0,
     truncations: 0,
     budgetExtensions: 0,
+    sends: 0,
+    charsSent: 0,
     reasons: [],
     logBytes: 0,
   };
@@ -137,6 +139,13 @@ export function readHealth(days = 14, dir = logsDir()): HealthReport {
 
       const field = EVENTS[msg];
       if (field) (report[field] as number)++;
+
+      // One outbound message is one request against the account, and its
+      // size is what the composer ceiling is measured against.
+      if (msg === "sending" && typeof event.data?.chars === "number") {
+        report.sends++;
+        report.charsSent += event.data.chars;
+      }
 
       // `done <tool>` is written for every call, successful or not, and
       // carries the verdict. `failed <tool>` adds the first line of why.
