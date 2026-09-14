@@ -15,6 +15,7 @@ import {
   SlipVariant,
 } from "./system";
 import { logger } from "../log";
+import { pruneToolResults } from "./prune";
 import {
   classifyFailure,
   failureCodeOf,
@@ -788,9 +789,27 @@ async function compactIfLarge(
   history: ChatMessage[],
   opts: AgentOptions,
   events: AgentEvents
-): Promise<"skipped" | "compacted" | "no-gain"> {
+): Promise<"skipped" | "pruned" | "compacted" | "no-gain"> {
   const reason = compactionReason(history, opts);
   if (!reason) return "skipped";
+
+  // The cheap answer first. Most of what makes a transcript long is old
+  // tool output - a file read, a listing, a build log - and cutting the
+  // middle out of it costs no request at all. Summarising costs one, plus
+  // a fresh conversation and a full replay into it, which is 36% of every
+  // character this app has ever sent. So the expensive answer is only
+  // worth reaching for when the cheap one was not enough.
+  const reclaimed = pruneToolResults(history);
+  if (reclaimed > 0 && !compactionReason(history, opts)) {
+    logger.info("agent", "trimming was enough; not compacting", {
+      reclaimed,
+      chars: transcriptChars(history),
+    });
+    events.onNotice?.(
+      `Trimmed ${reclaimed.toLocaleString("en-US")} characters of old tool output — no need to summarise.`
+    );
+    return "pruned";
+  }
 
   const before = transcriptChars(history);
   logger.info("agent", "compacting", { reason, messages: history.length, chars: before });

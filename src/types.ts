@@ -8,6 +8,12 @@ export interface ChatMessage {
   createdAt?: number;
   /** Set on synthetic messages carrying tool output back to the model. */
   toolName?: string;
+  /**
+   * Characters cut out of the middle of this tool result to save the
+   * conversation from being summarised. Also the mark that stops it being
+   * trimmed twice, which would compound until nothing readable was left.
+   */
+  prunedChars?: number;
 }
 
 export interface ToolCall {

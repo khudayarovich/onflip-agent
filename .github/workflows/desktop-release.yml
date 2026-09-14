@@ -37,11 +37,15 @@ jobs:
           node-version: 22
 
       - name: Install core dependencies (builds dist/)
-        run: npm install --no-audit --no-fund
+        run: |
+          npm install --no-audit --no-fund ||
+            { echo "install failed; retrying once in 20s"; sleep 20; npm install --no-audit --no-fund; }
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm install --no-audit --no-fund
+        run: |
+          npm install --no-audit --no-fund ||
+            { echo "install failed; retrying once in 20s"; sleep 20; npm install --no-audit --no-fund; }
 
       - name: Build the installer
         working-directory: desktop
@@ -88,11 +92,15 @@ jobs:
           node-version: 22
 
       - name: Install core dependencies (builds dist/)
-        run: npm install --no-audit --no-fund
+        run: |
+          npm install --no-audit --no-fund ||
+            { echo "install failed; retrying once in 20s"; sleep 20; npm install --no-audit --no-fund; }
 
       - name: Install desktop dependencies
         working-directory: desktop
-        run: npm install --no-audit --no-fund
+        run: |
+          npm install --no-audit --no-fund ||
+            { echo "install failed; retrying once in 20s"; sleep 20; npm install --no-audit --no-fund; }
 
       - name: Build macOS artifacts
         working-directory: desktop
