@@ -1,5 +1,6 @@
 import { ChatMessage } from "../types";
 import { logger } from "../log";
+import { spillText } from "./spill";
 
 /**
  * Shortening old tool output, so the conversation does not have to be
@@ -49,13 +50,19 @@ const TAIL_CHARS = 400;
  */
 export const KEEP_RECENT = 2;
 
-/** Said in the gap, so a model that needs the missing part knows to go back for it. */
-function marker(dropped: number): string {
-  return (
-    `\n\n… [OnFlip cut ${dropped.toLocaleString("en-US")} characters out of the middle of this ` +
-    `result to make room in the conversation. The full output is in this session's log. ` +
-    `If you need the part that is missing, run the tool again rather than working from memory.] …\n\n`
-  );
+/**
+ * Said in the gap, so a model that needs the missing part can go and get it.
+ *
+ * With a path this is a detour; without one it is a re-run. The difference
+ * matters most for exactly the results worth cutting: a long build, an
+ * expensive search, a command that took two minutes to answer once.
+ */
+function marker(dropped: number, spilledTo: string | null): string {
+  const cut = `OnFlip cut ${dropped.toLocaleString("en-US")} characters out of the middle of this result to make room in the conversation.`;
+  const how = spilledTo
+    ? `The whole result is saved at ${spilledTo} — read that file (with offset and limit for the part you want) instead of running the tool again.`
+    : `The full output is in this session's log. If you need the part that is missing, run the tool again rather than working from memory.`;
+  return `\n\n… [${cut} ${how}] …\n\n`;
 }
 
 /** Has this message already been through here? */
@@ -93,14 +100,20 @@ export function pruneToolResults(history: ChatMessage[]): number {
     const head = message.content.slice(0, HEAD_CHARS);
     const tail = message.content.slice(-TAIL_CHARS);
     const dropped = message.content.length - head.length - tail.length;
+    // Written out before anything is cut, so what leaves the conversation
+    // is still somewhere the model can reach. A spill that fails is not a
+    // reason to keep the bulk: the trim still happens, and the note says
+    // to re-run instead of to read.
+    const spilled = spillText(message.content, message.toolName ?? "tool");
     // A cut that saves less than the sentence explaining it is not a saving.
-    const replacement = head + marker(dropped) + tail;
+    const replacement = head + marker(dropped, spilled?.path ?? null) + tail;
     if (replacement.length >= message.content.length) continue;
 
     reclaimed += message.content.length - replacement.length;
     count++;
     message.content = replacement;
     message.prunedChars = dropped;
+    if (spilled) message.spilledTo = spilled.path;
   }
 
   if (count > 0) {

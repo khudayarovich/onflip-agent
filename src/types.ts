@@ -14,6 +14,8 @@ export interface ChatMessage {
    * trimmed twice, which would compound until nothing readable was left.
    */
   prunedChars?: number;
+  /** Where the whole of this result was written before it was cut down. */
+  spilledTo?: string;
 }
 
 export interface ToolCall {
