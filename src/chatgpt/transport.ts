@@ -10,6 +10,7 @@ import {
   browserInConversation,
   takeReplyMeta,
   ChatGPTBrowserError,
+  checkLivePageContract,
 } from "./browser-client";
 import { buildTurnPrompt } from "../agent/protocol";
 import { planLimitNote, rationedPlan } from "./plans";
@@ -308,6 +309,21 @@ export function attachmentRejected(reply: string, fileName: string): boolean {
   return /\b(don'?t|do not|cannot|can'?t|no|unable to)\b[^!?]{0,80}\b(access|open|read|see)\b/i.test(t);
 }
 
+/**
+ * Has the page been held against its contract since this run started?
+ *
+ * Once per run, on the page a turn has just finished using - so the
+ * census costs one evaluate against a document already loaded, with no
+ * navigation and no second page. The deep check in Health opens a page
+ * of its own and is a button for that reason; this one is free, so it
+ * can be automatic.
+ *
+ * Module-scoped rather than per-instance because the question is about
+ * the service's page, not about any one transport: two transports in a
+ * run would be asking the same thing of the same page.
+ */
+let contractChecked = false;
+
 export class BrowserTransport implements Transport {
   readonly name = "browser" as const;
   /** Index into history that the live ChatGPT thread already contains. */
@@ -481,6 +497,24 @@ export class BrowserTransport implements Transport {
 
     this.sentThrough = history.length;
     this.needsSystemPrompt = false;
+
+    if (!contractChecked) {
+      contractChecked = true;
+      // Once per run, on the page this turn has just finished with, and
+      // never awaited into the turn: this is a report, not a gate. A
+      // reply that worked has no business being held up by a census of
+      // the page it worked on.
+      void checkLivePageContract()
+        .then((r) => {
+          if (!r || r.ok) return;
+          logger.warn("browser", "the service's page has changed", {
+            detail: r.detail,
+            matches: r.matches,
+          });
+        })
+        .catch(() => {});
+    }
+
     return { content, conversationId: null, meta };
   }
 

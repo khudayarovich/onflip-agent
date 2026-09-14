@@ -4159,6 +4159,103 @@ async function tokenViaScratchPage(): Promise<string> {
  * turns in it, so their absence is not a fault and is reported as a count
  * rather than judged.
  */
+/**
+ * The handles OnFlip drives on ChatGPT's page, and whether each must be there.
+ *
+ * The same idea as DeepSeek's contract and for the same reason: the service
+ * redesigns its page on its own schedule and the damage is silent, because a
+ * selector that matches nothing throws nothing. DeepSeek unified three modes
+ * and OnFlip offered all three for a day, each doing nothing, because the
+ * only thing being checked was the composer.
+ *
+ * Checked against the page a turn has just finished using, so the census is
+ * taken when the conversation is at its richest - a reply has landed, so
+ * the reader's own selector must have matched something or there would be
+ * no reply to have. That timing is what lets these be required rather than
+ * hopeful: on an empty chat half of them are legitimately zero, and a check
+ * that cries wolf on a fresh page is worse than no check at all.
+ */
+const CHATGPT_CONTRACT: {
+  id: string;
+  what: string;
+  expect: "present" | "either" | "optional";
+}[] = [
+  { id: "composer", what: "the message box", expect: "present" },
+  { id: "assistant", what: "where a reply is read from", expect: "present" },
+  // Only the census reads this one - nothing in the send or read path
+  // depends on it - so its absence is worth seeing in the numbers and is
+  // not by itself a break.
+  { id: "message", what: "the conversation's messages", expect: "optional" },
+  // One or the other, never both: the same control sends while idle and
+  // stops while generating.
+  { id: "send", what: "the send control", expect: "either" },
+  { id: "stop", what: "the stop control", expect: "either" },
+  { id: "fileInput", what: "the attachment input", expect: "optional" },
+  { id: "userTurn", what: "the user's own messages", expect: "optional" },
+  { id: "toast", what: "the page's own notices", expect: "optional" },
+];
+
+/**
+ * Which required handles are missing from a census.
+ *
+ * Separate from the page so the rule can be held to account without a
+ * browser - and because the rule is the part that can be wrong in a way
+ * that matters. A check that reports drift when there is none teaches
+ * people to ignore it, which is worse than not having one.
+ *
+ * The two required entries are safe by construction at the moment this
+ * runs. A reply has just been read, and it was read through the same
+ * selectors `assistant` counts; a turn was just typed into the composer
+ * that `composer` counts. Neither can be zero unless something really has
+ * moved underneath a turn that nevertheless worked.
+ */
+export function judgePageCensus(matches: Record<string, number>): string[] {
+  const broken: string[] = [];
+  for (const c of CHATGPT_CONTRACT) {
+    if (c.expect === "present" && (matches[c.id] ?? 0) === 0) broken.push(c.what);
+  }
+  const either = CHATGPT_CONTRACT.filter((c) => c.expect === "either");
+  if (either.length && either.every((c) => (matches[c.id] ?? 0) === 0)) {
+    broken.push("the send or stop control");
+  }
+  return broken;
+}
+
+/**
+ * Hold the page a turn just used against that contract.
+ *
+ * Null when there is no page open, which is not an answer either way -
+ * only a census actually taken can say anything. Read-only, and cheap:
+ * one evaluate against a document that is already loaded, with no
+ * navigation and no second page.
+ */
+export async function checkLivePageContract(): Promise<{
+  ok: boolean;
+  matches: Record<string, number>;
+  detail: string;
+} | null> {
+  if (!page || page.isClosed()) return null;
+  const state = await capturePageState(page);
+  if (!state) return null;
+
+  const broken = judgePageCensus(state.matches);
+
+  if (!broken.length) {
+    return {
+      ok: true,
+      matches: state.matches,
+      detail: "Everything OnFlip drives on ChatGPT's page is where it should be.",
+    };
+  }
+  return {
+    ok: false,
+    matches: state.matches,
+    detail:
+      "ChatGPT's page has changed: " +
+      broken.join("; ") +
+      " could not be found on a conversation that had just answered. The selectors in chatgpt/selectors.ts need updating.",
+  };
+}
 export async function checkSelectorsLive(
   cookies: SessionCookie[]
 ): Promise<{ ok: boolean; matches: Record<string, number>; detail: string }> {
