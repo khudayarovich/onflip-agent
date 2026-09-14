@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { chromium, BrowserContext, Page } from "playwright";
 import { logger } from "../../log";
+import type { FailureCode } from "../../chatgpt/backoff";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { EXTRACT_REPLY as EXTRACT_REPLY_SCRIPT, toMarkdown } from "./extract";
 import {
@@ -32,6 +33,58 @@ import {
  * which service is being driven. It belongs in a shared place, and will move
  * there once there is a second caller to prove the shape.
  */
+
+/**
+ * A DeepSeek failure that knows what it is.
+ *
+ * The classifier reads a failure's code when it has one and falls back to
+ * reading its English sentence when it does not. Nothing in this driver set
+ * a code, so every DeepSeek failure was classified by its prose - and the
+ * prose hedged. "The page may have signed out, or the send did not land"
+ * matched the fatal test for "signed out", so the turn died without a
+ * single retry: not a retry that failed, a retry that never happened. Four
+ * turns in one week's logs, all of them the common case the hedge names
+ * second.
+ *
+ * That is the third outbreak of one disease, and backoff.ts documents the
+ * first two in its own comments: advice text ending in "rate-limited" read
+ * back as a throttle, and advice text ending in "run `onflip login`" read
+ * back as fatal. A sentence written for a person should not be parsed by a
+ * machine. This is how the driver stops asking it to be.
+ */
+class DeepSeekError extends Error {
+  constructor(
+    message: string,
+    readonly code?: FailureCode
+  ) {
+    super(message);
+    this.name = "DeepSeekError";
+  }
+}
+
+/**
+ * Open the chat, turning a lost race into something retryable.
+ *
+ * Playwright says a navigation cancelled by another navigation was
+ * "interrupted", and the classifier's fatal test matches that word because
+ * it exists to honour a user pressing stop. A page racing itself is the
+ * opposite of a user deciding to stop - it is exactly the transient that
+ * one more attempt fixes.
+ */
+async function gotoChat(page: Page): Promise<void> {
+  try {
+    await page.goto(DEEPSEEK_CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    if (/interrupted by another navigation/i.test(message)) {
+      throw new DeepSeekError(
+        `Loading the DeepSeek chat was interrupted by another navigation. Retrying. (${message})`,
+        "send-not-landed"
+      );
+    }
+    throw e;
+  }
+}
 
 /** Where an assistant reply lives; user messages have no markdown node. */
 const ASSISTANT_SELECTOR = ".ds-markdown.ds-assistant-message-main-content";
@@ -93,7 +146,7 @@ export async function chatPage(opts: OpenOptions = {}): Promise<Page> {
   const ctx = await openBrowser(opts);
   const page = ctx.pages()[0] ?? (await ctx.newPage());
   if (!page.url().startsWith(DEEPSEEK_CHAT_URL)) {
-    await page.goto(DEEPSEEK_CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await gotoChat(page);
   }
   return page;
 }
@@ -326,7 +379,7 @@ export async function sendTurn(
   let page = await chatPage(opts);
   if (pendingNewChat) {
     pendingNewChat = false;
-    await page.goto(DEEPSEEK_CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await gotoChat(page);
     await page.waitForTimeout(2_000);
   }
   // Both signals, because neither is sufficient alone. The node count is not
@@ -352,7 +405,11 @@ export async function sendTurn(
     return el.value.length;
   })()`;
   const accepted = (await page.evaluate(fill)) as number;
-  if (accepted < 0) throw new Error("DeepSeek's composer was not on the page.");
+  // The page not being ready is the failure one retry fixes, so say so in
+  // the code rather than leaving it to be guessed from the sentence.
+  if (accepted < 0) {
+    throw new DeepSeekError("DeepSeek's composer was not on the page.", "composer-refused");
+  }
   if (accepted < text.length) {
     logger.warn("deepseek", "the composer truncated the turn", {
       sent: text.length,
@@ -375,7 +432,7 @@ export async function sendTurn(
       // written.
       if (opts.signal?.aborted) {
         await stopGenerating(page);
-        throw new Error("interrupted");
+        throw new DeepSeekError("interrupted", "interrupted");
       }
       await page.waitForTimeout(POLL_MS);
       const now = await readLast(page);
@@ -385,8 +442,21 @@ export async function sendTurn(
         // silence window is a failure worth reporting, not something to sit
         // on until the ten-minute deadline while the UI says "working".
         if (Date.now() - lastChange > SILENCE_MS) {
-          throw new Error(
-            "DeepSeek did not start answering. The page may have signed out, or the send did not land."
+          // Which of the two it is, not a sentence saying it might be
+          // either. The session is right there in the page's own storage,
+          // so there is nothing to guess about: a profile that is signed
+          // out cannot be fixed by sending again, and one that is not is
+          // the case that always could have been.
+          const storage = await readStorage(page).catch(() => ({}));
+          if (!isSignedIn(storage)) {
+            throw new DeepSeekError(
+              "The browser profile is signed out of DeepSeek, so the message went nowhere. Sign in from the account menu, then send again.",
+              "signed-out"
+            );
+          }
+          throw new DeepSeekError(
+            `DeepSeek did not start answering within ${SILENCE_MS / 1_000}s. The session is still valid, so the send did not land.`,
+            "send-not-landed"
           );
         }
         continue;
@@ -418,7 +488,14 @@ export async function sendTurn(
       quiet = 0;
     }
   }
-  if (last === null) throw new Error("DeepSeek did not answer before the deadline.");
+  // Deliberately uncoded: the reply budget running out is classified by the
+  // default, which is a retry. That is what both drivers have always done
+  // with a budget timeout and it was not changed here - but it is a
+  // DeepSeekError like the rest, so the rule that every failure from this
+  // driver is one type holds, and giving it a code later is a one-line change.
+  if (last === null) {
+    throw new DeepSeekError("DeepSeek did not answer before the deadline.");
+  }
   noteConversation(page.url());
   const ms = Date.now() - started;
   logger.info("deepseek", "turn answered", { chars: last.length, ms });

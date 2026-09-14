@@ -967,11 +967,39 @@ export function composeFinal(...parts: Array<string | undefined>): string {
  * log diagnosable; this one is replaced by its length, which still tells a
  * flattened payload from an empty one.
  */
-function loggableArguments(call: ToolCall): Record<string, unknown> {
-  if (call.tool.toLowerCase().replace(/[-\s]/g, "_") !== "browser_type") return call.arguments;
+/**
+ * The longest a single argument value is worth keeping in the log.
+ *
+ * Arguments were logged whole. A `bash` call that writes a document sends
+ * the whole document as its command, so the whole document landed in the
+ * log - twice over, once in the arguments and once in the first line of the
+ * output - and one session file reached 620 KB that way. What a log is for
+ * is finding the call again, and the head of a value does that. Beyond it
+ * the log is only harder to read.
+ */
+const MAX_LOGGED_ARG_CHARS = 500;
+
+/** Long string values shortened, with the elision stated rather than silent. */
+function capped(args: Record<string, unknown> | undefined): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(args ?? {})) {
+    if (typeof value !== "string" || value.length <= MAX_LOGGED_ARG_CHARS) {
+      out[key] = value;
+      continue;
+    }
+    const dropped = value.length - MAX_LOGGED_ARG_CHARS;
+    out[key] =
+      `${value.slice(0, MAX_LOGGED_ARG_CHARS)}\u2026 <${dropped} more chars>`;
+  }
+  return out;
+}
+
+export function loggableArguments(call: ToolCall): Record<string, unknown> {
+  if (call.tool.toLowerCase().replace(/[-\s]/g, "_") !== "browser_type") return capped(call.arguments);
   const text = call.arguments?.text;
-  if (typeof text !== "string") return call.arguments;
-  return { ...call.arguments, text: `<redacted ${text.length} chars>` };
+  if (typeof text !== "string") return capped(call.arguments);
+  // Keystrokes are never logged at any length: the browser types passwords.
+  return capped({ ...call.arguments, text: `<redacted ${text.length} chars>` });
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
