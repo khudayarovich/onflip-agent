@@ -541,3 +541,65 @@ test("a turn never begins behind the previous answer", () => {
   assert.match(source, /async function stopGenerating\(page: Page\): Promise<boolean>/);
   assert.match(source, /if \(!\(await isGenerating\(page\)\)\) return/);
 });
+
+test("the silence window depends on whether the page's progress can be read", () => {
+  // The fault behind most of this driver's history. `generating` came from
+  // `button[aria-label="Stop"]` - an English string - and the page it runs
+  // against is lang="ru-RU" with Russian labels. So the signal was never
+  // seen, thinking looked exactly like silence, and every answer that took
+  // more than ninety seconds to begin was reported as a send that did not
+  // land while Qwen was writing it.
+  //
+  // Where the signal cannot be read, the window has to be long enough to
+  // cover a model thinking. Where it can, ninety seconds is honest.
+  const { silenceWindowMs } = require("../dist/providers/qwen/browser");
+
+  assert.equal(silenceWindowMs(true, 90_000, 240_000), 90_000);
+  assert.equal(silenceWindowMs(false, 90_000, 240_000), 240_000);
+});
+
+test("the stop control is matched by class and by more than one language", () => {
+  // Measured on the real page: lang="ru-RU", labels "Новый чат", "Прокрутить
+  // вниз", "Выбрать режим". A selector naming only the English word matches
+  // nothing there, on every turn, for ever.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "providers", "qwen", "browser.ts"),
+    "utf8"
+  );
+  const decl = source.slice(source.indexOf("const STOP_BUTTON = ["));
+  const list = decl.slice(0, decl.indexOf("].join"));
+
+  // A class is not translated, so it comes first.
+  assert.match(list, /button\.stop-button/);
+  assert.match(list, /aria-label="Stop"/);
+  assert.match(list, /aria-label\^="Стоп"/);
+  // Prefix matching, so "Стоп генерации" is caught by "Стоп".
+  assert.ok(list.includes('^='), "localised labels must be prefix matches");
+});
+
+test("no question to the page is left unbounded", () => {
+  // `.catch()` handles a call that rejects, not one that never returns, and
+  // `$$eval` runs script in the page with no timeout of its own. Two of
+  // these sit inside the poll loop, where one wedged renderer stops the loop
+  // running and the turn deadline is never tested again.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "providers", "qwen", "browser.ts"),
+    "utf8"
+  );
+
+  // Only the calls that run script in the page. `click`, `waitForSelector`
+  // and friends carry Playwright's own timeout and are not the problem.
+  const lines = source.split(String.fromCharCode(10));
+  const unbounded = [];
+  lines.forEach((line, i) => {
+    if (!/\.(\$\$eval|\$eval|evaluate)\(/.test(line)) return;
+    if (/^\s*\*/.test(line)) return; // a comment mentioning one
+    const near = lines.slice(Math.max(0, i - 4), i + 1).join(" ");
+    if (!/withTimeout/.test(near)) unbounded.push(`${i + 1}: ${line.trim().slice(0, 70)}`);
+  });
+  assert.deepEqual(unbounded, [], `unbounded page calls:\n${unbounded.join("\n")}`);
+});

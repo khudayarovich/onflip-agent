@@ -136,8 +136,43 @@ const COMPOSER = "textarea.message-input-textarea";
 const SEND_BUTTON = "button.send-button";
 /** A message of ours on the page, which is how a send is confirmed. */
 const USER_MESSAGE = ".qwen-chat-message-user";
-/** Shown in Send's place while an answer is being written. */
-const STOP_BUTTON = 'button[aria-label="Stop"]';
+/**
+ * Shown in Send's place while an answer is being written.
+ *
+ * A list rather than the single `button[aria-label="Stop"]` it used to be —
+ * as hardening, and the investigation behind it is worth recording because
+ * it did not end where it looked like it would.
+ *
+ * Qwen's page is `lang="ru-RU"` on the profile this drives, and most of its
+ * labels are Russian: "Новый чат", "Прокрутить вниз", "Выбрать режим". An
+ * English-only selector against that looked like the answer to years of
+ * "works sometimes, freezes sometimes".
+ *
+ * It is not. Qwen's translation bundle keys every string by its English
+ * text — "Scroll down" → "Прокрутить вниз" — and there is no entry for
+ * "Stop" at all, which puts it with "Select Model" and "Upload files": aria
+ * labels the page leaves in English whatever the locale. So the original
+ * selector almost certainly does match, and the freeze has another cause.
+ *
+ * The list stays anyway. It costs one CSS selector, it covers the day Qwen
+ * translates that label or renames the class, and a driver that can lose
+ * sight of the page's own progress indicator has no way to tell a model
+ * thinking from a message that never arrived. What it must not do is claim
+ * to have fixed something it did not.
+ */
+const STOP_BUTTON = [
+  // A class is never translated, so it leads.
+  "button.stop-button",
+  'button[aria-label="Stop"]',
+  // Prefix matches, so "Стоп генерации" is caught by "Стоп".
+  'button[aria-label^="Стоп"]',
+  'button[aria-label^="Остановить"]',
+  'button[aria-label^="停止"]',
+  'button[aria-label^="Detener"]',
+  'button[aria-label^="Arrêter"]',
+  'button[aria-label^="Stopp"]',
+  'button[aria-label^="Toʻxtatish"]',
+].join(", ");
 /**
  * Ask Qwen whether this profile's token is still a session.
  *
@@ -185,17 +220,29 @@ const SESSION_PROBE_SCRIPT = `(async () => {
  */
 const SERVICE_MESSAGES: { pattern: RegExp; code: FailureCode }[] = [
   {
-    pattern: /welcome to qwen|log in to unlock|登录后即可|请先登录/i,
+    // Russian taken from Qwen's own translation bundle rather than
+    // translated here: "Welcome to Qwen" is "Добро пожаловать в Qwen" and
+    // "Log in" is "Войти". The page ships in seventeen languages, so an
+    // English-and-Chinese pattern was missing fifteen of them - and this
+    // one decides whether somebody is told to sign in or left waiting out
+    // the silence window.
+    pattern: /welcome to qwen|log in to unlock|登录后即可|请先登录|добро пожаловать в qwen|войдите/i,
     code: "signed-out",
   },
   // Alibaba's risk control, or an ordinary challenge page. A person clears
   // these; sending again makes it worse.
   {
-    pattern: /verify you are human|checking your browser|just a moment|滑动验证|安全验证/i,
+    pattern: /verify you are human|checking your browser|just a moment|滑动验证|安全验证|проверка браузера|подтвердите, что вы человек|минуточку/i,
     code: "refused",
   },
-  { pattern: /rate limit|too many requests|请求过于频繁|访问频繁/i, code: "throttled" },
-  { pattern: /server (is )?busy|系统繁忙|服务器繁忙|服务异常/i, code: "service-error" },
+  {
+    pattern: /rate limit|too many requests|请求过于频繁|访问频繁|слишком много запросов|превышен лимит/i,
+    code: "throttled",
+  },
+  {
+    pattern: /server (is )?busy|系统繁忙|服务器繁忙|服务异常|сервер занят|сервер перегружен/i,
+    code: "service-error",
+  },
 ];
 
 /**
@@ -286,8 +333,16 @@ export async function closeBrowser(): Promise<void> {
  * `page.evaluate` has no timeout of its own and never will — Playwright's
  * default timeout covers clicks and waits, not script evaluation — so an
  * evaluate against a renderer that is busy, wedged or gone waits for as long
- * as the process lives. Three of them sit in the path of every turn: reading
- * the reply, filling the composer, reading the session.
+ * as the process lives. `$$eval` is the same thing wearing a helper's name,
+ * and a `.catch()` on either is no protection at all: it handles a call that
+ * rejects, not one that never comes back.
+ *
+ * Several sit in the path of every turn, and two of those are inside the
+ * poll loop - counting the replies and reading the progress indicator. A
+ * wedged renderer there stops the loop running at all, and the turn deadline
+ * is only tested at the top of it, so the turn waits for ever with no
+ * failure and nothing in the log after the last heartbeat. Every one of them
+ * goes through this.
  *
  * That is what a turn stuck on "sending" with nothing in the log looks like
  * from outside, and it was reported exactly that way. Twenty seconds is far
@@ -549,8 +604,8 @@ export interface SignedInCheck {
  * which is better than a raw id where a person's name goes.
  */
 async function readProfile(page: Page): Promise<{ name?: string; email?: string }> {
-  const found = (await page
-    .evaluate(
+  const found = (await withTimeout(
+    page.evaluate(
       `(() => {
         const pick = (sel) => {
           const el = document.querySelector(sel);
@@ -563,8 +618,9 @@ async function readProfile(page: Page): Promise<{ name?: string; email?: string 
           email,
         };
       })()`
-    )
-    .catch(() => null)) as { name?: string; email?: string } | null;
+    ),
+    "reading the account"
+  ).catch(() => null)) as { name?: string; email?: string } | null;
   const out: { name?: string; email?: string } = {};
   if (found?.name) out.name = found.name;
   if (found?.email) out.email = found.email;
@@ -643,6 +699,47 @@ const POLL_MS = 350;
 const SILENCE_MS = 90_000;
 
 /**
+ * The same window, for a page whose "working" signal cannot be seen.
+ *
+ * The ninety seconds above is only defensible because the page is expected
+ * to say when it is working: a model thinking before it writes shows the
+ * Stop control, which holds the clock open. Where that control cannot be
+ * found — a locale whose label this driver does not know, a build that
+ * renamed the class — thinking and silence look identical, and ninety
+ * seconds then kills answers that were on their way.
+ *
+ * Not a hypothetical worth dismissing either: the selector was English-only
+ * for this driver's whole history against a page that renders in Russian.
+ * That turned out not to be the fault — Qwen leaves that particular label
+ * untranslated — but it was one selector away from being true, and nothing
+ * in the driver would have reported it.
+ *
+ * Longer, and only used when the signal has never once been seen. The send
+ * itself is not in doubt — `submit` verifies the message reached the page
+ * before the wait begins — so what is being waited on is the answer, and the
+ * turn deadline still bounds it.
+ */
+const SILENCE_BLIND_MS = 4 * 60_000;
+
+/**
+ * Has this process ever seen Qwen's Stop control?
+ *
+ * Module-level rather than per turn: one sighting anywhere proves the
+ * selector works against this page, and a turn where the model thinks for
+ * two minutes would otherwise conclude the opposite about itself.
+ */
+let stopSignalSeen = false;
+
+/** How long silence may last before it means something, given what we can see. */
+export function silenceWindowMs(
+  signalSeen: boolean,
+  quiet: number = SILENCE_MS,
+  blind: number = SILENCE_BLIND_MS
+): number {
+  return signalSeen ? quiet : blind;
+}
+
+/**
  * How long Qwen may claim to be working without producing a character.
  *
  * "Generating" here means one thing: the Stop control is on the page. That
@@ -699,10 +796,23 @@ async function readLast(page: Page): Promise<{ text: string; count: number; gene
   const nodes = (await withTimeout(page.evaluate(EXTRACT_REPLY_SCRIPT), "reading the reply").catch(
     () => null
   )) as unknown;
-  const count = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
-  const generating = await page
-    .$$eval(STOP_BUTTON, (els) => els.length > 0)
-    .catch(() => false);
+  // Every question to the page is bounded, including these two.
+  //
+  // `.catch()` handles a call that *rejects*; it does nothing about one that
+  // never comes back, and `$$eval` runs script in the page exactly as
+  // `evaluate` does — with no timeout of its own, for the reason set out
+  // above. These two sit in the poll loop, so one wedged renderer stops the
+  // loop running at all, and the turn deadline is only checked at the top of
+  // it: the turn then waits for ever, with no failure and nothing in the log
+  // after the last heartbeat.
+  const count = (await withTimeout(
+    page.$$eval(ASSISTANT_SELECTOR, (els) => els.length),
+    "counting the replies"
+  ).catch(() => 0)) as number;
+  const generating = (await withTimeout(
+    page.$$eval(STOP_BUTTON, (els) => els.length > 0),
+    "reading the progress indicator"
+  ).catch(() => false)) as boolean;
   // The page hands back Monaco's lines as it found them; the rules that turn
   // those into text — order, indentation, trailing blanks — live in
   // `normalizeNodes`, where they are tested.
@@ -899,20 +1009,22 @@ export async function sendTurn(
     // go", and the page answers that plainly: Qwen empties the composer and
     // mounts the message. Asking that after each attempt turns a silent
     // no-op into either a send or an honest failure in seconds.
-    const minesBefore = (await page
-      .$eval(USER_MESSAGE, (els) => els.length)
-      .catch(() => 0)) as number;
+    const minesBefore = (await withTimeout(
+      page.$eval(USER_MESSAGE, (els) => els.length),
+      "counting my messages"
+    ).catch(() => 0)) as number;
     const landed = async (): Promise<boolean> => {
       await page.waitForTimeout(600);
-      return (await page
-        .evaluate(
+      return (await withTimeout(
+        page.evaluate(
           `(() => {
             const el = document.querySelector(${JSON.stringify(COMPOSER)});
             const mine = document.querySelectorAll(${JSON.stringify(USER_MESSAGE)}).length;
             return (el && el.value.length === 0) || mine > ${minesBefore};
           })()`
-        )
-        .catch(() => false)) as boolean;
+        ),
+        "checking the send landed"
+      ).catch(() => false)) as boolean;
     };
 
     // Playwright's click first: a real input event, at the real position.
@@ -925,11 +1037,12 @@ export async function sendTurn(
     // A click dispatched inside the page. Qwen's menus ignore these — they
     // listen for pointer events — but the send control is an ordinary
     // button and answers to it, measured on the live page.
-    const inPage = (await page
-      .evaluate(
+    const inPage = (await withTimeout(
+      page.evaluate(
         `(() => { const b = document.querySelector(${JSON.stringify(SEND_BUTTON)}); if (!b) return "absent"; b.click(); return "clicked"; })()`
-      )
-      .catch(() => "threw")) as string;
+      ),
+      "clicking send inside the page"
+    ).catch(() => "threw")) as string;
     if (await landed()) {
       logger.warn("qwen", "the send button click did not take; the in-page click did", { why, inPage });
       return;
@@ -1028,6 +1141,10 @@ export async function sendTurn(
       }
       if (now.generating) {
         sawGenerating = true;
+        if (!stopSignalSeen) {
+          stopSignalSeen = true;
+          logger.info("qwen", "the progress indicator is readable on this page");
+        }
         if (!generatingSince) generatingSince = Date.now();
         // Working, therefore not silent. The silence window exists to catch
         // a send that never arrived, and a page showing its own stop control
@@ -1133,7 +1250,11 @@ export async function sendTurn(
             // silence window below is what ends a turn nothing answers.
           }
         }
-        if (Date.now() - lastChange > SILENCE_MS) {
+        // A page that has never shown its Stop control is a page whose
+        // "working" signal we cannot read, and thinking then looks exactly
+        // like silence. See `silenceWindowMs`.
+        const window = silenceWindowMs(stopSignalSeen);
+        if (Date.now() - lastChange > window) {
           // Only "absent" sends anyone to the sign-in button. A read that
           // failed says nothing about the session, and the line below —
           // "the send did not land" — is the honest answer for both a live
@@ -1147,8 +1268,14 @@ export async function sendTurn(
               "signed-out"
             );
           }
+          // Not "the send did not land": `submit` verified the message
+          // reached the page before this wait began. What did not arrive is
+          // the answer, and saying so sends people to look in the right
+          // place.
           throw new QwenError(
-            `Qwen did not start answering within ${SILENCE_MS / 1_000}s. The session is still valid, so the send did not land.`,
+            `Qwen took the message but produced no answer within ${Math.round(window / 1_000)}s.` +
+              (stopSignalSeen ? "" : " OnFlip could not see Qwen's own progress indicator on this page, so it waited longer than usual.") +
+              " The session is still valid; sending again usually works.",
             "send-not-landed"
           );
         }
@@ -1315,7 +1442,10 @@ export async function checkSelectors(): Promise<{
   try {
     const page = await chatPage();
     for (const rule of QWEN_CONTRACT) {
-      matches[rule.key] = await page.$$eval(rule.selector, (els) => els.length).catch(() => 0);
+      matches[rule.key] = (await withTimeout(
+        page.$$eval(rule.selector, (els) => els.length),
+        `counting ${rule.key}`
+      ).catch(() => 0)) as number;
     }
   } catch (e) {
     return {
@@ -1394,9 +1524,10 @@ export async function setModel(label: string): Promise<boolean> {
   try {
     const page = await chatPage();
     const trigger = '[aria-label="Select Model"]';
-    const current = await page
-      .$eval(trigger, (el) => (el as { innerText?: string }).innerText ?? "")
-      .catch(() => "");
+    const current = (await withTimeout(
+      page.$eval(trigger, (el) => (el as { innerText?: string }).innerText ?? ""),
+      "reading the model picker"
+    ).catch(() => "")) as string;
     if (current.trim().startsWith(label)) return true;
     await page.click(trigger, { timeout: 5_000 });
     await page.waitForTimeout(600);

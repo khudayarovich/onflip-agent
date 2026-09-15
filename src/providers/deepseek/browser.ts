@@ -110,14 +110,22 @@ const ASSISTANT_SELECTOR = ".ds-markdown.ds-assistant-message-main-content";
 const SERVICE_MESSAGES: { pattern: RegExp; code: FailureCode; retryable: boolean }[] = [
   // Overloaded rather than refusing us: worth another attempt, but not
   // worth ninety seconds of silence first.
-  { pattern: /server (is )?busy|系统繁忙|服务器繁忙/i, code: "service-error", retryable: true },
+  {
+    pattern: /server (is )?busy|系统繁忙|服务器繁忙|сервер занят|сервер перегружен/i,
+    code: "service-error",
+    retryable: true,
+  },
   // A challenge is for a person to clear. Sending again makes it worse.
   {
-    pattern: /one more step before you proceed|verify you are human|checking your browser|just a moment/i,
+    pattern: /one more step before you proceed|verify you are human|checking your browser|just a moment|проверка браузера|подтвердите, что вы человек|минуточку/i,
     code: "refused",
     retryable: false,
   },
-  { pattern: /rate limit|too many requests|请求过于频繁/i, code: "throttled", retryable: false },
+  {
+    pattern: /rate limit|too many requests|请求过于频繁|слишком много запросов|превышен лимит/i,
+    code: "throttled",
+    retryable: false,
+  },
 ];
 
 /**

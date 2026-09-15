@@ -1181,7 +1181,15 @@ async function assertLoggedIn(p: Page): Promise<void> {
     );
   }
   const body = await p.locator("body").innerText().catch(() => "");
-  if (/just a moment|checking your browser|verify you are human/i.test(body.slice(0, 400))) {
+  // Cloudflare's interstitial is served in the browser's own language, so an
+  // English-only pattern misses it for anybody not browsing in English - and
+  // the turn then fails with a timeout instead of the one sentence that
+  // explains what to do about it.
+  if (
+    /just a moment|checking your browser|verify you are human|проверка браузера|подтвердите, что вы человек|минуточку/i.test(
+      body.slice(0, 400)
+    )
+  ) {
     throw new ChatGPTBrowserError(
       "Cloudflare is challenging the browser OnFlip drives. It usually clears on its own within a few minutes; if it does not, sign out and back in from the account menu."
     );
