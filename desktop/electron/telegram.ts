@@ -1119,7 +1119,11 @@ export function telegramAskApproval(id: number, request: unknown): void {
   if (ask.rememberLabel) {
     buttons.push([
       {
-        text: `✅ Always allow ${oneLine(ask.rememberLabel, 24)}`,
+        // The label already is the promise. Prepending to it produced
+        // "✅ Always allow Always allow "python"" — said twice, and then
+        // truncated at 24 characters so the half that mattered was the half
+        // that got cut.
+        text: `✅ ${oneLine(ask.rememberLabel, 40)}`,
         callback_data: tickets.put("approve-always", String(id)),
       },
     ]);

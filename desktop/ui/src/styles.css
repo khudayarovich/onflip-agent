@@ -4254,3 +4254,40 @@ a:hover {
   font-size: 12px;
   margin-top: 14px;
 }
+
+/*
+ * What "always allow" would remember, beside the button rather than on it.
+ *
+ * A remembered command is the whole command now — an exact grant is the
+ * point — so the old label, `Always allow "<command>"`, put a heredoc
+ * writing a source file inside a button. Two lines: the promise in words,
+ * then the command itself, clamped to three lines with the full text on
+ * hover. Clamped rather than scrolled, because this sits under a dialog
+ * that may already be showing a diff.
+ */
+.approval .remember-scope {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 8px 11px;
+  margin-top: 10px;
+  background: var(--bg);
+}
+
+.approval .remember-scope-head {
+  display: block;
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 5px;
+}
+
+.approval .remember-scope code {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-all;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}

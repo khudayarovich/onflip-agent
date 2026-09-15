@@ -71,6 +71,17 @@ export function ApprovalModal({
               <DiffView diff={request.preview} />
             </div>
           )}
+          {request.rememberScope && (
+            // What "always allow" would actually remember, spelled out here
+            // rather than inside the button. A remembered command is the
+            // whole command, so putting it on the control turned the control
+            // into a wall of code — but dropping it would leave a button
+            // that says "Always allow" without saying allow what.
+            <div className="remember-scope" title={request.rememberScope}>
+              <span className="remember-scope-head">{t("rememberExactly")}</span>
+              <code>{request.rememberScope}</code>
+            </div>
+          )}
         </div>
         <div className="modal-foot">
           <button

@@ -1007,6 +1007,7 @@ export class Engine {
       detail: req.detail,
       preview: this.buildPreview(req),
       rememberLabel: this.rememberLabel(req),
+      rememberScope: this.rememberScope(req),
     };
 
     let decision: ApprovalDecisionDTO;
@@ -1063,17 +1064,48 @@ export class Engine {
     };
   }
 
+  /**
+   * What the "always allow" control says, and what it is promising.
+   *
+   * These were one string, and the button carried the whole promise:
+   * `Always allow "<the command>"`. That read well while a remembered
+   * command was a short prefix like `python`. It does not any more — a
+   * grant is exact since the audit, so the key is the entire command — and
+   * a heredoc writing a source file turned the button into a wall of code
+   * with the word "Always" somewhere near the top of it.
+   *
+   * So the label is the promise and the scope is the thing promised, and
+   * the window puts them in different places. The scope is still shown
+   * rather than dropped: an exact grant is the whole point of that change,
+   * and a button reading "Always allow" without saying allow *what* is a
+   * control people click and then cannot account for afterwards.
+   */
   private rememberLabel(req: PermissionRequest): string | undefined {
-    if (req.kind === "command") {
-      const key = commandKey(req.subject);
-      return key ? `Always allow "${key}"` : undefined;
-    }
+    if (req.kind === "command") return commandKey(req.subject) ? "Always allow" : undefined;
     if (req.kind === "write" && req.targetPath) {
       const dir = path.dirname(path.resolve(req.targetPath));
       const rel = path.relative(this.cwd, dir).replace(/\\/g, "/") || ".";
       return `Always allow writes in ${rel}`;
     }
     return undefined;
+  }
+
+  /**
+   * Exactly what a remembered grant would cover, when that is not already
+   * obvious from the command shown above it.
+   *
+   * For `npm test` the key and the command are the same string, and
+   * printing it twice under a heading is noise. They diverge exactly where
+   * it matters: a heredoc writing a file is many lines on screen and one
+   * normalised line in the allowlist, so what gets remembered is the whole
+   * thing — body included — and will therefore almost never match again.
+   * That is worth seeing before agreeing to it.
+   */
+  private rememberScope(req: PermissionRequest): string | undefined {
+    if (req.kind !== "command") return undefined;
+    const key = commandKey(req.subject);
+    if (!key || key === (req.subject ?? "").trim()) return undefined;
+    return key;
   }
 
   /** Compute the diff a pending write/edit would produce, for the prompt. */

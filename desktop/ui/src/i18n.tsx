@@ -256,6 +256,7 @@ const en = {
   // approval modal
   allowOnce: "Allow once",
   alwaysAllow: "Always allow",
+  rememberExactly: "Remembers exactly this command, nothing else:",
   deny: "Deny",
   denyStop: "Deny & stop turn",
   // common modal buttons
@@ -646,6 +647,7 @@ const ru: Partial<Record<StringKey, string>> = {
   questionLabel: "OnFlip ждёт вашего решения",
   allowOnce: "Разрешить раз",
   alwaysAllow: "Всегда разрешать",
+  rememberExactly: "Запомнит ровно эту команду и никакую другую:",
   deny: "Отклонить",
   denyStop: "Отклонить и прервать",
   cancel: "Отмена",
@@ -1032,6 +1034,7 @@ const uz: Partial<Record<StringKey, string>> = {
   questionLabel: "OnFlip sizning qaroringizni kutmoqda",
   allowOnce: "Bir marta ruxsat",
   alwaysAllow: "Doim ruxsat",
+  rememberExactly: "Aynan shu buyruqni eslab qoladi, boshqasini emas:",
   deny: "Rad etish",
   denyStop: "Rad etib to'xtatish",
   cancel: "Bekor qilish",

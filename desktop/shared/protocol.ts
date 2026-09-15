@@ -282,7 +282,16 @@ export interface ApprovalRequestDTO {
   /** Rendered diff for writes, when the engine could compute one. */
   preview?: FileDiff;
   /** What "always allow" would remember, when remembering is possible. */
+  /** Short text for the "always allow" control — a promise, not a command. */
   rememberLabel?: string;
+  /**
+   * Exactly what that grant would cover, when it is worth spelling out.
+   *
+   * Separate from the label because a remembered command is the whole
+   * command now, and putting it inside the button made the button a wall of
+   * code. Shown beside the control instead.
+   */
+  rememberScope?: string;
 }
 
 export interface ApprovalDecisionDTO {
