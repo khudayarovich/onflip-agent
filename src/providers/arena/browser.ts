@@ -358,6 +358,87 @@ export async function setDirectMode(page: Page): Promise<boolean> {
 }
 
 /**
+ * The label Arena's picker shows for a slug.
+ *
+ * Its slugs are the upstream vendors' own — `gpt-5.2`, `glm-5` — and the
+ * picker lists them verbatim, so a slug is its own label. The exception is
+ * Arena's default router, which is called "Max" on screen and needs a slug
+ * of its own here because `max` alone would be nobody's model name.
+ */
+export function labelFor(slug: string | undefined): string {
+  if (!slug) return "";
+  return slug === "arena-max" ? "Max" : slug;
+}
+
+/**
+ * Choose a model in Arena's own picker.
+ *
+ * Best effort, and reported by its return value rather than by throwing: a
+ * model that could not be switched is a turn answered by a different model,
+ * which is worth a log line and not worth failing a send over.
+ *
+ * Worth having at all because the alternative is a menu that lies. OnFlip
+ * lists models for this service, and a list somebody can pick from that
+ * changes nothing is the same fault as an "always allow" that quietly
+ * allows something else.
+ *
+ * The picker belongs to the conversation, so this is called while a chat is
+ * still empty. Under one-shot that is every turn, which is the one thing
+ * one-shot makes easier.
+ */
+export async function setModel(label: string): Promise<boolean> {
+  if (!label) return false;
+  try {
+    const page = await chatPage();
+    const already = await withTimeout(
+      page.evaluate(
+        `(() => [...document.querySelectorAll('[role=combobox]')].some(e => (e.innerText||"").trim().split(String.fromCharCode(10))[0] === ${JSON.stringify(label)}))()`
+      ),
+      "reading the model picker"
+    );
+    if (already) return true;
+
+    // The model control is the combobox that is not the mode one, and only
+    // the copy rendered for this breakpoint can be clicked.
+    let opened = false;
+    for (const combo of await page.$$("[role=combobox], button[aria-haspopup]")) {
+      const text = (await combo.innerText().catch(() => "")).trim();
+      if (!text || /^(Direct|Battle|Side by Side|Agent)/i.test(text)) continue;
+      if (!(await combo.isVisible().catch(() => false))) continue;
+      await combo.click({ timeout: 8_000 }).then(() => {
+        opened = true;
+      }).catch(() => {});
+      if (opened) break;
+    }
+    if (!opened) {
+      logger.warn("arena", "the model picker would not open");
+      return false;
+    }
+    await page.waitForTimeout(1_000);
+
+    for (const option of await page.$$("[role=option]")) {
+      const text = (await option.innerText().catch(() => "")).trim();
+      // The option carries the vendor above the slug on some rows, so the
+      // slug is matched anywhere in it rather than as the whole string.
+      if (!text.split(String.fromCharCode(10)).some((line) => line.trim() === label)) continue;
+      await option.click({ timeout: 6_000 }).catch(() => {});
+      await page.waitForTimeout(800);
+      logger.info("arena", "model chosen", { label });
+      return true;
+    }
+    logger.warn("arena", "that model is not in Arena's picker", { label });
+    // Close the menu rather than leaving it over the composer.
+    await page.keyboard.press("Escape").catch(() => {});
+    return false;
+  } catch (e) {
+    logger.warn("arena", "could not set the model", {
+      error: e instanceof Error ? e.message.split(String.fromCharCode(10))[0].slice(0, 120) : String(e),
+    });
+    return false;
+  }
+}
+
+/**
  * Make sure a turn does not begin behind the last one's answer.
  *
  * The page is shared between turns, so an answer still being written is

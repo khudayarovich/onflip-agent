@@ -147,10 +147,67 @@ const QWEN_MODELS: ModelInfo[] = [
   },
 ];
 
+
+/**
+ * A few of Arena's, out of the hundred-odd its picker lists.
+ *
+ * Read off the live picker rather than a docs page, because the picker is
+ * what OnFlip clicks. It offered 133 entries the day this was written, which
+ * is both the reason to have Arena and the reason this list is short: a
+ * hundred-odd slugs hardcoded here would be stale within weeks, and a list
+ * that lies about what is available is worse than a small one that does not.
+ *
+ * `arena-max` is Arena's own default and its own word — "Max", which routes
+ * each prompt to whichever model it judges most capable. It leads because it
+ * is what an account gets without choosing, and it is the one entry here
+ * that cannot go out of date.
+ *
+ * The rest are one well-known model per family. Anything not listed can
+ * still be chosen on Arena's own page; this is the set OnFlip will drive.
+ *
+ * The same constraint as the other two browser services travels with these:
+ * the picker belongs to the conversation, so a model is chosen when a chat
+ * starts and fixed for its life.
+ */
+const ARENA_MODELS: ModelInfo[] = [
+  {
+    slug: "arena-max",
+    label: "Max",
+    description:
+      "Arena picks the most capable model for each prompt — its own default",
+  },
+  {
+    slug: "gemini-3.1-pro-preview",
+    label: "gemini-3.1-pro-preview",
+    description: "Google's Gemini Pro",
+  },
+  {
+    slug: "gpt-5.2",
+    label: "gpt-5.2",
+    description: "OpenAI's GPT-5.2",
+  },
+  {
+    slug: "glm-5",
+    label: "glm-5",
+    description: "Zhipu's GLM-5",
+  },
+  {
+    slug: "kimi-k2-thinking-turbo",
+    label: "kimi-k2-thinking-turbo",
+    description: "Moonshot's Kimi K2, reasoning",
+  },
+  {
+    slug: "minimax-m3",
+    label: "minimax-m3",
+    description: "MiniMax M3",
+  },
+];
+
 /** The built-in list each browser-driven service offers, by provider. */
 const FIXED_MODELS: Record<string, ModelInfo[]> = {
   deepseek: DEEPSEEK_MODELS,
   qwen: QWEN_MODELS,
+  arena: ARENA_MODELS,
 };
 
 export function allModels(): ModelInfo[] {
@@ -396,6 +453,9 @@ export function modelBelongsToProvider(slug: string): boolean {
 const SLUG_PREFIX: Record<string, string> = {
   deepseek: "deepseek-",
   qwen: "qwen3-",
+  // Arena's slugs are the upstream vendors' own, so there is no single
+  // prefix to recognise: its own default is the one shape that is Arena's.
+  arena: "arena-",
 };
 
 /** A slug has to at least look like one before it is worth sending. */

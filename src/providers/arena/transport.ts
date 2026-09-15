@@ -2,7 +2,14 @@ import { ChatMessage } from "../../types";
 import { buildTurnPrompt } from "../../agent/protocol";
 import { logger } from "../../log";
 import type { SendOptions, Transport, TransportReply } from "../../chatgpt/transport";
-import { sendTurn, currentConversationId, reset as resetChat, checkSelectors } from "./browser";
+import {
+  sendTurn,
+  currentConversationId,
+  reset as resetChat,
+  checkSelectors,
+  setModel,
+  labelFor,
+} from "./browser";
 
 /**
  * Talking to Arena as the agent's transport.
@@ -18,10 +25,11 @@ import { sendTurn, currentConversationId, reset as resetChat, checkSelectors } f
  * pays after a sub-agent, and it is why `adopt` is only meaningful while the
  * driver still has the page open.
  *
- * No model picker yet. Arena has one, and choosing through it is a menu
- * interaction on a page whose controls carry no stable names — so the first
- * version takes whatever model the account has selected rather than
- * pretending to a control it has not proved it can drive.
+ * The model is chosen through Arena's own picker, which lists well over a
+ * hundred models. OnFlip offers a short curated set rather than all of them
+ * — a hardcoded hundred would be stale in weeks — and drives the picker for
+ * real, because a menu somebody can choose from that changes nothing is the
+ * same fault as an "always allow" that quietly allows something else.
  */
 
 /** Held against its contract once per run; see the Qwen transport. */
@@ -76,6 +84,11 @@ export class ArenaTransport implements Transport {
       includeSystem: this.sentThrough === 0,
     });
     const body = [turn, opts.reminder].filter((s) => s && s.trim()).join("\n\n");
+
+    // The picker belongs to the conversation, so the model is chosen while
+    // the chat is still empty. Under one-shot that is every turn — which is
+    // the one thing one-shot makes simpler rather than worse.
+    if (this.sentThrough === 0) await setModel(labelFor(opts.model));
 
     const { reply, ms } = await sendTurn(body, {
       signal: opts.signal,
