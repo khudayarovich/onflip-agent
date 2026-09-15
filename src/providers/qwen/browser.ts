@@ -82,6 +82,8 @@ const ASSISTANT_SELECTOR = ".qwen-chat-message-assistant";
 const COMPOSER = "textarea.message-input-textarea";
 /** Send. Present but `.disabled` until the composer has something in it. */
 const SEND_BUTTON = "button.send-button";
+/** A message of ours on the page, which is how a send is confirmed. */
+const USER_MESSAGE = ".qwen-chat-message-user";
 /** Shown in Send's place while an answer is being written. */
 const STOP_BUTTON = 'button[aria-label="Stop"]';
 
@@ -489,32 +491,70 @@ export async function sendTurn(
       logger.warn("qwen", "the composer truncated the turn", { sent: text.length, accepted });
     }
     await page.waitForTimeout(300);
-    // Three ways to send, in descending order of faithfulness, and every
-    // fall-through is logged with its reason.
+
+    // Try, then CHECK, then escalate — rather than trying and hoping.
     //
-    // The reason matters and was missing: the first live run fell back on
-    // every turn and the log said only "not clickable", which is a symptom
-    // with no cause attached. A fallback that works is how a broken primary
-    // path stays invisible, so the line that records it has to carry enough
-    // to act on.
-    try {
-      await page.click(SEND_BUTTON, { timeout: 8_000 });
-    } catch (e) {
-      const why =
-        e instanceof Error
-          ? e.message.split(String.fromCharCode(10))[0].slice(0, 160)
-          : String(e).slice(0, 160);
-      // A real click dispatched inside the page. Qwen's menus ignore these -
-      // they listen for pointer events - but the send control is an ordinary
-      // button and answers to it, measured on the live page.
-      const clicked = (await page
+    // Every method here has a way of appearing to work and doing nothing,
+    // and the worst of them was introduced by tidying this code up. Qwen
+    // marks its send control disabled with a CSS class rather than the
+    // `disabled` attribute, so Playwright's own actionability check reads
+    // it as enabled and clicks it perfectly happily. The click lands, the
+    // button does nothing, and the turn then sits for ninety seconds before
+    // reporting that the send did not land. It never left.
+    //
+    // So the question is not "did the click throw" but "did the message
+    // go", and the page answers that plainly: Qwen empties the composer and
+    // mounts the message. Asking that after each attempt turns a silent
+    // no-op into either a send or an honest failure in seconds.
+    const minesBefore = (await page
+      .$eval(USER_MESSAGE, (els) => els.length)
+      .catch(() => 0)) as number;
+    const landed = async (): Promise<boolean> => {
+      await page.waitForTimeout(600);
+      return (await page
         .evaluate(
-          `(() => { const b = document.querySelector(${JSON.stringify(SEND_BUTTON)}); if (!b) return "absent"; if (b.disabled || b.className.includes("disabled")) return "disabled"; b.click(); return "clicked"; })()`
+          `(() => {
+            const el = document.querySelector(${JSON.stringify(COMPOSER)});
+            const mine = document.querySelectorAll(${JSON.stringify(USER_MESSAGE)}).length;
+            return (el && el.value.length === 0) || mine > ${minesBefore};
+          })()`
         )
-        .catch(() => "threw")) as string;
-      logger.warn("qwen", "the send button was not clickable", { why, then: clicked });
-      if (clicked !== "clicked") await page.keyboard.press("Enter");
+        .catch(() => false)) as boolean;
+    };
+
+    // Playwright's click first: a real input event, at the real position.
+    const why = await page
+      .click(SEND_BUTTON, { timeout: 8_000 })
+      .then(() => null)
+      .catch((e: Error) => e.message.split(String.fromCharCode(10))[0].slice(0, 120));
+    if (await landed()) return;
+
+    // A click dispatched inside the page. Qwen's menus ignore these — they
+    // listen for pointer events — but the send control is an ordinary
+    // button and answers to it, measured on the live page.
+    const inPage = (await page
+      .evaluate(
+        `(() => { const b = document.querySelector(${JSON.stringify(SEND_BUTTON)}); if (!b) return "absent"; b.click(); return "clicked"; })()`
+      )
+      .catch(() => "threw")) as string;
+    if (await landed()) {
+      logger.warn("qwen", "the send button click did not take; the in-page click did", { why, inPage });
+      return;
     }
+
+    await page.keyboard.press("Enter").catch(() => {});
+    if (await landed()) {
+      logger.warn("qwen", "neither click sent the turn; Enter did", { why, inPage });
+      return;
+    }
+
+    // Nothing moved the message. Failing here costs seconds and says what
+    // happened; the alternative is the ninety-second wait this replaced,
+    // ending in a sentence that blames a send which never occurred.
+    throw new QwenError(
+      "Qwen's composer would not send the turn — the send control did not respond and neither did Enter.",
+      "composer-refused"
+    );
   };
 
   await submit();
@@ -538,7 +578,20 @@ export async function sendTurn(
       }
       await page.waitForTimeout(POLL_MS);
       const now = await readLast(page);
-      if (now.generating) sawGenerating = true;
+      if (now.generating) {
+        sawGenerating = true;
+        // Working, therefore not silent. The silence window exists to catch
+        // a send that never arrived, and a page showing its own stop control
+        // has plainly received one - so the clock belongs to the answer, not
+        // to the wait for it.
+        //
+        // Without this, a model that thinks for more than ninety seconds
+        // before writing anything is reported as a send that did not land,
+        // because the reply text is what the clock was watching and thinking
+        // produces none. Reported from the field as a turn frozen on
+        // thinking; the deadline above is what bounds a genuinely long one.
+        lastChange = Date.now();
+      }
       const fresh = now.count > before.count || now.text !== before.text;
       if (!fresh || !now.text) {
         // Before waiting the window out: is the page already saying why
