@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.25
+# OnFlip Desktop 0.10.26
 
-**Qwen turns that failed saying you were signed out, when you were not.** A fix for the one real problem in yesterday's release.
+**Qwen turns that hung for ninety seconds and then said the message never sent.** Two causes, both fixed — one of them mine, from two releases ago.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.25.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.25/OnFlip-Setup-0.10.25.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.25-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.25/OnFlip-0.10.25-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.25-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.25/OnFlip-0.10.25-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.26.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.26/OnFlip-Setup-0.10.26.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.26-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.26/OnFlip-0.10.26-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.26-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.26/OnFlip-0.10.26-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside if you want to check a download by hand.
 
@@ -18,18 +18,16 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 ## Fixed
 
-**"The browser profile is signed out of Qwen, so the message went nowhere" — on a profile that was signed in the whole time.** Reported on macOS, often enough that retrying became a habit. It was never your session.
+**"Qwen did not start answering within 90s" — on a message that never left the box.** Qwen greys out its send button in a way that still looks clickable to OnFlip, so the click landed, the button ignored it, and nothing was sent. OnFlip then waited the full minute and a half before admitting the message had not gone.
 
-A browser's stored session belongs to one website, not to the browser. While OnFlip's hidden browser was still on its way to Qwen — a blank page, an error page, a page part-way through loading — it looked for your Qwen session *on that page*, found nothing, and concluded you were signed out. You were not; it was simply looking in the wrong place, and a slower machine leaves it looking there for longer. That is why a Mac saw it and why sending again usually worked: the second attempt found the page loaded.
+It now checks whether the message actually went — Qwen empties the box and shows your message when it does — and tries another way if it did not. A turn that genuinely cannot be sent now says so in a couple of seconds instead of ninety, and says the right thing.
 
-OnFlip now checks where it is before it decides what it found. Only your Qwen session, read from Qwen's own page, can say you are signed out.
+**A turn frozen on "thinking".** Qwen often thinks for a while before writing anything — half a minute is ordinary on a harder question, longer on a slower machine. OnFlip was timing the wait for the *answer*, and thinking produces no answer, so a model that thought for more than ninety seconds was reported as a message that never sent. OnFlip now recognises a page that is working and lets it work.
 
-**A sign-in prompt is no longer taken as proof on its own.** Qwen shows that wording for a signed-out account, for an expired session, and in a promotion offered to people who are perfectly signed in. OnFlip checks your session first, reloads once and sends the message again by itself, and only asks you to sign in when your session really has gone.
-
-**The account bar could show "signed out" on a working account** for the same reason, from a single glance taken before the browser had finished starting. It looks more than once now, and says "could not be read" when that is what happened rather than blaming your account.
+**If you are on 0.10.24, update.** That release is the one with the send bug; 0.10.25 fixed a separate false "signed out" and this fixes the rest.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT, DeepSeek or Qwen account — one, or all three. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.24...desktop-v0.10.25](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.24...desktop-v0.10.25)
+**Full changelog:** [desktop-v0.10.25...desktop-v0.10.26](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.25...desktop-v0.10.26)
