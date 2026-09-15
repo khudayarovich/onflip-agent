@@ -204,6 +204,53 @@ export async function readStorage(page: Page): Promise<Record<string, string | n
   );
 }
 
+/**
+ * What the profile's own storage says, including "it would not say".
+ *
+ * Three answers, not two, and the third is the point. A read can fail for
+ * reasons that have nothing to do with a session — a page mid-navigation, a
+ * renderer that is busy, an evaluate that timed out on a slow machine — and
+ * treating that as "signed out" tells someone to go and fix something that
+ * was never broken. This driver already says elsewhere that "not signed in"
+ * and "could not look" are different answers; this is the type that makes it
+ * impossible to forget.
+ */
+export type SessionState = "present" | "absent" | "unreadable";
+
+/**
+ * What to do about a sign-in prompt on the page, given what the profile says.
+ *
+ * Pure, and exported, because this is the rule that was wrong: the old code
+ * read the prompt and went straight to "signed out", never asking the token.
+ * A rule worth getting wrong once is worth being able to hold against every
+ * combination without a browser.
+ *
+ * - `absent`      — nothing in storage. Genuinely signed out; say so.
+ * - `present`     — a session and a prompt disagree. Reload once; if the
+ *                   prompt survives that, the token is most likely expired,
+ *                   which has the same shape as a fresh one and so passes
+ *                   `isSignedIn`.
+ * - `unreadable`  — no verdict. Keep waiting; the silence window ends a turn
+ *                   that nothing answers, and it says something true.
+ */
+export function verdictForPrompt(
+  session: SessionState,
+  alreadyReloaded: boolean
+): "signed-out" | "reload" | "expired" | "wait" {
+  if (session === "absent") return "signed-out";
+  if (session === "unreadable") return "wait";
+  return alreadyReloaded ? "expired" : "reload";
+}
+
+async function sessionState(page: Page): Promise<SessionState> {
+  try {
+    const storage = await readStorage(page);
+    return isSignedIn(storage) ? "present" : "absent";
+  } catch {
+    return "unreadable";
+  }
+}
+
 export interface SignedInCheck {
   signedIn: boolean;
   /** A name a person recognises, when the page shows one. Never a raw id. */
@@ -371,57 +418,68 @@ export async function sendTurn(
   }
   const before = await readLast(page);
 
-  await page.click(COMPOSER).catch(() => {
-    /* focus is a nicety; the fill below is what matters */
-  });
-  // A string rather than a callback: this package is built without the DOM
-  // library, so nothing here may name `document`. React owns the textarea's
-  // value, so the native setter is what gets past its wrapper — typing into
-  // `el.value` directly leaves React's state holding the old string and the
-  // Send button disabled.
-  const fill = `(() => {
-    const el = document.querySelector(${JSON.stringify(COMPOSER)});
-    if (!el) return -1;
-    const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
-    setter.call(el, ${JSON.stringify(text)});
-    el.dispatchEvent(new Event("input", { bubbles: true }));
-    return el.value.length;
-  })()`;
-  const accepted = (await page.evaluate(fill)) as number;
-  if (accepted < 0) {
-    throw new QwenError("Qwen's composer was not on the page.", "composer-refused");
-  }
-  if (accepted < text.length) {
-    logger.warn("qwen", "the composer truncated the turn", { sent: text.length, accepted });
-  }
-  await page.waitForTimeout(300);
-  // Three ways to send, in descending order of faithfulness, and every
-  // fall-through is logged with its reason.
-  //
-  // The reason matters and was missing: the first live run fell back on
-  // every turn and the log said only "not clickable", which is a symptom
-  // with no cause attached. A fallback that works is how a broken primary
-  // path stays invisible, so the line that records it has to carry enough
-  // to act on.
-  try {
-    await page.click(SEND_BUTTON, { timeout: 8_000 });
-  } catch (e) {
-    const why =
-      e instanceof Error
-        ? e.message.split(String.fromCharCode(10))[0].slice(0, 160)
-        : String(e).slice(0, 160);
-    // A real click dispatched inside the page. Qwen's menus ignore these -
-    // they listen for pointer events - but the send control is an ordinary
-    // button and answers to it, measured on the live page.
-    const clicked = (await page
-      .evaluate(
-        `(() => { const b = document.querySelector(${JSON.stringify(SEND_BUTTON)}); if (!b) return "absent"; if (b.disabled || b.className.includes("disabled")) return "disabled"; b.click(); return "clicked"; })()`
-      )
-      .catch(() => "threw")) as string;
-    logger.warn("qwen", "the send button was not clickable", { why, then: clicked });
-    if (clicked !== "clicked") await page.keyboard.press("Enter");
-  }
+  /**
+   * Put the turn in the composer and press send.
+   *
+   * A function rather than a straight line because it can be needed twice:
+   * a sign-in prompt over a live session is recovered by reloading, and a
+   * reload empties the composer. Without this the recovery left the loop
+   * waiting for a reply to a message that had never been sent.
+   */
+  const submit = async (): Promise<void> => {
+    await page.click(COMPOSER).catch(() => {
+      /* focus is a nicety; the fill below is what matters */
+    });
+    // A string rather than a callback: this package is built without the DOM
+    // library, so nothing here may name `document`. React owns the textarea's
+    // value, so the native setter is what gets past its wrapper — typing into
+    // `el.value` directly leaves React's state holding the old string and the
+    // Send button disabled.
+    const fill = `(() => {
+      const el = document.querySelector(${JSON.stringify(COMPOSER)});
+      if (!el) return -1;
+      const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value").set;
+      setter.call(el, ${JSON.stringify(text)});
+      el.dispatchEvent(new Event("input", { bubbles: true }));
+      return el.value.length;
+    })()`;
+    const accepted = (await page.evaluate(fill)) as number;
+    if (accepted < 0) {
+      throw new QwenError("Qwen's composer was not on the page.", "composer-refused");
+    }
+    if (accepted < text.length) {
+      logger.warn("qwen", "the composer truncated the turn", { sent: text.length, accepted });
+    }
+    await page.waitForTimeout(300);
+    // Three ways to send, in descending order of faithfulness, and every
+    // fall-through is logged with its reason.
+    //
+    // The reason matters and was missing: the first live run fell back on
+    // every turn and the log said only "not clickable", which is a symptom
+    // with no cause attached. A fallback that works is how a broken primary
+    // path stays invisible, so the line that records it has to carry enough
+    // to act on.
+    try {
+      await page.click(SEND_BUTTON, { timeout: 8_000 });
+    } catch (e) {
+      const why =
+        e instanceof Error
+          ? e.message.split(String.fromCharCode(10))[0].slice(0, 160)
+          : String(e).slice(0, 160);
+      // A real click dispatched inside the page. Qwen's menus ignore these -
+      // they listen for pointer events - but the send control is an ordinary
+      // button and answers to it, measured on the live page.
+      const clicked = (await page
+        .evaluate(
+          `(() => { const b = document.querySelector(${JSON.stringify(SEND_BUTTON)}); if (!b) return "absent"; if (b.disabled || b.className.includes("disabled")) return "disabled"; b.click(); return "clicked"; })()`
+        )
+        .catch(() => "threw")) as string;
+      logger.warn("qwen", "the send button was not clickable", { why, then: clicked });
+      if (clicked !== "clicked") await page.keyboard.press("Enter");
+    }
+  };
 
+  await submit();
   const deadline = Date.now() + (opts.timeoutMs ?? 10 * 60_000);
   let last: string | null = null;
   let quiet = 0;
@@ -429,6 +487,8 @@ export async function sendTurn(
   let lastChange = Date.now();
   let lastServiceCheck = Date.now();
   let sawGenerating = false;
+  /** One reload is a recovery; two in a turn is a loop. */
+  let reloadedOnPrompt = false;
   while (Date.now() < deadline) {
     try {
       // Stop means stop. Without this the signal is accepted and ignored:
@@ -449,18 +509,68 @@ export async function sendTurn(
         if (!last && Date.now() - lastServiceCheck > SERVICE_CHECK_MS) {
           lastServiceCheck = Date.now();
           const said = await serviceMessage(page);
+          if (said && said.code !== "signed-out") {
+            throw new QwenError(`Qwen says: ${said.text}`, said.code);
+          }
           if (said) {
-            throw new QwenError(
-              said.code === "signed-out"
-                ? "The browser profile is signed out of Qwen, so the message went nowhere. Sign in from the account menu, then send again."
-                : `Qwen says: ${said.text}`,
-              said.code
-            );
+            // A sign-in prompt on the page is not proof of a signed-out
+            // profile, and believing it was is how this reported people
+            // signed out who were not. The page is prose; the token in the
+            // profile's own storage is the fact, and this driver asks the
+            // fact before it repeats the prose. Twice before, this codebase
+            // has had to learn the same thing — advice text read back as a
+            // throttle, advice text read back as fatal — and both are
+            // written up in backoff.ts.
+            //
+            // Qwen's page shows that wording in more than one situation: a
+            // genuinely signed-out profile, an expired session, and a promo
+            // modal offering credits to someone perfectly signed in. Only
+            // the first is worth sending anybody to the sign-in button.
+            const verdict = verdictForPrompt(await sessionState(page), reloadedOnPrompt);
+            if (verdict === "signed-out") {
+              throw new QwenError(
+                "The browser profile is signed out of Qwen, so the message went nowhere. Sign in from the account menu, then send again.",
+                "signed-out"
+              );
+            }
+            if (verdict === "reload") {
+              // A session in hand and a sign-in prompt on screen: the page is
+              // wrong about itself, or is showing something that merely reads
+              // like a wall. One reload, then carry on waiting — which is
+              // what a person does, and what makes the retry that "just
+              // works" unnecessary.
+              reloadedOnPrompt = true;
+              logger.warn("qwen", "a sign-in prompt over a live session; reloading once", {
+                said: said.text.slice(0, 120),
+              });
+              await gotoChat(page);
+              await page.waitForTimeout(2_000);
+              // The reload emptied the composer, so the turn has to go
+              // again - the first attempt never reached the model.
+              await submit();
+              lastChange = Date.now();
+              continue;
+            }
+            if (verdict === "expired") {
+              // Twice now, with a token still in place. Most likely expired:
+              // the shape is all `isSignedIn` can check, and a stale JWT has
+              // the shape of a fresh one. Retryable rather than fatal, and
+              // named for what it is so nobody goes hunting a driver bug.
+              throw new QwenError(
+                "Qwen asked for a sign-in even though the profile still holds a session — it has most likely expired. Signing in again from the account menu will clear it.",
+                "signed-out"
+              );
+            }
+            // Unreadable: no verdict. Say nothing and keep waiting; the
+            // silence window below is what ends a turn nothing answers.
           }
         }
         if (Date.now() - lastChange > SILENCE_MS) {
-          const storage = await readStorage(page).catch(() => ({}));
-          if (!isSignedIn(storage)) {
+          // Only "absent" sends anyone to the sign-in button. A read that
+          // failed says nothing about the session, and the line below —
+          // "the send did not land" — is the honest answer for both a live
+          // session and a storage that would not answer.
+          if ((await sessionState(page)) === "absent") {
             throw new QwenError(
               "The browser profile is signed out of Qwen, so the message went nowhere. Sign in from the account menu, then send again.",
               "signed-out"

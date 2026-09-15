@@ -131,14 +131,24 @@ export async function checkSignedIn(
 ): Promise<{ signedIn: boolean; reachable: boolean; detail: string }> {
   const d = driver();
   if (!d) return chatgpt.checkSignedIn(cookies);
-  const check = await d.checkSignedIn();
+  // More than one look. A cold headless browser on a profile takes seconds to
+  // reach the page — measured at 9.6s to `domcontentloaded` on a warm machine,
+  // and slower ones exist — and a single glance at the wrong moment is how a
+  // signed-in account gets told it is signed out. Reported from a Mac, often
+  // enough that retrying "just worked".
+  const check = await d.checkSignedIn({ tries: 3 });
   return {
     signedIn: check.signedIn,
-    // Getting far enough to read the profile means the page loaded.
-    reachable: true,
+    // Reaching the profile at all is what this means, and a read that threw
+    // did not. Saying `true` there turned "OnFlip could not look" into
+    // "you are not signed in", which sends someone to a sign-in button to
+    // fix something a sign-in cannot fix.
+    reachable: !check.error,
     detail: check.signedIn
       ? `Signed in to ${d.label}${check.account ? ` as ${check.account}` : ""}.`
-      : `No ${d.label} session in OnFlip's profile. Use Sign in to open a browser and log in.`,
+      : check.error
+        ? `${d.label}'s profile could not be read (${check.error.split("\n")[0].slice(0, 140)}).`
+        : `No ${d.label} session in OnFlip's profile. Use Sign in to open a browser and log in.`,
   };
 }
 

@@ -144,3 +144,39 @@ test("a model slug maps to the label the picker shows", () => {
   assert.equal(labelFor("gpt-5"), "");
   assert.equal(labelFor(undefined), "");
 });
+
+test("a sign-in prompt is not proof of a signed-out profile", () => {
+  // Reported from the field, on a Mac, repeatedly: turns failing with "the
+  // browser profile is signed out of Qwen, so the message went nowhere",
+  // where retrying often worked and signing in again always did.
+  //
+  // The cause was this rule. A match on the page's text went straight to
+  // "signed out" without ever asking the token — the page is prose, the
+  // token is the fact, and the prose was deciding. Qwen shows that wording
+  // for a signed-out profile, for an expired session, and for a promo modal
+  // offered to somebody perfectly signed in; only the first is worth sending
+  // anyone to the sign-in button.
+  //
+  // This codebase has now learned the same lesson three times. backoff.ts
+  // documents the first two.
+  const { verdictForPrompt } = require("../dist/providers/qwen/browser");
+
+  // Nothing in storage: genuinely signed out, whatever else is true.
+  assert.equal(verdictForPrompt("absent", false), "signed-out");
+  assert.equal(verdictForPrompt("absent", true), "signed-out");
+
+  // A session and a prompt disagreeing. Reload once and send again rather
+  // than making the user do it — which is exactly what "I retry and then it
+  // works" was describing.
+  assert.equal(verdictForPrompt("present", false), "reload");
+
+  // Still there after a reload: the token has the shape of a live one and is
+  // most likely expired. `isSignedIn` checks shape, and a stale JWT has the
+  // same shape as a fresh one.
+  assert.equal(verdictForPrompt("present", true), "expired");
+
+  // Could not read the profile at all. Not a verdict, and never the one that
+  // tells someone to fix a session that may be perfectly fine.
+  assert.equal(verdictForPrompt("unreadable", false), "wait");
+  assert.equal(verdictForPrompt("unreadable", true), "wait");
+});
