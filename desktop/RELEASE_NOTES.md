@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.29
+# OnFlip Desktop 0.10.30
 
-**Qwen turns that sat on "sending" and then blamed the send — found, and it was never the send.** Your Qwen session had quietly expired, and OnFlip could not tell.
+**The Qwen sign-in loop.** Sign in, the window shuts before you can type, the app says you are signed in, the next message goes nowhere, and it asks again. Fixed.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.29.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.29/OnFlip-Setup-0.10.29.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.29-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.29/OnFlip-0.10.29-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.29-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.29/OnFlip-0.10.29-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.30.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.30/OnFlip-Setup-0.10.30.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.30-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.30/OnFlip-0.10.30-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.30-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.30/OnFlip-0.10.30-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside if you want to check a download by hand.
 
@@ -18,22 +18,16 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 ## Fixed
 
-**The real cause of every stuck Qwen turn this week.** When a Qwen session lapses, Qwen does not say so — it quietly puts the browser into a *guest* chat, where messages are accepted and never answered. OnFlip kept waiting, then reported that the message had not sent. It had. There was simply nobody signed in to answer it.
+**Signing in to Qwen went round in circles.** The window opened and closed again within a couple of seconds, OnFlip reported you signed in, and the next message went nowhere — then it asked you to sign in again.
 
-OnFlip could not see this because Qwen leaves the expired sign-in token in place, at full length and looking entirely valid. The account bar said connected, every check passed, and every turn went somewhere that could not reply.
+OnFlip closes that window for you as soon as your sign-in reaches the browser profile, so you do not have to press a button as well. It was checking whether a sign-in token was present, on the assumption that a signed-out profile has none. Qwen does not work that way: it leaves the expired token behind, looking perfectly valid. So on any profile whose session had lapsed, OnFlip decided you had signed in the instant the window appeared — and closed it in your face.
 
-It now recognises the guest chat immediately — **the same second**, instead of after ninety — and tells you plainly that the session has expired and needs signing in again. The account bar corrects itself at the same moment, so it stops claiming a connection it has just been shown it does not have.
+It now waits for a token that was **not there before**, so the window stays open until you have actually signed in. And finishing without signing in — cancelling, or closing the window — is no longer mistaken for success on the strength of the old token.
 
-Nothing before a send can detect this: a lapsed Qwen profile shows a working message box, no sign-in prompt, an ordinary address and a valid-looking token. The first message is the first evidence there is, which is why it now costs one message rather than a minute and a half.
-
-**Qwen messages are now paced.** A session that dies after a few minutes of agent work is a service reacting to load, so OnFlip leaves the same small gap between messages it has always left for ChatGPT, and a wider one between new chats. It should make the lapse less frequent; it cannot make Qwen sessions permanent.
-
-**`/status` in Telegram now shows the version.** Diagnosing a fault on another machine starts with knowing what is running on it, and every way to find that out ran through the app's own window.
-
-<i>If Qwen stops answering: sign in again from the account menu. Qwen ends sessions on its own, and OnFlip cannot renew one for you — it can only tell you promptly, which it now does.</i>
+<i>If Qwen has been asking you to sign in repeatedly: update, then sign in once more. It will hold this time.</i>
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT, DeepSeek or Qwen account — one, or all three. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.28...desktop-v0.10.29](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.28...desktop-v0.10.29)
+**Full changelog:** [desktop-v0.10.29...desktop-v0.10.30](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.29...desktop-v0.10.30)
