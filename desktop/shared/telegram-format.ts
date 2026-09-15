@@ -14,6 +14,8 @@
  * tests, because a formatting bug here is a message the user never sees.
  */
 
+import { serviceLabel } from "./providers";
+
 /** Telegram's own ceiling. Left a little slack for the chunk counter. */
 export const TELEGRAM_LIMIT = 4096;
 const CHUNK_LIMIT = 3900;
@@ -140,6 +142,8 @@ export function oneLine(text: string, max = 90): string {
 
 export interface StatusLike {
   cwd?: string;
+  /** Which service is answering: "chatgpt", "deepseek", "qwen". */
+  provider?: string;
   model?: string;
   thinking?: string;
   approvalMode?: string;
@@ -166,6 +170,14 @@ export function statusCard(status: StatusLike): string {
   const rows = [
     `<b>OnFlip</b>${status.busy ? " · <i>working…</i>" : ""}`,
     "",
+    // Which service, above the model, because the model names mean
+    // different things on each and a card that shows "qwen3-plus" without
+    // saying whose it is has told you the less useful half. Absent rather
+    // than guessed when the status has no provider on it - an older engine,
+    // or one that has not reported yet.
+    ...(serviceLabel(status.provider)
+      ? [`🔌 <b>Service</b>  <code>${escapeHtml(serviceLabel(status.provider) as string)}</code>`]
+      : []),
     `📁 <b>Project</b>  <code>${escapeHtml(shortCwd(status.cwd))}</code>`,
     `🧠 <b>Model</b>  <code>${escapeHtml(status.model ?? "auto")}</code>`,
     `💭 <b>Thinking</b>  <code>${escapeHtml(status.thinking ?? "default")}</code>`,
@@ -244,6 +256,7 @@ export function helpCard(): string {
     "/new — start a fresh chat with no folder",
     "/folder — pick a recent project",
     "/model — choose the model",
+    "/provider — switch service (ChatGPT, DeepSeek, Qwen)",
     "/thinking — choose the reasoning level",
     "/access — choose what OnFlip may do unattended",
     "/settings — all of the above in one place",

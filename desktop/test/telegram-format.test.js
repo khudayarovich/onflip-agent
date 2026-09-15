@@ -209,3 +209,35 @@ test("the help card is valid markup", { skip: needsBuild }, () => {
   assert.ok(balanced(helpCard()));
   assert.match(helpCard(), /\/status/);
 });
+
+test("the status card names the service that is answering", { skip: needsBuild }, () => {
+  const { statusCard } = load();
+  // Added with the third provider. A card showing "qwen3-plus" without saying
+  // whose model that is has told you the less useful half, and the model
+  // names differ per service.
+  const card = statusCard({ provider: "qwen", cwd: "/home/me/project", model: "qwen3-plus" });
+  assert.match(card, /Service/);
+  assert.match(card, /Qwen/);
+  assert.match(card, /qwen3-plus/);
+});
+
+test("and says nothing at all when it does not know", { skip: needsBuild }, () => {
+  const { statusCard } = load();
+  // Absent rather than guessed: an engine that has not reported a provider
+  // yet, or an older one that never will, should not have ChatGPT put in its
+  // mouth — that is the bug this app already shipped once on its account bar.
+  const card = statusCard({ cwd: "/home/me/project", model: "gpt-5" });
+  assert.ok(!/Service/.test(card), card);
+});
+
+test("each service is named the way it names itself", { skip: needsBuild }, () => {
+  const { statusCard } = load();
+  assert.match(statusCard({ provider: "chatgpt" }), /ChatGPT/);
+  assert.match(statusCard({ provider: "deepseek" }), /DeepSeek/);
+  assert.match(statusCard({ provider: "qwen" }), /Qwen/);
+});
+
+test("the help card lists the service switch", { skip: needsBuild }, () => {
+  const { helpCard } = load();
+  assert.match(helpCard(), /\/provider/);
+});

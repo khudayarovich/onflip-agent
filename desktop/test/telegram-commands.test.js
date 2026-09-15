@@ -227,3 +227,62 @@ test("the ones people reach for first are near the top", { skip: needsBuild }, (
   assert.ok(names.indexOf("status") < names.indexOf("settings"));
   assert.ok(names.indexOf("stop") < names.indexOf("id"));
 });
+
+test("/provider is a command, and it is advertised", { skip: needsBuild }, () => {
+  const { parseIncoming, COMMAND_MENU } = load();
+  // Both halves, because the set OnFlip accepts and the list it shows in
+  // Telegram's own menu are one table for exactly this reason: a command in
+  // one and not the other is either invisible or broken.
+  const parsed = parseIncoming("/provider");
+  assert.equal(parsed.kind, "command");
+  assert.equal(parsed.name, "provider");
+  assert.ok(COMMAND_MENU.some((c) => c.name === "provider"));
+});
+
+test("/provider@thebot works in a group, like every other command", { skip: needsBuild }, () => {
+  const { parseIncoming } = load();
+  const parsed = parseIncoming("/provider@onflip_bot");
+  assert.equal(parsed.kind, "command");
+  assert.equal(parsed.name, "provider");
+});
+
+test("every advertised command is one the bot will actually accept", { skip: needsBuild }, () => {
+  const { parseIncoming, COMMAND_MENU } = load();
+  // The guard on the table above, now that it has grown a member.
+  for (const entry of COMMAND_MENU) {
+    const parsed = parseIncoming("/" + entry.name);
+    assert.equal(parsed.kind, "command", `/${entry.name} advertised but not accepted`);
+    assert.equal(parsed.name, entry.name);
+  }
+});
+
+test("Telegram's own limits on a command entry are respected", { skip: needsBuild }, () => {
+  const { COMMAND_MENU } = load();
+  // Lowercase, at most 32 characters, description 3 to 256 — setMyCommands
+  // rejects the whole list otherwise, which would leave the bot with no menu
+  // at all rather than one missing entry.
+  for (const entry of COMMAND_MENU) {
+    assert.match(entry.name, /^[a-z0-9_]{1,32}$/, entry.name);
+    assert.ok(entry.description.length >= 3 && entry.description.length <= 256, entry.name);
+  }
+});
+
+test("the reasoning picker offers what the service actually has", { skip: needsBuild }, () => {
+  // The same rule the app's composer follows. A control that cannot do
+  // anything is worse than no control: on Qwen there is nothing on the page
+  // to drive, and on DeepSeek a dial of four would be four buttons for a
+  // two-state toggle, two of which do the same thing.
+  const { thinkingChoices } = load();
+
+  assert.equal(thinkingChoices("qwen"), null, "Qwen decides for itself");
+
+  const deepseek = thinkingChoices("deepseek");
+  assert.deepEqual(deepseek.map((c) => c.value), ["off", "high"]);
+
+  const chatgpt = thinkingChoices("chatgpt");
+  assert.deepEqual(chatgpt.map((c) => c.value), ["default", "low", "medium", "high"]);
+
+  // An unknown or missing provider gets the full dial rather than nothing:
+  // an older engine that does not report one is running ChatGPT.
+  assert.deepEqual(thinkingChoices(undefined), chatgpt);
+});

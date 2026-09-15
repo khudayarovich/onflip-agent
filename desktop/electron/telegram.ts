@@ -16,11 +16,13 @@ import {
 import {
   CallbackTable,
   COMMAND_MENU,
+  thinkingChoices,
   isAllowed,
   parseAllowList,
   parseIncoming,
 } from "../shared/telegram-commands";
 import { arrivalPrompt, inboxTarget, TELEGRAM_DOWNLOAD_MAX } from "../shared/inbox";
+import { serviceLabel } from "../shared/providers";
 import type { ApprovalMode } from "../shared/protocol";
 
 /**
@@ -75,6 +77,15 @@ export interface BotHost {
   changed(): void;
   /** Answer a permission prompt the app is waiting on. False if it is gone. */
   answerApproval(id: number, decision: { allow: boolean; remember?: boolean; abort?: boolean }): boolean;
+  /** Which services this install can drive, and which one is running. */
+  providers(): { id: string; label: string; all: { id: string; label: string }[] };
+  /**
+   * Switch service.
+   *
+   * Restarts the app, so nothing queued after this is delivered - the
+   * caller says what it has to say first.
+   */
+  switchProvider(id: string): Promise<{ ok: boolean; reason?: string }>;
 }
 
 let settings: TelegramSettings = { enabled: false, token: "", allowedIds: "" };
@@ -655,12 +666,23 @@ function rows(
   return { inline_keyboard: keyboard };
 }
 
-const THINKING = [
-  { label: "Default", value: "default" },
-  { label: "Low", value: "low" },
-  { label: "Medium", value: "medium" },
-  { label: "High", value: "high" },
-];
+
+/** The picker, or the honest sentence when there is nothing to pick. */
+async function sendThinkingPicker(chatId: number): Promise<void> {
+  const status = host!.status() as { provider?: string };
+  const choices = thinkingChoices(status.provider);
+  if (!choices) {
+    await say(
+      chatId,
+      [
+        "💭 <b>Thinking</b>",
+        `${escapeHtml(serviceLabel(status.provider) ?? "This service")} decides for itself when a question needs thinking about, so there is nothing to set here.`,
+      ].join("\n")
+    );
+    return;
+  }
+  await say(chatId, "💭 <b>Thinking</b>\nHow hard should it reason?", rows("thinking", choices));
+}
 
 /**
  * The approval modes, spelled exactly as the engine names them.
@@ -696,6 +718,44 @@ async function sendModelPicker(chatId: number): Promise<void> {
   );
 }
 
+/**
+ * The service picker, and the warning that belongs with it.
+ *
+ * Switching restarts OnFlip, which from a phone is a different matter
+ * than from the machine: the bot stops answering for a few seconds and
+ * anything running is lost. Somebody at the keyboard sees the window go;
+ * somebody in a chat sees nothing at all unless it is said here. So it is
+ * said here, before the button rather than after it.
+ *
+ * The running service is shown with a tick and has no button of its own -
+ * pressing it would restart the app to arrive where it already is.
+ */
+async function sendProviderPicker(chatId: number): Promise<void> {
+  const p = host!.providers();
+  const others = p.all.filter((x) => x.id !== p.id);
+  if (!others.length) {
+    await say(
+      chatId,
+      [
+        "🔌 <b>Service</b>",
+        `OnFlip is on <b>${escapeHtml(p.label)}</b>, and there is nothing else to switch to.`,
+      ].join("\n")
+    );
+    return;
+  }
+  await say(
+    chatId,
+    [
+      "🔌 <b>Service</b>",
+      `Now on <b>${escapeHtml(p.label)}</b> ✓`,
+      "",
+      "Each service keeps its own sign-in, chats and settings — nothing carries across.",
+      "<i>Switching restarts OnFlip: this bot goes quiet for a few seconds, and any turn now running is lost.</i>",
+    ].join("\n"),
+    rows("provider", others.map((x) => ({ label: x.label, value: x.id })), 2)
+  );
+}
+
 async function sendFolderPicker(chatId: number): Promise<void> {
   let projects: { cwd: string; exists?: boolean }[] = [];
   try {
@@ -728,6 +788,9 @@ async function sendSettings(chatId: number): Promise<void> {
         [
           { text: "🛡 Access", callback_data: tickets.put("open", "access") },
           { text: "📁 Project", callback_data: tickets.put("open", "folder") },
+        ],
+        [
+          { text: "🔌 Service", callback_data: tickets.put("open", "provider") },
         ],
         [{ text: "＋ New chat", callback_data: tickets.put("new", "") }],
       ],
@@ -803,8 +866,11 @@ async function handleMessage(chatId: number, userId: number | undefined, text: s
     case "model":
       await sendModelPicker(chatId);
       break;
+    case "provider":
+      await sendProviderPicker(chatId);
+      break;
     case "thinking":
-      await say(chatId, "💭 <b>Thinking</b>\nHow hard should it reason?", rows("thinking", THINKING));
+      await sendThinkingPicker(chatId);
       break;
     case "access":
       await say(
@@ -888,15 +954,34 @@ async function handleCallback(
       case "open":
         await answer();
         if (decoded.value === "model") await sendModelPicker(chatId);
-        else if (decoded.value === "thinking")
-          await say(chatId, "💭 <b>Thinking</b>", rows("thinking", THINKING));
+        else if (decoded.value === "thinking") await sendThinkingPicker(chatId);
         else if (decoded.value === "access")
           await say(chatId, "🛡 <b>Access</b>", rows("access", ACCESS, 2));
         else if (decoded.value === "folder") await sendFolderPicker(chatId);
+        else if (decoded.value === "provider") await sendProviderPicker(chatId);
         return;
       case "model":
         await host!.call("setModel", { slug: decoded.value });
         break;
+      case "provider": {
+        // Everything is said BEFORE the switch, because the switch ends
+        // this process: a message queued after it is a message that never
+        // arrives, and the person is left watching a bot that stopped
+        // answering for no stated reason.
+        const label =
+          host!.providers().all.find((x) => x.id === decoded.value)?.label ?? decoded.value;
+        await answer("Switching…");
+        await say(
+          chatId,
+          `🔌 Switching to <b>${escapeHtml(label)}</b> — OnFlip is restarting. ` +
+            "Send /status in a few seconds to see it come back."
+        );
+        const done = await host!.switchProvider(decoded.value);
+        if (!done.ok) {
+          await say(chatId, `⚠️ ${escapeHtml(done.reason ?? "That did not work.")}`);
+        }
+        return;
+      }
       case "thinking":
         await host!.call("setThinking", {
           level: decoded.value === "default" ? null : decoded.value,

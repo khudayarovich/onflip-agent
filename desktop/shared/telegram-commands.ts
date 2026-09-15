@@ -50,6 +50,7 @@ export type CommandName =
   | "new"
   | "folder"
   | "model"
+  | "provider"
   | "thinking"
   | "access"
   | "settings"
@@ -82,6 +83,11 @@ export const COMMAND_MENU: { name: CommandName; description: string }[] = [
   { name: "new", description: "Start a fresh chat with no folder" },
   { name: "folder", description: "Open a project folder, or pick one" },
   { name: "model", description: "Choose the model" },
+  // Named "service" for the person and "provider" for the code, which is the
+  // word the config, the engine and the account menu all use. Renaming either
+  // to match the other would be worse: "provider" means nothing to someone
+  // holding a phone, and the code would then have two names for one idea.
+  { name: "provider", description: "Switch service — ChatGPT, DeepSeek or Qwen" },
   { name: "thinking", description: "How hard it should reason" },
   { name: "access", description: "What it may do without asking" },
   { name: "stop", description: "Stop the turn that is running" },
@@ -162,4 +168,41 @@ export class CallbackTable {
     this.values.clear();
     this.next = 0;
   }
+}
+
+/**
+ * The reasoning levels, per service.
+ *
+ * Here rather than beside the bot's network code for the reason the rest of
+ * this module is here: it is a decision, it is worth testing, and it needs
+ * no socket to make.
+ */
+const THINKING = [
+  { label: "Default", value: "default" },
+  { label: "Low", value: "low" },
+  { label: "Medium", value: "medium" },
+  { label: "High", value: "high" },
+];
+
+/** DeepSeek has a switch, not a dial: one DeepThink toggle beside its composer. */
+export const DEEPSEEK_THINKING = [
+  { label: "Off", value: "off" },
+  { label: "Deep thinking", value: "high" },
+];
+
+/**
+ * What the reasoning control can offer on the service that is running.
+ *
+ * Null where there is nothing for it to drive. Qwen decides for itself
+ * whether a question is worth thinking about and puts no control on its
+ * page, so four levels there would be four buttons that do nothing — the
+ * same reason the app's own composer hides the chip on Qwen.
+ *
+ * DeepSeek has a toggle rather than a dial, and offering Low, Medium and
+ * High for a two-state control is three buttons where two are the same one.
+ */
+export function thinkingChoices(provider: string | undefined): { label: string; value: string }[] | null {
+  if (provider === "qwen") return null;
+  if (provider === "deepseek") return DEEPSEEK_THINKING;
+  return THINKING;
 }

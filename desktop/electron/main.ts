@@ -1062,6 +1062,36 @@ function pushDeliverable(ws: Workspace): void {
     .catch(() => {});
 }
 
+/**
+ * Change which service OnFlip drives, from wherever the ask came from.
+ *
+ * Shared by the account menu and the Telegram bot rather than written
+ * twice. The window's copy and the bot's copy of a restart sequence would
+ * drift, and the half that drifted would be the one nobody was watching.
+ *
+ * Every engine stops BEFORE the config flips. A switch mid-turn used to
+ * leave the old provider's engine running against a config that already
+ * named the new one, and its last writes filed the session and account into
+ * the wrong service's room. If a caller races a restart into the gap, that
+ * engine is env-pinned to the old provider and files correctly until the
+ * relaunch takes everything down.
+ *
+ * Nothing after the relaunch runs, so a caller that owes somebody a reply
+ * has to send it before calling this.
+ */
+async function switchProvider(id: unknown): Promise<{ ok: boolean; id?: string; reason?: string }> {
+  if (!isProviderId(id)) return { ok: false, reason: "Unknown provider." };
+  if (id === activeProvider()) return { ok: false, reason: "Already on that provider." };
+  await Promise.all([...workspaces.values()].map((ws) => stopEngine(ws).catch(() => {})));
+  saveConfig({ provider: id });
+  // After this call has returned, so nobody is waiting on a reply from a
+  // process that is exiting.
+  setTimeout(() => {
+    app.relaunch();
+    app.exit(0);
+  }, 250);
+  return { ok: true, id };
+}
 function registerIpc(): void {
 
   ipcMain.handle("engine-call", async (e, payload: { method: string; params?: unknown }) => {
@@ -1432,26 +1462,9 @@ function registerIpc(): void {
     all: PROVIDER_IDS.map((id) => ({ id, label: providerLabel(id) })),
   }));
 
-  ipcMain.handle("provider-set", async (_e, payload: { id?: string }) => {
-    const id = payload?.id;
-    if (!isProviderId(id)) return { ok: false, reason: "Unknown provider." };
-    if (id === activeProvider()) return { ok: false, reason: "Already on that provider." };
-    // Every engine stops BEFORE the config flips. A switch mid-turn used to
-    // leave the old provider's engine running against a config that already
-    // named the new one, and its last writes filed the session and account
-    // into the wrong service's room. If the renderer races a restart into
-    // the gap, that engine is env-pinned to the old provider and files
-    // correctly until the relaunch takes everything down.
-    await Promise.all([...workspaces.values()].map((ws) => stopEngine(ws).catch(() => {})));
-    saveConfig({ provider: id });
-    // Relaunch after this call has returned, so the renderer is not waiting on
-    // a reply from a process that is exiting.
-    setTimeout(() => {
-      app.relaunch();
-      app.exit(0);
-    }, 250);
-    return { ok: true, id };
-  });
+  ipcMain.handle("provider-set", async (_e, payload: { id?: string }) =>
+    switchProvider(payload?.id)
+  );
 
   ipcMain.handle("set-theme", (_e, payload: { theme: "dark" | "light" }) => {
     nativeTheme.themeSource = payload.theme;
@@ -1777,6 +1790,15 @@ if (!singleInstance) {
           pushDeliverable(ws);
         }
       },
+      providers: () => ({
+        id: activeProvider(),
+        label: providerLabel(),
+        all: PROVIDER_IDS.map((id) => ({ id, label: providerLabel(id) })),
+      }),
+      // The same function the account menu calls. One restart sequence, two
+      // ways to reach it — the copy that drifted would be the bot's, which
+      // is the one nobody is watching.
+      switchProvider: (id) => switchProvider(id),
       answerApproval: (id, decision) => {
         const waiter = approvalWaiters.get(id);
         if (!waiter) return false;
