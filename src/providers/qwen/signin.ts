@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { checkSignedIn, closeBrowser } from "./browser";
@@ -111,38 +112,53 @@ async function closeWindowGracefully(): Promise<void> {
 }
 
 /**
- * Is there a `token` holding a JWT in the profile on disk?
+ * Every token record the profile holds on disk, as fingerprints.
  *
- * A record written in the last few minutes sits uncompressed in the Local
- * Storage LevelDB `.log`, so a byte scan of a *copy* answers without opening
- * the profile — an accelerator that lets the window close itself the moment
- * the session lands, rather than leaving someone who has finished waiting
- * for a button.
+ * This used to answer a much worse question — *is there a token?* — and the
+ * assumption written beside it, that a signed-out profile has no such
+ * record, is false. Qwen leaves an expired token in localStorage at full
+ * length and correct shape. So on any profile whose session had lapsed the
+ * answer was yes the instant the window opened, the sign-in window closed
+ * itself about two seconds later, and the flow then read that same stale
+ * token, found it well-formed and reported a successful sign-in.
  *
- * Qwen's key is the single word `token`, which is far too common a string to
- * scan for on its own: the page's own analytics blob is 190KB of JSON in the
- * same database and full of the word. So the match is framed — Chrome writes
- * a localStorage record as the origin, a 0x01 separator, then the key — and
- * the value has to look like the JWT this key holds. A false positive here
- * would close the window on somebody mid-password, which is why it is framed
- * rather than merely narrowed.
+ * What the person saw: Chrome opening and closing before they could type,
+ * an app that claimed to be signed in, a message that went nowhere, and a
+ * sign-in prompt again. Round and round. Verified against a real lapsed
+ * profile rather than reasoned about - the scan matched at offset 4710 of
+ * 000004.log with nobody having signed in at all.
  *
- * A negative means nothing either way: compaction moves older records into
- * compressed blocks a plain scan cannot see. Only the sign-in flow, where
- * the write is seconds old, may ask — and the profile is still opened and
- * asked properly afterwards.
+ * The question that is actually worth asking is whether a token has
+ * APPEARED, which needs the set from before the window opened. A set, not
+ * one value: the log is append-only, so an old record and a new one sit in
+ * it together and the first match may still be the stale one.
+ *
+ * Fingerprints rather than the values themselves. Nothing here needs the
+ * token, and a credential held in a variable for no reason is a credential
+ * that can be logged by accident.
+ *
+ * Qwen's key is the single word `token`, far too common to scan for alone -
+ * the page's own analytics blob is 190KB of JSON in the same database. So
+ * the match is framed: Chrome writes a localStorage record as the origin, a
+ * 0x01 separator, then the key, and the value has to look like a JWT.
+ *
+ * An empty set means nothing either way: compaction moves older records
+ * into compressed blocks a plain scan cannot see. Only the sign-in flow,
+ * where the write is seconds old, may ask - and the profile is still opened
+ * and asked properly afterwards.
  */
-function tokenOnDisk(dir: string): boolean {
+function tokenPrints(dir: string): Set<string> {
+  const out = new Set<string>();
   const root = path.join(dir, "Default", "Local Storage", "leveldb");
   let files: string[];
   try {
     files = fs.readdirSync(root);
   } catch {
-    return false;
+    return out;
   }
   // 0x01 is the separator Chrome writes between the origin and the key.
   const key = Buffer.concat([Buffer.from([1]), Buffer.from(TOKEN_KEY)]);
-  // Every JWT header begins `{"` , which base64url encodes to `eyJ`.
+  // Every JWT header begins `{"`, which base64url encodes to `eyJ`.
   const jwt = Buffer.from("eyJ");
   for (const f of files) {
     if (!/\.log$/i.test(f)) continue;
@@ -158,15 +174,48 @@ function tokenOnDisk(dir: string): boolean {
     }
     let at = -1;
     while ((at = buf.indexOf(key, at + 1)) !== -1) {
-      // The value follows the key within a few framing bytes. A signed-out
-      // profile has no such record at all, and a cleared one holds an empty
-      // value, neither of which matches.
-      if (buf.subarray(at + key.length, at + key.length + 12).indexOf(jwt) !== -1) return true;
+      const after = buf.subarray(at + key.length, at + key.length + 12);
+      const lead = after.indexOf(jwt);
+      if (lead === -1) continue;
+      // Enough of the value to tell two tokens apart, hashed so the token
+      // itself is never carried around.
+      const value = buf.subarray(at + key.length + lead, at + key.length + lead + 160);
+      out.add(createHash("sha256").update(value).digest("hex").slice(0, 16));
     }
   }
+  return out;
+}
+
+/** A token this profile did not have before the window opened. */
+export function hasNewToken(before: Set<string>, now: Set<string>): boolean {
+  for (const print of now) if (!before.has(print)) return true;
   return false;
 }
 
+/**
+ * Did a sign-in actually happen?
+ *
+ * `pageSaysSignedIn` is the profile holding a well-formed token, and a
+ * lapsed Qwen session leaves exactly that behind - so on its own it comes
+ * back true for somebody who cancelled, closed the window, or failed at
+ * the password. That is the second door into the sign-in loop, and it is
+ * not closed by fixing the accelerator alone.
+ *
+ * Narrow on purpose. It refuses only when the profile ALREADY held a token
+ * and no new one arrived, which is the one case that cannot be a sign-in.
+ * A profile that held none is left to the page check, so a genuine first
+ * sign-in still succeeds even if compaction hides the write from the byte
+ * scan - being wrong in that direction would break signing in altogether,
+ * which is worse than the loop this exists to stop.
+ */
+export function isRealSignIn(opts: {
+  pageSaysSignedIn: boolean;
+  hadTokenBefore: boolean;
+  newTokenAppeared: boolean;
+}): boolean {
+  if (!opts.pageSaysSignedIn) return false;
+  return opts.newTokenAppeared || !opts.hadTokenBefore;
+}
 export async function signInWithRealBrowser(
   onProgress?: (state: SignInProgress) => void
 ): Promise<QwenSignInResult> {
@@ -214,6 +263,11 @@ export async function signInWithRealBrowser(
     };
   }
   child = started;
+  // What the profile held BEFORE anybody signed in. Everything below asks
+  // whether a token has appeared, not whether one exists - the difference
+  // between the two is the sign-in loop this flow used to produce on any
+  // profile whose session had lapsed.
+  const printsBefore = tokenPrints(dir);
   const startedAt = Date.now();
   logger.info("qwen", "sign-in window opened", { channel: pick.channel });
   onProgress?.("waiting");
@@ -242,7 +296,7 @@ export async function signInWithRealBrowser(
       const step = await Promise.race([exited, finished, tick()]);
       if (step !== "tick") return step;
       if (Date.now() > deadline) return "timeout";
-      if (tokenOnDisk(dir)) return "token";
+      if (hasNewToken(printsBefore, tokenPrints(dir))) return "token";
     }
   })();
   declareFinished = null;
@@ -264,18 +318,56 @@ export async function signInWithRealBrowser(
 
   onProgress?.("verifying");
   await new Promise((r) => setTimeout(r, 1_500));
+  const fresh = hasNewToken(printsBefore, tokenPrints(dir));
   const check = await checkSignedIn({ tries: 5 });
   await closeBrowser();
-  if (check.signedIn) {
-    logger.info("qwen", "signed in", { account: check.account ?? "unknown" });
+
+  // The second door into the same loop, and the one the accelerator fix alone
+  // would have left open.
+  //
+  // `checkSignedIn` asks whether the profile holds a well-formed token, and a
+  // lapsed Qwen session leaves exactly that behind. So closing the sign-in
+  // window without signing in — or cancelling, or signing in and failing —
+  // still came back "signed in", on the strength of the token that was there
+  // when the window opened. The next message went to a guest chat and the
+  // sign-in prompt came round again.
+  //
+  // The rule is narrow on purpose. It refuses only when the profile ALREADY
+  // held a token and no new one arrived, which is the case that cannot be a
+  // sign-in. A profile that had none is left to the check, so a genuine first
+  // sign-in still succeeds even if the write is hidden from the byte scan by
+  // compaction — being wrong in that direction would break signing in
+  // altogether, which is worse than the loop this is fixing.
+  const real = isRealSignIn({
+    pageSaysSignedIn: check.signedIn,
+    hadTokenBefore: printsBefore.size > 0,
+    newTokenAppeared: fresh,
+  });
+  if (real) {
+    logger.info("qwen", "signed in", { account: check.account ?? "unknown", fresh });
     return { ok: true, account: check.account };
+  }
+  if (check.signedIn && !real) {
+    logger.warn("qwen", "the profile holds only the token it already had; not treating this as a sign-in", {
+      had: printsBefore.size,
+    });
+    return {
+      ok: false,
+      reason:
+        "The window closed without a new Qwen session — the one already in the profile has expired. Open the sign-in again and complete it, then use the button in OnFlip to finish.",
+    };
   }
   // The page check and the profile disagree: the token is on disk but the
   // driven page did not show it. The disk is the direct evidence — believe
   // it, and let the account name fall back to "Qwen account" — but log the
   // disagreement loudly.
-  if (tokenOnDisk(dir)) {
-    logger.warn("qwen", "the page check saw no session but the profile holds a token; believing the profile", {
+  if (hasNewToken(printsBefore, tokenPrints(dir))) {
+    // A token that was not there before, and a page check that could not
+    // see it. The disk is the direct evidence of a sign-in having
+    // happened, so it is believed - but only because it is NEW. Believing
+    // a token that was already there is what reported a successful
+    // sign-in to somebody who never got the chance to type one.
+    logger.warn("qwen", "the page check saw no session but a new token reached the profile; believing the disk", {
       pageError: check.error ?? null,
     });
     return { ok: true };
