@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { spawn, ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { checkSignedIn, closeBrowser } from "./browser";
@@ -18,13 +19,19 @@ import { mkdirPrivate } from "../../config";
  * is embedded or driven — so the sign-in happens with no driver attached and
  * the profile is opened afterwards.
  *
- * This is the simplest of the three sign-ins, and the reason is worth
- * stating. Qwen's had to scan a LevelDB for token fingerprints because its
- * session is a string in localStorage that a lapsed profile also has, at
- * full length and correct shape — so "is there a token" could not tell a
- * sign-in from a stale one. Arena's session is a cookie, and the cookie a
- * visitor gets *disappears* when an account arrives. Asking the jar is both
- * cheaper and more honest, and it is what `checkSignedIn` already does.
+ * This was written believing it would be the simplest of the three sign-ins.
+ * Qwen's has to fingerprint a LevelDB because its session is a string that a
+ * lapsed profile also holds, at full length and correct shape; Arena's is a
+ * cookie, and a cookie is either in the jar or it is not. So this asked the
+ * jar — and it shipped, and it closed the window while Google was still
+ * asking for a password.
+ *
+ * A cookie is not simpler. The account cookie's NAME is written on the way
+ * INTO a sign-in, and the file keeps the bytes of records it has deleted, so
+ * "is it there" answers yes before anybody has signed in, and yes again on a
+ * profile where an attempt once failed. The honest question turns out to be
+ * Qwen's question — has a session APPEARED, and has it stopped changing —
+ * and the cost of learning that a second time is `authCookiePrints` below.
  */
 
 let child: ChildProcess | null = null;
@@ -107,46 +114,140 @@ async function closeWindowGracefully(): Promise<void> {
 }
 
 /**
- * Has an account's cookie reached the profile on disk yet?
+ * A finished session, told apart from a sign-in still in progress.
  *
- * Read while the browser still holds the file, which is the whole point.
- * On macOS closing a window does not quit the application, so waiting for
- * the process to exit means waiting for somebody to find the button in
- * OnFlip — and clicking Sign in again instead spawns a second browser onto
- * the same profile. Reported exactly that way: a fresh browser every time
- * and no account at the end of it.
+ * Every cookie Arena's auth uses starts `arena-auth-prod-v`, which is why
+ * matching the prefix was not enough — and why this file shipped a window
+ * that closed itself while Google was still asking for a password. Watched
+ * on a live sign-in, in order:
  *
- * Chromium stores cookies in a SQLite file whose *values* are encrypted and
- * whose *names* are not, so the name is findable by scanning the bytes. No
- * parsing, no sqlite binding, and nothing decrypted — the question is only
- * whether a cookie by this name exists, and the profile is opened and asked
- * properly afterwards regardless.
+ *   Log In pressed              arena-auth-prod-v1
+ *   Continue with Google        arena-auth-prod-v1-code-verifier
+ *   ...then nothing at all, for as long as the person takes to type...
+ *   the session lands           arena-auth-prod-v1.0, arena-auth-prod-v1.1
  *
- * Copied first because the running browser holds the original open, which is
- * the same move Qwen's sign-in makes on its LevelDB for the same reason.
+ * The first two are a sign-in beginning, and they sit perfectly still while
+ * somebody is at Google's password box — so any rule about a cookie merely
+ * appearing and holding still fires with the person mid-sign-in.
  *
- * A false negative costs nothing: the flow simply waits, as it did before.
+ * The chunk suffix is the real signal. Supabase splits a cookie it cannot
+ * fit in one, and only a genuine session JWT is that big; the pending marker
+ * and the verifier never are. So `.0`/`.1` means an account arrived, and
+ * that is what this matches.
  */
-function accountCookieOnDisk(dir: string): boolean {
-  const candidates = [
+const SESSION_COOKIE = /^arena-auth-prod-v\d+\.\d+/;
+
+/**
+ * Where a finished session sits in a cookie file, and under what name.
+ *
+ * Chrome leaves no delimiter after a cookie's name — the encrypted value
+ * follows immediately, with its own `v10` marker — so this reads a short
+ * window and anchors the match at the start rather than trying to work out
+ * where the name ends.
+ */
+function scanSessions(buf: Buffer): { at: number; name: string }[] {
+  const found: { at: number; name: string }[] = [];
+  const needle = Buffer.from("arena-auth-prod-v");
+  let at = -1;
+  while ((at = buf.indexOf(needle, at + 1)) !== -1) {
+    const m = SESSION_COOKIE.exec(buf.subarray(at, at + 32).toString("latin1"));
+    if (m) found.push({ at, name: m[0] });
+  }
+  return found;
+}
+
+/**
+ * The session cookies in a stretch of file, by name.
+ *
+ * Exported for the tests, which hold the rule against the byte shapes a real
+ * profile produces — the in-flight cookies included, since telling those
+ * apart is the whole job.
+ */
+export function authCookieNames(buf: Buffer): string[] {
+  return scanSessions(buf).map((s) => s.name);
+}
+
+/**
+ * Every finished-session record the profile holds on disk, as fingerprints.
+ *
+ * Fingerprints and not values: nothing here needs the cookie, and a
+ * credential held in a variable for no reason is one that gets logged by
+ * accident — they are encrypted at rest in any case.
+ *
+ * A set rather than one value, because a SQLite file keeps the bytes of rows
+ * it has deleted. A profile that has been through one failed attempt still
+ * carries the old names, so the question can never be "is one there" — only
+ * "has one appeared", which needs the set from before the window opened.
+ */
+export function authCookiePrints(dir: string): Set<string> {
+  const out = new Set<string>();
+  const needle = Buffer.from("arena-auth-prod-v");
+  for (const file of [
     path.join(dir, "Default", "Network", "Cookies"),
     path.join(dir, "Default", "Cookies"),
-  ];
-  const needle = Buffer.from("arena-auth-prod-v");
-  for (const file of candidates) {
+  ]) {
     const tmp = path.join(os.tmpdir(), `onflip-arena-signin-${process.pid}-${Date.now()}`);
+    let buf: Buffer;
     try {
       fs.copyFileSync(file, tmp);
-      const found = fs.readFileSync(tmp).includes(needle);
-      if (found) return true;
+      buf = fs.readFileSync(tmp);
     } catch {
-      // Not there, or held in a way that refuses a copy; the next poll asks
-      // again and the proper check runs at the end either way.
+      continue; // not there, or held in a way that refuses a copy
     } finally {
       fs.rmSync(tmp, { force: true });
     }
+    for (const { at } of scanSessions(buf)) {
+      // Enough of what follows to tell two sessions apart.
+      out.add(
+        createHash("sha256").update(buf.subarray(at, at + 220)).digest("hex").slice(0, 16)
+      );
+    }
   }
+  return out;
+}
+
+/** A session this profile did not have before the window opened. */
+export function hasNewAccount(before: Set<string>, now: Set<string>): boolean {
+  for (const print of now) if (!before.has(print)) return true;
   return false;
+}
+
+/**
+ * How long a new record must stand before the window is closed on it.
+ *
+ * A chunked session is not one write. `arena-auth-prod-v1.0` and `v1.1` are
+ * two halves of one JWT, landing one after the other, and a window closed
+ * between them takes half a session with it — which would read afterwards as
+ * "signed in" to the cookie check and fail on the first turn.
+ *
+ * Five seconds is far longer than the gap between two chunk writes and far
+ * shorter than anybody's patience. It is deliberately not the number that
+ * guards against closing mid-sign-in: no amount of waiting does that, since
+ * a person at a password box can take minutes, and `SESSION_COOKIE` is what
+ * keeps the in-flight cookies from starting this clock at all.
+ */
+const SETTLE_MS = 5_000;
+
+/**
+ * Is this new session finished being written?
+ *
+ * Pure so the rule can be held against a sequence of readings without a
+ * browser: something new has appeared, it has stopped changing, and enough
+ * time has passed for the round trip to have completed.
+ */
+export function newAccountSettled(
+  firstSeenAt: number,
+  lastPrints: Set<string>,
+  nowPrints: Set<string>,
+  now: number,
+  settleMs: number = SETTLE_MS
+): boolean {
+  if (!firstSeenAt) return false;
+  if (now - firstSeenAt < settleMs) return false;
+  // Still moving means still signing in.
+  if (lastPrints.size !== nowPrints.size) return false;
+  for (const print of nowPrints) if (!lastPrints.has(print)) return false;
+  return true;
 }
 
 export async function signInWithRealBrowser(
@@ -194,6 +295,11 @@ export async function signInWithRealBrowser(
     };
   }
   child = started;
+  // What the profile held BEFORE anybody signed in. Everything below asks
+  // whether a session has appeared, not whether one exists — the difference
+  // between the two is a window closed while Google was still asking for a
+  // password.
+  const printsBefore = authCookiePrints(dir);
   const startedAt = Date.now();
   // The profile is logged because "the sign-in did not stick" and "a
   // different provider's sign-in ran" look identical from outside, and the
@@ -223,6 +329,9 @@ export async function signInWithRealBrowser(
   });
 
   const deadline = Date.now() + DEADLINE_MS;
+  /** When a record this profile did not have was first noticed. */
+  let newSeenAt = 0;
+  let lastPrints = printsBefore;
   const outcome = await (async (): Promise<"closed" | "finished" | "timeout"> => {
     const tick = () => new Promise<"tick">((r) => setTimeout(() => r("tick"), 2_000));
     for (;;) {
@@ -232,10 +341,19 @@ export async function signInWithRealBrowser(
       // The session reaching the profile is the thing being waited for, so
       // it ends the wait — rather than the window closing, which on macOS
       // is not an event that happens.
-      if (accountCookieOnDisk(dir)) {
-        logger.info("arena", "the account reached the profile; closing the sign-in window");
-        return "finished";
+      const prints = authCookiePrints(dir);
+      if (hasNewAccount(printsBefore, prints)) {
+        if (!newSeenAt) {
+          newSeenAt = Date.now();
+          logger.info("arena", "a session is being written to the profile; waiting for it to settle");
+        } else if (newAccountSettled(newSeenAt, lastPrints, prints, Date.now())) {
+          logger.info("arena", "the account reached the profile; closing the sign-in window");
+          return "finished";
+        }
+      } else {
+        newSeenAt = 0;
       }
+      lastPrints = prints;
     }
   })();
   declareFinished = null;
@@ -256,9 +374,10 @@ export async function signInWithRealBrowser(
 
   onProgress?.("verifying");
   await new Promise((r) => setTimeout(r, 1_500));
-  // The jar is the answer, and it is not ambiguous: an account's cookies are
-  // there or they are not. No fingerprinting, no scanning, no guessing at
-  // whether a session that looks present is a session that works.
+  // And the last word is the driver's, not the disk's. The poll above only
+  // decides when to stop waiting; whether there is an account is settled by
+  // opening the profile and asking Arena, which is the one check that can
+  // tell a session that is present from a session that works.
   const check = await checkSignedIn({ tries: 3 });
   await closeBrowser();
 
