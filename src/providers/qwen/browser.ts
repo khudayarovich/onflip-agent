@@ -64,19 +64,66 @@ class QwenError extends Error {
   }
 }
 
-/** Open the chat, turning a lost navigation race into something retryable. */
+/**
+ * Did this navigation failure actually stop us getting there?
+ *
+ * `net::ERR_ABORTED` and "interrupted by another navigation" are the same
+ * event described two ways: something else navigated while this request was
+ * in flight. On a single-page app that something else is usually the app's
+ * own router, which means the page very often arrives — at the address it
+ * chose rather than the one that was asked for, and with the request that
+ * asked reported as failed.
+ *
+ * Reported from a real machine, in the log of a turn that then failed: the
+ * recovery navigated to the chat root, Chromium answered ERR_ABORTED, and
+ * the error travelled up as though the browser had gone nowhere. The
+ * recovery is fired within half a second of a send, which is exactly when
+ * Qwen's own router is moving the page to the new conversation, so this is
+ * not a rare collision — it is the normal case for the one navigation that
+ * matters most.
+ *
+ * So the address is consulted before the failure is believed. The rule
+ * everywhere else in this file, applied to navigation as well: what the page
+ * is actually showing outranks what a call reported about it.
+ */
+export function isNavigationRace(message: string): boolean {
+  return /interrupted by another navigation|ERR_ABORTED/i.test(message);
+}
+
 async function gotoChat(page: Page): Promise<void> {
   try {
     await page.goto(QWEN_CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+    return;
   } catch (e) {
     const message = e instanceof Error ? e.message : String(e);
-    if (/interrupted by another navigation/i.test(message)) {
+    if (!isNavigationRace(message)) throw e;
+
+    // Give the navigation that won the race a moment to settle, then look.
+    await page.waitForTimeout(1_200).catch(() => {});
+    if (isUsableChatUrl(page.url())) {
+      logger.info("qwen", "the navigation reported a race and arrived anyway", {
+        url: page.url(),
+        reported: message.split("\n")[0].slice(0, 120),
+      });
+      return;
+    }
+
+    // It did not arrive, or it arrived somewhere this driver has to leave.
+    // One more attempt, now that whatever was navigating has finished.
+    try {
+      await page.goto(QWEN_CHAT_URL, { waitUntil: "domcontentloaded", timeout: 60_000 });
+      return;
+    } catch (again) {
+      const second = again instanceof Error ? again.message : String(again);
+      if (isNavigationRace(second)) {
+        await page.waitForTimeout(1_200).catch(() => {});
+        if (isUsableChatUrl(page.url())) return;
+      }
       throw new QwenError(
-        `Loading the Qwen chat was interrupted by another navigation. Retrying. (${message})`,
+        `Loading the Qwen chat was interrupted by another navigation. Retrying. (${second})`,
         "send-not-landed"
       );
     }
-    throw e;
   }
 }
 

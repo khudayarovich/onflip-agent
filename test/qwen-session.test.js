@@ -377,3 +377,37 @@ test("the recovery asks before spending its second attempt", () => {
   assert.match(body, /await pageShowsAuthPrompt\(page\)/);
   assert.match(body, /"signed-out"/);
 });
+
+test("an aborted navigation is a race, not a browser that went nowhere", () => {
+  // From a real failure on a user's machine: the recovery navigated to the
+  // chat root, Chromium answered `net::ERR_ABORTED`, and the error rose as
+  // though nothing had loaded. It is the same event as "interrupted by
+  // another navigation" wearing Chromium's wording - something else
+  // navigated mid-flight - and on a single-page app that something else is
+  // usually the app's own router, so the page very often did arrive.
+  //
+  // It matters here more than anywhere because the recovery fires within
+  // half a second of a send, which is precisely when Qwen's router is
+  // moving the page to the new conversation.
+  const { isNavigationRace } = require("../dist/providers/qwen/browser");
+
+  assert.equal(isNavigationRace("page.goto: net::ERR_ABORTED at https://chat.qwen.ai/"), true);
+  assert.equal(isNavigationRace("navigation interrupted by another navigation"), true);
+});
+
+test("and a real navigation failure is still a real one", () => {
+  // Widening this to "any goto failure might be fine" would swallow a DNS
+  // failure, a refused connection and a timeout - each of which means the
+  // page genuinely is not there, and each of which needs to be reported.
+  const { isNavigationRace } = require("../dist/providers/qwen/browser");
+
+  for (const real of [
+    "page.goto: net::ERR_NAME_NOT_RESOLVED at https://chat.qwen.ai/",
+    "page.goto: net::ERR_CONNECTION_REFUSED",
+    "page.goto: Timeout 60000ms exceeded",
+    "page.goto: net::ERR_INTERNET_DISCONNECTED",
+    "Target page, context or browser has been closed",
+  ]) {
+    assert.equal(isNavigationRace(real), false, real);
+  }
+});
