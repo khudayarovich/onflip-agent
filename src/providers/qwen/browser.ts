@@ -133,9 +133,10 @@ export function matchServiceMessage(body: string): { text: string; code: Failure
 
 /** The service's own words, when the page is showing some. */
 async function serviceMessage(page: Page): Promise<{ text: string; code: FailureCode } | null> {
-  const body = (await page
-    .evaluate('(document.body && document.body.innerText) || ""')
-    .catch(() => "")) as string;
+  const body = (await withTimeout(
+    page.evaluate('(document.body && document.body.innerText) || ""'),
+    "reading the page"
+  ).catch(() => "")) as string;
   return matchServiceMessage(body);
 }
 
@@ -186,6 +187,42 @@ export async function closeBrowser(): Promise<void> {
   }
 }
 
+/**
+ * How long any single question to the page may take before it is a failure.
+ *
+ * `page.evaluate` has no timeout of its own and never will — Playwright's
+ * default timeout covers clicks and waits, not script evaluation — so an
+ * evaluate against a renderer that is busy, wedged or gone waits for as long
+ * as the process lives. Three of them sit in the path of every turn: reading
+ * the reply, filling the composer, reading the session.
+ *
+ * That is what a turn stuck on "sending" with nothing in the log looks like
+ * from outside, and it was reported exactly that way. Twenty seconds is far
+ * beyond anything these take when the page is healthy — the reply read is
+ * single-digit milliseconds — so crossing it means something is wrong rather
+ * than slow, and a failure that says so can be retried. Silence cannot.
+ */
+const PAGE_CALL_MS = 20_000;
+
+function withTimeout<T>(work: Promise<T>, what: string, ms = PAGE_CALL_MS): Promise<T> {
+  let timer: NodeJS.Timeout;
+  return Promise.race([
+    work.finally(() => clearTimeout(timer)),
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new QwenError(
+              `Qwen's page stopped answering while ${what} (${Math.round(ms / 1000)}s).`,
+              "send-not-landed"
+            )
+          ),
+        ms
+      );
+    }),
+  ]);
+}
+
 /** The page to work in, on Qwen, created if the context has none. */
 export async function chatPage(opts: OpenOptions = {}): Promise<Page> {
   const ctx = await openBrowser(opts);
@@ -198,12 +235,15 @@ export async function chatPage(opts: OpenOptions = {}): Promise<Page> {
 
 /** Read the session out of a page's localStorage. */
 export async function readStorage(page: Page): Promise<Record<string, string | null>> {
-  return page.evaluate(
+  return withTimeout(
+    page.evaluate(
     ([tokenKey, roleKey]) => ({
       [tokenKey]: localStorage.getItem(tokenKey),
       [roleKey]: localStorage.getItem(roleKey),
     }),
-    [TOKEN_KEY, ROLE_KEY]
+      [TOKEN_KEY, ROLE_KEY]
+    ),
+    "reading the session"
   );
 }
 
@@ -407,7 +447,9 @@ const STUCK_STOP_MS = 60_000;
 
 /** The last assistant reply, whether one is being written, and how many exist. */
 async function readLast(page: Page): Promise<{ text: string; count: number; generating: boolean }> {
-  const nodes = (await page.evaluate(EXTRACT_REPLY_SCRIPT).catch(() => null)) as unknown;
+  const nodes = (await withTimeout(page.evaluate(EXTRACT_REPLY_SCRIPT), "reading the reply").catch(
+    () => null
+  )) as unknown;
   const count = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
   const generating = await page
     .$$eval(STOP_BUTTON, (els) => els.length > 0)
@@ -450,6 +492,10 @@ export async function sendTurn(
   } = {}
 ): Promise<SendResult> {
   const started = Date.now();
+  // Bracketing the setup, because a turn that hangs before the first poll
+  // used to leave nothing at all in the log between the user's message and
+  // silence - which is what made a stuck send impossible to place.
+  logger.info("qwen", "turn: opening the page", { chars: text.length });
   let page = await chatPage(opts);
   if (pendingNewChat) {
     pendingNewChat = false;
@@ -483,7 +529,7 @@ export async function sendTurn(
       el.dispatchEvent(new Event("input", { bubbles: true }));
       return el.value.length;
     })()`;
-    const accepted = (await page.evaluate(fill)) as number;
+    const accepted = (await withTimeout(page.evaluate(fill), "filling the composer")) as number;
     if (accepted < 0) {
       throw new QwenError("Qwen's composer was not on the page.", "composer-refused");
     }
@@ -558,7 +604,11 @@ export async function sendTurn(
   };
 
   await submit();
+  logger.info("qwen", "turn: sent, waiting for the reply", { setupMs: Date.now() - started });
+
   const deadline = Date.now() + (opts.timeoutMs ?? 10 * 60_000);
+  /** A line every half minute, so a long wait is legible rather than silent. */
+  let lastBeat = Date.now();
   let last: string | null = null;
   let quiet = 0;
   let recovered = false;
@@ -578,6 +628,15 @@ export async function sendTurn(
       }
       await page.waitForTimeout(POLL_MS);
       const now = await readLast(page);
+      if (Date.now() - lastBeat > 30_000) {
+        lastBeat = Date.now();
+        logger.info("qwen", "turn: still waiting", {
+          seconds: Math.round((Date.now() - started) / 1000),
+          generating: now.generating,
+          replyChars: now.text.length,
+          url: page.url(),
+        });
+      }
       if (now.generating) {
         sawGenerating = true;
         // Working, therefore not silent. The silence window exists to catch

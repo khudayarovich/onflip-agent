@@ -1337,11 +1337,30 @@ function restart(): void {
       // The Menu button in the chat is Telegram's, and it is empty until the
       // bot tells Telegram what it answers to. Best-effort: a bot that could
       // not publish its menu still works, it is just harder to discover.
+      // Published on every connect, so an upgrade that adds a command puts it
+      // in Telegram's Menu button without anyone doing anything.
+      //
+      // A failure used to go to a console that a packaged app does not show,
+      // which made "the menu is missing a command" indistinguishable from
+      // "Telegram rejected the whole list". It is on the settings card now:
+      // setMyCommands is all-or-nothing, so one bad entry costs the entire
+      // menu, and that is worth seeing rather than deducing.
+      //
+      // Telegram's own clients cache the list, so a newly added command can
+      // take a few minutes or a reopened chat to appear even when this
+      // succeeded. /help is written from the same table and is immediate.
       void api("setMyCommands", {
         commands: COMMAND_MENU.map((c) => ({ command: c.name, description: c.description })),
-      }).catch((e) =>
-        console.error("[telegram] could not publish the command menu:", e instanceof Error ? e.message : String(e))
-      );
+      })
+        .then(() =>
+          console.log(`[telegram] published ${COMMAND_MENU.length} commands to the menu`)
+        )
+        .catch((e) => {
+          const why = e instanceof Error ? e.message : String(e);
+          console.error("[telegram] could not publish the command menu:", why);
+          detail = `Connected, but Telegram refused the command menu (${why}). /help still lists everything.`;
+          host?.changed();
+        });
     } catch (e) {
       state = "error";
       detail = e instanceof Error ? e.message : String(e);
