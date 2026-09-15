@@ -6,6 +6,7 @@ import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { EXTRACT_REPLY as EXTRACT_REPLY_SCRIPT, normalizeNodes, toMarkdown } from "./extract";
 import {
   QWEN_CHAT_URL,
+  QWEN_ORIGIN,
   TOKEN_KEY,
   ROLE_KEY,
   conversationIdFrom,
@@ -242,10 +243,38 @@ export function verdictForPrompt(
   return alreadyReloaded ? "expired" : "reload";
 }
 
+/**
+ * The same judgement, from the two facts it actually rests on.
+ *
+ * Pure and exported because the bug it fixes is invisible from the outside
+ * and cost a user a week of being told to sign in to an account they were
+ * signed in to.
+ *
+ * `localStorage` belongs to an origin, not to a browser. A page sitting on
+ * `about:blank`, on an error page, or part-way through a navigation has its
+ * own empty storage, and `getItem` there answers `null` without throwing —
+ * so a perfectly good session read as "no session at all", and the driver
+ * reported the profile signed out. It was not. The page simply was not on
+ * Qwen at that instant, which on a slower machine is a wider window, and is
+ * why retrying "just worked": the next attempt found the page loaded.
+ *
+ * So the address is checked before the answer is believed. Off-origin is
+ * "unreadable" — no verdict — and never "absent".
+ */
+export function sessionStateFrom(
+  url: string,
+  storage: Record<string, string | null | undefined> | null
+): SessionState {
+  if (!url || !url.startsWith(QWEN_ORIGIN)) return "unreadable";
+  if (!storage) return "unreadable";
+  return isSignedIn(storage) ? "present" : "absent";
+}
+
 async function sessionState(page: Page): Promise<SessionState> {
+  let url = "";
   try {
-    const storage = await readStorage(page);
-    return isSignedIn(storage) ? "present" : "absent";
+    url = page.url();
+    return sessionStateFrom(url, await readStorage(page));
   } catch {
     return "unreadable";
   }
@@ -311,16 +340,25 @@ export async function checkSignedIn(
       // in. A short settle costs a second and removes a false negative that
       // sends people back through a sign-in they did not need.
       await page.waitForTimeout(1_200);
-      const storage = await readStorage(page);
-      if (!isSignedIn(storage)) {
-        if (attempt < tries) {
-          await page.waitForTimeout(1_500);
-          continue;
-        }
-        return { signedIn: false };
+      // Through the same rule the turn uses, for the same reason: a page
+      // that is not on Qwen's origin has empty storage of its own, and
+      // reading that as "no session" is what put a signed-out banner over a
+      // signed-in account.
+      const state = sessionStateFrom(page.url(), await readStorage(page));
+      if (state === "present") {
+        const profile = await readProfile(page);
+        return { signedIn: true, ...profile };
       }
-      const profile = await readProfile(page);
-      return { signedIn: true, ...profile };
+      if (attempt < tries) {
+        await page.waitForTimeout(1_500);
+        continue;
+      }
+      // Out of attempts. "Absent" is a real answer and "unreadable" is not,
+      // and the caller shows a different sentence for each — one sends the
+      // user to the sign-in button, the other does not.
+      return state === "absent"
+        ? { signedIn: false }
+        : { signedIn: false, error: `the page was not on ${QWEN_ORIGIN} (${page.url()})` };
     } catch (e) {
       lastError = e instanceof Error ? e.message : String(e);
       if (attempt < tries) await new Promise((r) => setTimeout(r, 1_500));
@@ -528,6 +566,10 @@ export async function sendTurn(
             // the first is worth sending anybody to the sign-in button.
             const verdict = verdictForPrompt(await sessionState(page), reloadedOnPrompt);
             if (verdict === "signed-out") {
+              logger.warn("qwen", "no session in the profile; reporting signed out", {
+                url: page.url(),
+                said: said.text.slice(0, 120),
+              });
               throw new QwenError(
                 "The browser profile is signed out of Qwen, so the message went nowhere. Sign in from the account menu, then send again.",
                 "signed-out"
@@ -571,6 +613,9 @@ export async function sendTurn(
           // "the send did not land" — is the honest answer for both a live
           // session and a storage that would not answer.
           if ((await sessionState(page)) === "absent") {
+            logger.warn("qwen", "no session in the profile after the silence window", {
+              url: page.url(),
+            });
             throw new QwenError(
               "The browser profile is signed out of Qwen, so the message went nowhere. Sign in from the account menu, then send again.",
               "signed-out"

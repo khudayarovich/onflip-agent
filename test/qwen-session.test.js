@@ -180,3 +180,34 @@ test("a sign-in prompt is not proof of a signed-out profile", () => {
   assert.equal(verdictForPrompt("unreadable", false), "wait");
   assert.equal(verdictForPrompt("unreadable", true), "wait");
 });
+
+test("a page that is not on Qwen has no session to report, and never 'signed out'", () => {
+  // The one that actually bit, reported twice from a Mac: turns failing with
+  // "the browser profile is signed out of Qwen, so the message went nowhere"
+  // on a profile that was signed in the whole time.
+  //
+  // localStorage belongs to an origin, not to a browser. A page on
+  // about:blank, on an error page, or part-way through a navigation has its
+  // own empty storage, and getItem there answers null WITHOUT THROWING - so
+  // every guard that expected a throw let it past, and a perfectly good
+  // session read as no session at all. A slower machine widens the window,
+  // which is why it happened on a Mac and why retrying worked: the next
+  // attempt found the page loaded.
+  const { sessionStateFrom } = require("../dist/providers/qwen/browser");
+  const live = { token: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln" };
+
+  // On Qwen: a real verdict either way.
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live), "present");
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/c/abc-123", live), "present");
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", { token: null }), "absent");
+
+  // Anywhere else: no verdict. These are the ones that were being read as a
+  // signed-out profile.
+  assert.equal(sessionStateFrom("about:blank", { token: null }), "unreadable");
+  assert.equal(sessionStateFrom("chrome-error://chromewebdata/", { token: null }), "unreadable");
+  assert.equal(sessionStateFrom("", { token: null }), "unreadable");
+  assert.equal(sessionStateFrom("https://accounts.google.com/signin", { token: null }), "unreadable");
+
+  // And a storage that could not be read at all is not an empty one.
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", null), "unreadable");
+});
