@@ -297,6 +297,74 @@ export interface OpenOptions {
   headed?: boolean;
 }
 
+/**
+ * What Qwen's own API said, when a turn produces nothing.
+ *
+ * The gap this closes was invisible from every check the driver makes. A
+ * send is confirmed against the DOM — the composer empties, the message
+ * appears — because that is what the page does. But the page does it
+ * *optimistically*: it renders the message and then posts it. If that post
+ * is refused, the message sits there looking sent, nothing generates, and
+ * the driver waits out its whole window before reporting a silence it
+ * cannot explain.
+ *
+ * Read from a real machine, a turn that had just signed in successfully:
+ *
+ *   sent, waiting for the reply
+ *   still waiting  url=.../c/ab0b189d-…  generating=false  replyChars=0
+ *   still waiting  seconds=154           generating=false  replyChars=0
+ *
+ * A real conversation, a fresh session, and Qwen never starting. Nothing in
+ * the page could say why, because the answer was in a response nobody was
+ * listening to.
+ *
+ * So the last refusal is kept — status and a little of the body, never the
+ * request — and handed to whoever has to explain the silence. Only failures,
+ * and only one at a time: this is a diagnosis, not a log.
+ */
+let lastApiFailure: { status: number; path: string; body: string; at: number } | null = null;
+
+function watchApi(ctx: BrowserContext): void {
+  ctx.on("response", (res) => {
+    try {
+      const url = res.url();
+      if (!url.startsWith(QWEN_ORIGIN) || !/\/api\//.test(url)) return;
+      const status = res.status();
+      if (status >= 200 && status < 400) return;
+      const path = url.slice(QWEN_ORIGIN.length).split("?")[0];
+      void res
+        .text()
+        .then((body) => {
+          lastApiFailure = { status, path, body: body.slice(0, 300), at: Date.now() };
+          logger.warn("qwen", "the service refused a request", { status, path });
+        })
+        .catch(() => {
+          lastApiFailure = { status, path, body: "", at: Date.now() };
+          logger.warn("qwen", "the service refused a request", { status, path });
+        });
+    } catch {
+      // A listener that can throw is a listener that can take the turn down.
+    }
+  });
+}
+
+/**
+ * The refusal worth mentioning, if one is recent enough to be this turn's.
+ *
+ * Bounded in time because a 404 from ten minutes ago explains nothing about
+ * the silence happening now, and offering it as the reason would be worse
+ * than offering nothing.
+ */
+export function recentApiFailure(
+  failure: { status: number; path: string; body: string; at: number } | null,
+  since: number,
+  now: number = Date.now()
+): string | null {
+  if (!failure || failure.at < since || failure.at > now) return null;
+  const detail = failure.body.replace(/\s+/g, " ").trim().slice(0, 140);
+  return `Qwen answered ${failure.status} on ${failure.path}${detail ? ` — ${detail}` : ""}.`;
+}
+
 export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContext> {
   if (context) return context;
   const dir = qwenProfileDir();
@@ -319,6 +387,7 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
     // retries. Two attempts at the default spend three minutes first.
     timeout: 30_000,
   });
+  watchApi(context);
   context.on("close", () => {
     context = null;
   });
@@ -1177,6 +1246,21 @@ export async function sendTurn(
       }
       const fresh = now.count > before.count || now.text !== before.text;
       if (!fresh || !now.text) {
+        // Before waiting on anything: did Qwen already refuse it?
+        //
+        // Checked every poll rather than once the window expires, because
+        // the whole value is in the timing. A refused request is a turn that
+        // will never be answered, and the difference between saying so in a
+        // second and saying so in four minutes is the difference between an
+        // explanation and a hang.
+        const refusedNow = recentApiFailure(lastApiFailure, started);
+        if (refusedNow) {
+          logger.warn("qwen", "the service refused this turn", { refused: refusedNow });
+          throw new QwenError(
+            `${refusedNow} The message is on the page but Qwen did not accept it, so no answer is coming.`,
+            /^4/.test(String(lastApiFailure?.status)) ? "signed-out" : "service-error"
+          );
+        }
         // Before anything else: has the page dropped into a guest
         // conversation? Nothing sent from there is ever answered, so there
         // is nothing to wait for and ninety seconds of waiting only delays
@@ -1275,6 +1359,18 @@ export async function sendTurn(
             throw new QwenError(
               "The browser profile is signed out of Qwen, so the message went nowhere. Sign in from the account menu, then send again.",
               "signed-out"
+            );
+          }
+          // If Qwen refused a request while we were waiting, that is the
+          // answer, and it beats anything inferable from the page: the send
+          // is confirmed against the DOM, which Qwen fills in optimistically
+          // before it posts anything.
+          const refused = recentApiFailure(lastApiFailure, started);
+          if (refused) {
+            logger.warn("qwen", "the silence has a cause in the network", { refused });
+            throw new QwenError(
+              `${refused} The message is on the page but Qwen did not accept it, so no answer is coming.`,
+              /^4/.test(String(lastApiFailure?.status)) ? "signed-out" : "service-error"
             );
           }
           // Not "the send did not land": `submit` verified the message
