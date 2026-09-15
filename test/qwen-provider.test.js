@@ -42,7 +42,7 @@ test("every service has a name of its own", () => {
   // "ChatGPT" on its own account bar. A missing name is now a compile error,
   // and this is the runtime half of that.
   const labels = PROVIDER_IDS.map((id) => providerLabel(id));
-  assert.deepEqual(labels, ["ChatGPT", "DeepSeek", "Qwen"]);
+  assert.deepEqual(labels, ["ChatGPT", "DeepSeek", "Qwen", "Arena"]);
   assert.equal(new Set(labels).size, labels.length, "no two services share a name");
 });
 

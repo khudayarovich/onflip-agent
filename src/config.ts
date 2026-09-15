@@ -241,7 +241,7 @@ export interface OnFlipConfig {
  * out which provider is active would be a cycle. `providers/id.ts` re-exports
  * these so there is still one list.
  */
-export const PROVIDER_IDS = ["chatgpt", "deepseek", "qwen"] as const;
+export const PROVIDER_IDS = ["chatgpt", "deepseek", "qwen", "arena"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export const DEFAULT_PROVIDER: ProviderId = "chatgpt";
 

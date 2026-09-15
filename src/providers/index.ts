@@ -6,6 +6,9 @@ import { deepseekProfileDir } from "./deepseek/session";
 import * as qw from "./qwen/browser";
 import * as qwSignIn from "./qwen/signin";
 import { qwenProfileDir } from "./qwen/session";
+import * as ar from "./arena/browser";
+import * as arSignIn from "./arena/signin";
+import { arenaProfileDir } from "./arena/session";
 import { activeProvider, isBrowserProvider, providerLabel } from "./id";
 
 /**
@@ -97,6 +100,17 @@ const DRIVERS: Record<string, BrowserDriver> = {
     takeComposerWarning: qw.takeComposerWarning,
     checkSelectors: qw.checkSelectors,
     signIn: qwSignIn,
+  },
+  arena: {
+    label: providerLabel("arena"),
+    profileDir: arenaProfileDir,
+    closeBrowser: ar.closeBrowser,
+    checkSignedIn: (opts) => ar.checkSignedIn(opts),
+    currentConversationId: ar.currentConversationId,
+    queueAttachments: ar.queueAttachments,
+    takeComposerWarning: ar.takeComposerWarning,
+    checkSelectors: ar.checkSelectors,
+    signIn: arSignIn,
   },
 };
 

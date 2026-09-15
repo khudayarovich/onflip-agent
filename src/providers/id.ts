@@ -70,6 +70,7 @@ const LABELS: Record<ProviderId, string> = {
   chatgpt: "ChatGPT",
   deepseek: "DeepSeek",
   qwen: "Qwen",
+  arena: "Arena",
 };
 
 export function providerLabel(id: ProviderId = activeProvider()): string {
