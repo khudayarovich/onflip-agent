@@ -149,3 +149,86 @@ export function closeLog(): void {
 export function sessionLogId(): string {
   return sessionId;
 }
+
+/**
+ * The fields a log line may contribute to a diagnostics paste.
+ *
+ * An allow-list, not a deny-list, and that is the whole point. A log entry
+ * carries whatever the code that wrote it thought useful, and some of those
+ * are the person's own words: `session` logs a turn with its `text`, tools
+ * log output, the transport logs replies. A diagnostics blob is pasted into
+ * an issue, a chat, an email — somewhere it will outlive the moment — so it
+ * may carry what is useful for finding a fault and nothing that was private
+ * to the person who ran it.
+ *
+ * Adding a key here is a decision about disclosure. Anything not named is
+ * dropped, including keys that do not exist yet.
+ */
+const DIAGNOSTIC_FIELDS = [
+  "url",
+  "error",
+  "status",
+  "code",
+  "verdict",
+  "reached",
+  "signedIn",
+  "attempt",
+  "tries",
+  "seconds",
+  "provider",
+  "version",
+  "headed",
+  "fresh",
+  "had",
+  "pid",
+  "confirmed",
+  "afterMs",
+  "setupMs",
+  "generating",
+  "replyChars",
+  "channel",
+] as const;
+
+/**
+ * The tail of a log, as lines safe to paste.
+ *
+ * Diagnosing a fault on somebody else's machine used to mean asking them to
+ * run a shell command and paste the result, which is a lot to ask and easy
+ * to get wrong. The report already names the log file; this puts the part
+ * that matters into the report itself.
+ *
+ * Pure, taking the file's contents rather than reading it, so what it keeps
+ * and what it drops can be held against real lines without a log on disk.
+ */
+export function diagnosticLogLines(
+  raw: string,
+  scopes: readonly string[],
+  limit = 40
+): string[] {
+  const wanted = new Set(scopes);
+  const out: string[] = [];
+  for (const line of (raw ?? "").split(String.fromCharCode(10))) {
+    if (!line.trim()) continue;
+    let entry: { at?: string; level?: string; scope?: string; msg?: string; data?: unknown };
+    try {
+      entry = JSON.parse(line);
+    } catch {
+      continue; // a torn last line, which an append-only log always risks
+    }
+    if (!entry.scope || !wanted.has(entry.scope)) continue;
+    const bits: string[] = [];
+    const data = entry.data;
+    if (data && typeof data === "object") {
+      for (const key of DIAGNOSTIC_FIELDS) {
+        const value = (data as Record<string, unknown>)[key];
+        if (value === undefined || value === null || value === "") continue;
+        // One line each. A stack trace pasted into a chat helps nobody.
+        bits.push(`${key}=${String(value).split(String.fromCharCode(10))[0].slice(0, 120)}`);
+      }
+    }
+    const at = typeof entry.at === "string" ? entry.at.slice(11, 19) : "--:--:--";
+    const level = (entry.level ?? "info").slice(0, 1).toUpperCase();
+    out.push(`  ${at} ${level} ${entry.scope} ${entry.msg ?? ""}${bits.length ? `  ${bits.join(" ")}` : ""}`);
+  }
+  return out.slice(-Math.max(1, limit));
+}

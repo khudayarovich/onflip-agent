@@ -28,7 +28,8 @@
     "prepare": "npm run build",
     "postinstall": "node scripts/postinstall.js",
     "test": "npm run build && node --test",
-    "test:only": "node --test"
+    "test:only": "node --test",
+    "preflight": "node scripts/preflight.js"
   },
   "engines": {
     "node": ">=20.0.0"

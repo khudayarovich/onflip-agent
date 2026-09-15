@@ -55,3 +55,35 @@ export function reportsSignedIn(e: SessionEvidence): boolean {
   if (e.probe === false) return false;
   return e.hasCookies || e.hasStoredToken || e.probe === true;
 }
+
+/**
+ * What a background session re-check should do about what it found.
+ *
+ * The session used to be looked at once at startup and then only when a turn
+ * failed, which for a browser-driven service is the wrong shape: a Qwen
+ * session was measured dying in about three and a half hours with the app
+ * open, and the way anybody found out was to write a message, send it, wait,
+ * and be told afterwards.
+ *
+ * Asking again is easy. Knowing when to say something is the part worth
+ * pinning, because both ways of getting it wrong are bad in their own way:
+ *
+ *   Acting on "could not look" tells somebody their session ended because a
+ *   page was slow, and sends them to a sign-in that cannot help. Unreachable
+ *   changes nothing, ever.
+ *
+ *   Acting on no change puts a banner in front of somebody every few minutes
+ *   to tell them what they already knew.
+ *
+ * `known` is null before anything has answered, and a first definite answer
+ * is worth reporting — that is the case where the app is showing whatever it
+ * assumed at startup.
+ */
+export function watchVerdict(
+  found: { signedIn: boolean; reachable: boolean },
+  known: boolean | null
+): "ignore" | "signed-in" | "signed-out" {
+  if (!found.reachable) return "ignore";
+  if (found.signedIn === known) return "ignore";
+  return found.signedIn ? "signed-in" : "signed-out";
+}

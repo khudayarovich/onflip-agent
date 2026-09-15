@@ -164,6 +164,28 @@ export function App(): React.ReactElement {
     Record<string, "pending" | "read" | "sent" | "failed">
   >({});
   /** Text pushed back into the composer by "edit message". */
+  /**
+   * The services this install can drive, minus the one that is running.
+   *
+   * Asked for once: the answer only changes when the app restarts, which is
+   * exactly what switching does.
+   */
+  const [otherProviders, setOtherProviders] = useState<{ id: string; label: string }[]>([]);
+  useEffect(() => {
+    let live = true;
+    void window.onflip
+      .providerGet?.()
+      .then((p) => {
+        if (live) setOtherProviders((p.all ?? []).filter((x) => x.id !== p.id));
+      })
+      .catch(() => {
+        /* an older main process: the banner simply offers Sign in */
+      });
+    return () => {
+      live = false;
+    };
+  }, []);
+
   const [draft, setDraft] = useState<{ text: string; files?: string[]; nonce: number } | null>(
     null
   );
@@ -442,6 +464,15 @@ export function App(): React.ReactElement {
             delete next[u.id];
             return next;
           });
+          break;
+        }
+        case "draft": {
+          // A message that was typed, sent, and never delivered - handed
+          // back into the composer rather than sent again. It survives a
+          // provider switch, which relaunches the app, so this is usually
+          // the first thing to happen after one.
+          const text = (data as { text?: string } | undefined)?.text;
+          if (text) setDraft({ text, nonce: Date.now() });
           break;
         }
         case "tool-progress": {
@@ -1070,6 +1101,22 @@ export function App(): React.ReactElement {
             >
               Sign in
             </button>
+            {/* The other way out, and often the faster one: a session that
+                has gone is a reason to use a service that has not. Switching
+                relaunches the app — the service is chosen at process start
+                and a session cannot move between two of them — so anything
+                typed and undelivered is handed back into the composer on the
+                way up rather than lost to the restart. */}
+            {otherProviders.map((p) => (
+              <button
+                key={p.id}
+                className="btn"
+                title={`Switch to ${p.label}. OnFlip restarts, and anything you had unsent comes back.`}
+                onClick={() => void window.onflip.providerSet?.(p.id)}
+              >
+                Use {p.label}
+              </button>
+            ))}
           </div>
         )}
 

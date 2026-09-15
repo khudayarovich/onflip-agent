@@ -388,6 +388,8 @@ export interface ConfigView {
   browserHeadless: boolean;
   /** Whether the docked Browser pane and its DevTools port exist at all. */
   embeddedBrowser: boolean;
+  /** Whether the agent may hand work to a sub-agent. */
+  subAgents: boolean;
   maxIterations: number;
   replyTimeout: number;
   compactAfterChars: number;

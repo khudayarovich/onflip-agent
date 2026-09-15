@@ -106,6 +106,36 @@ export interface OnFlipConfig {
    * Read before Chromium starts, so it takes effect on the next launch.
    */
   embeddedBrowser?: boolean;
+
+  /**
+   * Offer the agent the `task` tool, which hands work to a sub-agent.
+   *
+   * On by default. Worth turning off when you would rather watch every step
+   * in one conversation: a sub-agent does its reading somewhere else and
+   * brings back a paragraph, which is the point of it and also the cost -
+   * and it needs a chat of its own, so the parent's thread is abandoned and
+   * rebuilt on its next message, roughly what one compaction costs.
+   *
+   * A tool the model cannot be offered is simply absent from its roster, so
+   * turning this off does not leave it calling something that will refuse.
+   */
+  subAgents?: boolean;
+
+  /**
+   * A message that was typed, sent, and never delivered.
+   *
+   * Written when a turn fails for want of a session, so the words survive
+   * whatever happens next — including a provider switch, which relaunches
+   * the whole app because the service is chosen at process start and a
+   * session cannot move between two of them.
+   *
+   * Restored into the composer and never sent on its own. A prompt that
+   * fires by itself after a restart is a worse outcome than a lost one:
+   * losing it costs somebody thirty seconds of retyping, and sending it
+   * unbidden costs them a turn they did not ask for, against whichever
+   * service and folder happened to be current.
+   */
+  unsentPrompt?: { text: string; at: number };
   /**
    * Send "continue" by itself when a turn dies on a transport failure.
    *
@@ -589,4 +619,27 @@ export function envFlag(name: string): boolean | undefined {
   if (["1", "true", "on", "yes", "enable", "enabled"].includes(v)) return true;
   if (["0", "false", "off", "no", "disable", "disabled"].includes(v)) return false;
   return undefined;
+}
+
+/**
+ * A message worth offering back, or nothing.
+ *
+ * Bounded in time because the point is to rescue a message somebody was in
+ * the middle of, not to hand back something they typed last Tuesday and have
+ * long since forgotten — which would arrive as a mystery in the composer.
+ *
+ * Pure, so the window it covers can be held against real clocks.
+ */
+export function unsentPromptToRestore(
+  saved: { text: string; at: number } | undefined,
+  now: number = Date.now(),
+  withinMs: number = 30 * 60_000
+): string | null {
+  const text = saved?.text?.trim();
+  if (!text) return null;
+  const at = saved?.at;
+  if (typeof at !== "number" || !Number.isFinite(at)) return null;
+  // A clock that went backwards is not a reason to throw the message away.
+  if (now - at > withinMs) return null;
+  return text;
 }

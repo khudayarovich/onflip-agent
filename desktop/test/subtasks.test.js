@@ -95,3 +95,21 @@ test("and there is a way in to it", () => {
   assert.match(SIDEBAR, /onOpenSubTasks\(\)/);
   assert.match(SIDEBAR, /menuSubTasks/);
 });
+
+test("sub-agents can be turned off, and then the tool is absent", () => {
+  // Not refused — absent. A tool the model can call and nothing can carry
+  // out is worse than no tool: it will try, be told no, and try again.
+  // `taskTools` already builds nothing when there is no runner, so the
+  // setting works by withholding the runner rather than by adding a refusal.
+  assert.match(ENGINE, /loadConfig\(\)\.subAgents === false \? undefined : \(req\) => this\.runSubAgent\(req\)/);
+});
+
+test("and the setting reaches the window, defaulting to on", () => {
+  const settings = fs.readFileSync(
+    path.join(__dirname, "..", "ui", "src", "components", "SettingsModal.tsx"),
+    "utf8"
+  );
+  assert.match(ENGINE, /subAgents: cfg\.subAgents !== false/);
+  assert.match(ENGINE, /subAgents: \(v\) => \(\{ subAgents: Boolean\(v\) \}\)/);
+  assert.match(settings, /config\?\.subAgents \?\? true/);
+});

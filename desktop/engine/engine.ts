@@ -9,6 +9,7 @@ import {
   clearConfigKeys,
   firstPositiveInt,
   configDir,
+  unsentPromptToRestore,
   OnFlipConfig,
 } from "onflip/dist/config";
 import {
@@ -40,7 +41,7 @@ import {
   rationedPlan,
 } from "onflip/dist/chatgpt/plans";
 import { activeProvider, isBrowserProvider, providerLabel } from "onflip/dist/providers/id";
-import { reportsSignedIn } from "onflip/dist/providers/signed-in";
+import { reportsSignedIn, watchVerdict } from "onflip/dist/providers/signed-in";
 import { attachmentsBlockedReason, uploadsAvailable } from "onflip/dist/chatgpt/transport";
 import {
   configureBrowser,
@@ -121,7 +122,7 @@ import {
   isPlaceholderTitle,
   snapshotContentsAvailable,
 } from "onflip/dist/agent/store";
-import { openLog, closeLog, logger, logFile } from "onflip/dist/log";
+import { openLog, closeLog, logger, logFile, diagnosticLogLines } from "onflip/dist/log";
 import { isResumableFailure, cooldownRemainingMs, failureCodeOf } from "onflip/dist/chatgpt/backoff";
 import { runDoctor, runDeepDoctor, type DoctorReport } from "onflip/dist/chatgpt/doctor";
 import { lastBrowserReport } from "onflip/dist/auth/session";
@@ -255,6 +256,16 @@ export const ENGINE_VERSION = readVersion();
  */
 const SUB_TASK_ACTIVITY_MAX = 40;
 
+/**
+ * How often the session is re-checked while the app sits idle.
+ *
+ * Short enough that a session ending is noticed before the next message is
+ * written; long enough that a service watching for automation sees a request
+ * a person could plausibly have caused. Sessions were measured lasting
+ * hours, so this is about catching the change, not racing it.
+ */
+const SESSION_WATCH_MS = 3 * 60_000;
+
 export class Engine {
   private config = loadConfig();
   private auth!: ResolvedAuth;
@@ -270,6 +281,10 @@ export class Engine {
    * the conversation that asked for it.
    */
   private subTasks: SubTaskDTO[] = [];
+  /** The background session re-check; see `startSessionWatch`. */
+  private sessionWatch: ReturnType<typeof setInterval> | null = null;
+  /** One check at a time; a slow one must not stack up behind itself. */
+  private watchInFlight = false;
   /** Who the ChatGPT session belongs to, once identified. */
   private account: { name?: string; email?: string } | null = null;
   /** User message awaiting proof of delivery — cleared by the first send. */
@@ -675,6 +690,8 @@ export class Engine {
       this.pushStatus();
       if (state.signedIn) {
         this.emitConnect("ready");
+        this.startSessionWatch();
+        this.offerUnsentPrompt();
         return;
       }
       // Point at the button in this app, not at a terminal command: a
@@ -683,6 +700,7 @@ export class Engine {
       // the account for a missing runtime.
       const why = takeExtractError();
       const service = providerLabel();
+      this.offerUnsentPrompt();
       this.emitConnect(
         "signed-out",
         state.reachable
@@ -691,6 +709,82 @@ export class Engine {
       );
     } catch (e) {
       this.emitConnect("error", e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  /**
+   * Keep an eye on the session while nothing else is happening.
+   *
+   * It used to be looked at once, at startup, and then only when a turn
+   * failed. For a browser-driven service that is the wrong shape: a Qwen
+   * session was measured dying in about three and a half hours with the app
+   * sitting open, and the way anybody found out was to write a message, send
+   * it, wait, and be told afterwards. The banner said "connected" the whole
+   * time.
+   *
+   * So it is asked again, quietly. What makes that affordable is that the
+   * driver keeps its browser context between calls — the check after startup
+   * is a page evaluate and one request to the service, not a browser launch —
+   * and it is the same request the service already answers definitively.
+   *
+   * Three rules keep it from becoming a nuisance:
+   *
+   *   Only when idle. A check during a turn would read a page mid-answer,
+   *   and the turn is about to find out for itself anyway.
+   *
+   *   Only a definite answer counts. "Could not look" changes nothing, which
+   *   is the rule everywhere else in this app and the reason it is here too:
+   *   being wrong in that direction sends somebody to a sign-in that cannot
+   *   help.
+   *
+   *   Only on a change. Re-emitting "still signed in" every few minutes would
+   *   put a banner in front of somebody for no reason.
+   */
+  private startSessionWatch(): void {
+    if (this.sessionWatch || !isBrowserProvider()) return;
+    this.sessionWatch = setInterval(() => {
+      void this.checkSessionQuietly();
+    }, SESSION_WATCH_MS);
+    // Never hold the process open on its own account.
+    this.sessionWatch.unref?.();
+  }
+
+  private stopSessionWatch(): void {
+    if (!this.sessionWatch) return;
+    clearInterval(this.sessionWatch);
+    this.sessionWatch = null;
+  }
+
+  private async checkSessionQuietly(): Promise<void> {
+    if (this.busy || this.watchInFlight) return;
+    this.watchInFlight = true;
+    try {
+      const state = await checkSignedIn(this.auth.cookies);
+      // The rule lives in `watchVerdict`, pure and tested: unreachable
+      // changes nothing, and neither does an answer that agrees with what is
+      // already on screen.
+      const verdict = watchVerdict(state, this.probeSignedIn);
+      if (verdict === "ignore") return;
+
+      this.probeSignedIn = verdict === "signed-in";
+      if (verdict === "signed-in") {
+        logger.info("session", "the session came back", { provider: activeProvider() });
+        this.emitConnect("ready");
+      } else {
+        // The whole point: said before the next message is written, not
+        // after it has been sent into a page that cannot answer.
+        this.account = null;
+        logger.info("session", "the session has gone", { provider: activeProvider() });
+        this.emitConnect(
+          "signed-out",
+          `The ${providerLabel()} session has ended — open the account menu (bottom left) and choose "Sign in".`
+        );
+      }
+      this.pushStatus();
+    } catch {
+      // A watchdog that can break the app is worse than no watchdog.
+    } finally {
+      this.watchInFlight = false;
     }
   }
 
@@ -718,6 +812,26 @@ export class Engine {
 
   private emitConnect(state: "connecting" | "ready" | "signed-out" | "error", detail?: string) {
     this.peer.emit("connect", { state, detail });
+  }
+
+  /**
+   * Hand back a message that was typed, sent, and never delivered.
+   *
+   * Offered once, into the composer, and cleared the moment it is offered —
+   * whether or not anybody uses it. Leaving it on disk would mean it
+   * reappearing at every start until somebody happened to send it.
+   *
+   * Never sent on its own. A prompt that fires by itself after a restart is
+   * worse than a lost one: losing it costs thirty seconds of retyping, and
+   * sending it unbidden spends a turn nobody asked for, against whichever
+   * service and folder happen to be current now.
+   */
+  private offerUnsentPrompt(): void {
+    const text = unsentPromptToRestore(loadConfig().unsentPrompt);
+    if (!text) return;
+    saveConfig({ unsentPrompt: undefined });
+    this.peer.emit("draft", { text });
+    logger.info("session", "offered back a message that was never delivered");
   }
 
   private adoptStoredSession(restored: StoredSession): void {
@@ -777,7 +891,9 @@ export class Engine {
 
   private buildTools() {
     return createToolRegistry({
-      runSubAgent: (req) => this.runSubAgent(req),
+      // Absent rather than refusing when it is off: a tool the model can
+      // call and nothing can carry out is worse than no tool.
+      runSubAgent: loadConfig().subAgents === false ? undefined : (req) => this.runSubAgent(req),
       cwd: this.cwd,
       session: this.toolState,
       signal: this.abort.signal,
@@ -1529,6 +1645,13 @@ export class Engine {
       // sign-in controls and a valid-looking token right up until a send is
       // attempted, so nothing before the send can know — and without this the
       // app would go on claiming a connection through every failed turn.
+      // The words survive the failure. A session that has gone usually means
+      // a sign-in or a switch to another service, and a switch relaunches the
+      // app - so without this the message is gone and has to be retyped from
+      // the transcript. Saved, not re-sent: see `unsentPrompt`.
+      if (code === "signed-out" && text.trim()) {
+        saveConfig({ unsentPrompt: { text: text.slice(0, 20_000), at: Date.now() } });
+      }
       if (code === "signed-out" && this.probeSignedIn !== false) {
         this.probeSignedIn = false;
         this.account = null;
@@ -2567,6 +2690,7 @@ export class Engine {
       // On unless it was turned off. The pane is a feature people use;
       // the port it needs is the thing worth being able to close.
       embeddedBrowser: cfg.embeddedBrowser !== false,
+      subAgents: cfg.subAgents !== false,
       maxIterations: firstPositiveInt([cfg.maxIterations], DEFAULT_STEP_BUDGET),
       replyTimeout: firstPositiveInt([cfg.replyTimeout], 600),
       // The effective value, not a hardcoded default: with nothing set, the
@@ -2649,7 +2773,33 @@ export class Engine {
     );
     lines.unshift(`health checks: ${health.status}`, "");
 
+    // The tail of the log, in the paste rather than named by it.
+    //
+    // Diagnosing a fault on somebody else's machine meant asking them to run
+    // a shell command and send back the result — a lot to ask, easy to get
+    // wrong, and a round trip for every question. These are the lines that
+    // answer "what did the driver actually see", filtered through an
+    // allow-list in `diagnosticLogLines` so a blob headed for an issue
+    // cannot carry somebody's own words along with it.
+    const tail = this.recentLogLines();
+    if (tail.length) {
+      lines.push("");
+      lines.push(`recent activity (last ${tail.length} lines)`);
+      lines.push(...tail);
+    }
+
     return { text: lines.join("\n") };
+  }
+
+  /** The current log's tail, or nothing when it cannot be read. */
+  private recentLogLines(): string[] {
+    const file = logFile();
+    if (!file) return [];
+    try {
+      return diagnosticLogLines(fs.readFileSync(file, "utf8"), [activeProvider(), "session"], 40);
+    } catch {
+      return [];
+    }
   }
 
   /**
@@ -2694,6 +2844,7 @@ export class Engine {
       headed: (v) => ({ headed: Boolean(v) }),
       browserHeadless: (v) => ({ browserHeadless: Boolean(v) }),
       embeddedBrowser: (v) => ({ embeddedBrowser: Boolean(v) }),
+      subAgents: (v) => ({ subAgents: Boolean(v) }),
       autoResume: (v) => ({ autoResume: Boolean(v) }),
       maxIterations: (v) => ({ maxIterations: firstPositiveInt([v as number], DEFAULT_STEP_BUDGET) }),
       replyTimeout: (v) => ({ replyTimeout: firstPositiveInt([v as number], 600) }),
@@ -3170,6 +3321,7 @@ export class Engine {
   }
 
   async shutdown(): Promise<void> {
+    this.stopSessionWatch();
     this.abort.abort();
     this.saveNow();
     if (this.heldSessionId) releaseSessionLock(this.heldSessionId);

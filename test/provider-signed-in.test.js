@@ -134,3 +134,44 @@ test("and a probe that says yes still stands on its own", () => {
     true
   );
 });
+
+// ---------------------------------------------------------------------------
+// The background re-check, and when it is allowed to say anything
+// ---------------------------------------------------------------------------
+
+const { watchVerdict } = require("../dist/providers/signed-in");
+
+test("a session that has ended while the app sat idle is reported", () => {
+  // The case this exists for. A Qwen session was measured dying in about
+  // three and a half hours with the app open, and the only way to find out
+  // was to write a message, send it, wait, and be told afterwards.
+  assert.equal(watchVerdict({ signedIn: false, reachable: true }, true), "signed-out");
+});
+
+test("and one that comes back is reported too", () => {
+  // Signing in elsewhere, or a service that was briefly refusing. The banner
+  // has to clear itself or it becomes a thing people learn to ignore.
+  assert.equal(watchVerdict({ signedIn: true, reachable: true }, false), "signed-in");
+});
+
+test("a check that could not look changes nothing, ever", () => {
+  // The direction that costs somebody a sign-in which cannot help: a slow
+  // page read as a lapsed session. Unreachable is not a verdict, whatever
+  // was believed before it.
+  assert.equal(watchVerdict({ signedIn: false, reachable: false }, true), "ignore");
+  assert.equal(watchVerdict({ signedIn: true, reachable: false }, false), "ignore");
+  assert.equal(watchVerdict({ signedIn: false, reachable: false }, null), "ignore");
+});
+
+test("and an answer that agrees with the screen says nothing", () => {
+  // Otherwise the app announces "still signed in" every few minutes.
+  assert.equal(watchVerdict({ signedIn: true, reachable: true }, true), "ignore");
+  assert.equal(watchVerdict({ signedIn: false, reachable: true }, false), "ignore");
+});
+
+test("the first definite answer counts, whichever way it goes", () => {
+  // `null` is "nobody has looked yet", so the app is showing whatever it
+  // assumed at startup — which is exactly when a real answer is worth having.
+  assert.equal(watchVerdict({ signedIn: false, reachable: true }, null), "signed-out");
+  assert.equal(watchVerdict({ signedIn: true, reachable: true }, null), "signed-in");
+});

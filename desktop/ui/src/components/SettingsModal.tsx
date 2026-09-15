@@ -218,6 +218,13 @@ export function SettingsModal({
             onChange={(on) => setValue("embeddedBrowser", on)}
           />
         </div>
+        <div className="setting-row">
+          <div className="info">
+            <div className="name">{t("setSubAgents")}</div>
+            <div className="desc">{t("setSubAgentsDesc")}</div>
+          </div>
+          <Toggle on={config?.subAgents ?? true} onChange={(on) => setValue("subAgents", on)} />
+        </div>
       </div>
 
       <div className="settings-section">
