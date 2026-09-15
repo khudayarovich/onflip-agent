@@ -521,7 +521,18 @@ export async function sendTurn(
     // a person does - a compaction, a sub-agent, a recovery each start one.
     await paceNewChat(opts.signal);
     await gotoChat(page);
-    await page.waitForTimeout(2_000);
+    // Wait for the page rather than for a number.
+    //
+    // A fixed two seconds is a guess that is generous on one machine and
+    // short on another, and the cost of it being short is the failure this
+    // driver has been chasing: a send that arrives before Qwen has applied
+    // the session to a freshly loaded page is treated as a guest send, and a
+    // guest send is never answered. The composer appearing is the page
+    // saying it is ready to take one.
+    await page
+      .waitForSelector(COMPOSER, { timeout: 20_000 })
+      .catch(() => logger.warn("qwen", "the composer did not appear on the new chat"));
+    await page.waitForTimeout(1_500);
   }
   const before = await readLast(page);
 
@@ -636,8 +647,35 @@ export async function sendTurn(
   let lastChange = Date.now();
   let lastServiceCheck = Date.now();
   let sawGenerating = false;
-  /** One reload is a recovery; two in a turn is a loop. */
-  let reloadedOnPrompt = false;
+  /** One reload-and-resend is a recovery; two in a turn is a loop. */
+  let resent = false;
+
+  /**
+   * Reload, let the page settle, and send the turn again.
+   *
+   * Shared by the two ways a turn can arrive somewhere that cannot answer
+   * it — a sign-in prompt over a live session, and a guest conversation —
+   * because the remedy is the same and a person performs it by hand as
+   * "just send it again".
+   *
+   * It waits for the composer rather than a fixed pause. The working
+   * hypothesis for how a signed-in browser reaches a guest chat at all is
+   * that the send arrived before Qwen had applied the session to the page,
+   * and a timer long enough on one machine is short on another.
+   */
+  const recoverAndResend = async (why: string, detail: Record<string, unknown>) => {
+    resent = true;
+    logger.warn("qwen", why, detail);
+    await gotoChat(page);
+    await page
+      .waitForSelector(COMPOSER, { timeout: 20_000 })
+      .catch(() => logger.warn("qwen", "the composer did not come back after the reload"));
+    await page.waitForTimeout(2_500);
+    // The reload emptied the composer, so the turn has to go again - the
+    // first attempt never reached the model.
+    await submit();
+    lastChange = Date.now();
+  };
   while (Date.now() < deadline) {
     try {
       // Stop means stop. Without this the signal is accepted and ignored:
@@ -679,11 +717,23 @@ export async function sendTurn(
         // is nothing to wait for and ninety seconds of waiting only delays
         // the one sentence that helps.
         if (isGuestChat(page.url())) {
-          logger.warn("qwen", "the page is in a guest conversation; the session is not in effect", {
-            url: page.url(),
-          });
+          // A guest conversation is not proof the session has gone, and
+          // treating it as proof was wrong: turns kept succeeding in
+          // between the failures, which an expired session cannot do.
+          // Something puts a signed-in browser there intermittently — most
+          // likely a send that arrives before Qwen has applied the session
+          // to a freshly loaded page — and the remedy is the one a person
+          // uses without thinking, which is to send it again.
+          //
+          // Only when it survives that is the session actually gone.
+          if (!resent) {
+            await recoverAndResend("a guest conversation on a live session; reloading once", {
+              url: page.url(),
+            });
+            continue;
+          }
           throw new QwenError(
-            "Qwen dropped this browser into a signed-out guest chat, so the message could not be answered. The session has expired — sign in again from the account menu.",
+            "Qwen kept this browser in a signed-out guest chat even after reloading, so the message could not be answered. The session has expired — sign in again from the account menu.",
             "signed-out"
           );
         }
@@ -710,7 +760,7 @@ export async function sendTurn(
             // genuinely signed-out profile, an expired session, and a promo
             // modal offering credits to someone perfectly signed in. Only
             // the first is worth sending anybody to the sign-in button.
-            const verdict = verdictForPrompt(await sessionState(page), reloadedOnPrompt);
+            const verdict = verdictForPrompt(await sessionState(page), resent);
             if (verdict === "signed-out") {
               logger.warn("qwen", "no session in the profile; reporting signed out", {
                 url: page.url(),
@@ -722,21 +772,12 @@ export async function sendTurn(
               );
             }
             if (verdict === "reload") {
-              // A session in hand and a sign-in prompt on screen: the page is
-              // wrong about itself, or is showing something that merely reads
-              // like a wall. One reload, then carry on waiting — which is
-              // what a person does, and what makes the retry that "just
-              // works" unnecessary.
-              reloadedOnPrompt = true;
-              logger.warn("qwen", "a sign-in prompt over a live session; reloading once", {
+              // A session in hand and a sign-in prompt on screen: the page
+              // is wrong about itself, or is showing something that merely
+              // reads like a wall. Same remedy as a guest chat.
+              await recoverAndResend("a sign-in prompt over a live session; reloading once", {
                 said: said.text.slice(0, 120),
               });
-              await gotoChat(page);
-              await page.waitForTimeout(2_000);
-              // The reload emptied the composer, so the turn has to go
-              // again - the first attempt never reached the model.
-              await submit();
-              lastChange = Date.now();
               continue;
             }
             if (verdict === "expired") {
