@@ -208,6 +208,16 @@ export function SettingsModal({
             onChange={(on) => setValue("browserHeadless", on)}
           />
         </div>
+        <div className="setting-row">
+          <div className="info">
+            <div className="name">{t("setEmbeddedBrowser")}</div>
+            <div className="desc">{t("setEmbeddedBrowserDesc")}</div>
+          </div>
+          <Toggle
+            on={config?.embeddedBrowser ?? true}
+            onChange={(on) => setValue("embeddedBrowser", on)}
+          />
+        </div>
       </div>
 
       <div className="settings-section">

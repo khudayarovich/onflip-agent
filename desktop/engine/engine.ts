@@ -2463,6 +2463,9 @@ export class Engine {
       // Matches the tool's own default: windowless, since the desktop
       // mirrors that browser in its panel.
       browserHeadless: cfg.browserHeadless ?? true,
+      // On unless it was turned off. The pane is a feature people use;
+      // the port it needs is the thing worth being able to close.
+      embeddedBrowser: cfg.embeddedBrowser !== false,
       maxIterations: firstPositiveInt([cfg.maxIterations], DEFAULT_STEP_BUDGET),
       replyTimeout: firstPositiveInt([cfg.replyTimeout], 600),
       // The effective value, not a hardcoded default: with nothing set, the
@@ -2589,6 +2592,7 @@ export class Engine {
     const allowed: Record<string, (v: unknown) => Partial<OnFlipConfig>> = {
       headed: (v) => ({ headed: Boolean(v) }),
       browserHeadless: (v) => ({ browserHeadless: Boolean(v) }),
+      embeddedBrowser: (v) => ({ embeddedBrowser: Boolean(v) }),
       autoResume: (v) => ({ autoResume: Boolean(v) }),
       maxIterations: (v) => ({ maxIterations: firstPositiveInt([v as number], DEFAULT_STEP_BUDGET) }),
       replyTimeout: (v) => ({ replyTimeout: firstPositiveInt([v as number], 600) }),

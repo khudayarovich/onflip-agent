@@ -341,6 +341,8 @@ export type EngineEvent =
 export interface ConfigView {
   headed: boolean;
   browserHeadless: boolean;
+  /** Whether the docked Browser pane and its DevTools port exist at all. */
+  embeddedBrowser: boolean;
   maxIterations: number;
   replyTimeout: number;
   compactAfterChars: number;

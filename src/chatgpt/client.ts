@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { ChatMessage, SendTurnResult } from "../types";
-import { SessionCookie } from "../auth/access";
+import { SessionCookie, cookieHeaderFor } from "../auth/access";
 
 const BACKEND_URL = "https://chatgpt.com/backend-api/conversation";
 
@@ -64,7 +64,8 @@ async function getSentinelToken(
     "user-agent": UA,
   };
   if (deviceId) headers["oai-device-id"] = deviceId;
-  if (cookies.length) headers["cookie"] = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  const jar = cookieHeaderFor(cookies, "chatgpt.com");
+  if (jar) headers["cookie"] = jar;
   try {
     const res = await fetch("https://chatgpt.com/backend-api/sentinel/chat-requirements", {
       headers,
@@ -173,7 +174,7 @@ export async function sendTurn(
   };
   if (opts.deviceId) headers["oai-device-id"] = opts.deviceId;
   if (opts.cookies && opts.cookies.length) {
-    headers["cookie"] = opts.cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+    headers["cookie"] = cookieHeaderFor(opts.cookies, "chatgpt.com");
   }
 
   const sentinel = await getSentinelToken(opts.accessToken, opts.deviceId, opts.cookies ?? []);

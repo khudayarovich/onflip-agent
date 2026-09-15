@@ -357,3 +357,23 @@ test("and anywhere off Qwen is somewhere to navigate back from", () => {
   assert.equal(isUsableChatUrl(""), false);
   assert.equal(isUsableChatUrl("https://example.com/"), false);
 });
+
+test("the recovery asks before spending its second attempt", () => {
+  // Source-level, because this lives inside the turn loop and there is no
+  // harness that can drive one. What it pins: after reloading out of a guest
+  // conversation, the driver checks the page's own header before sending
+  // again. Without it the recovery re-sends blind, lands in a second guest
+  // conversation, and only reports the session gone after another silence
+  // window - which is the ninety seconds people were waiting through.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "providers", "qwen", "browser.ts"),
+    "utf8"
+  );
+  const recovery = source.slice(source.indexOf("const recoverAndResend"));
+  const body = recovery.slice(0, recovery.indexOf("await submit();"));
+
+  assert.match(body, /await pageShowsAuthPrompt\(page\)/);
+  assert.match(body, /"signed-out"/);
+});

@@ -1,6 +1,45 @@
 export interface SessionCookie {
   name: string;
   value: string;
+  /**
+   * The host this cookie was set for, when it was recorded.
+   *
+   * Optional, and that is the whole compatibility story: jars stored by
+   * earlier builds have no domain on them, and a cookie that does not say
+   * where it came from is sent wherever it always was. Only a cookie that
+   * does say gets held to it.
+   *
+   * It exists because the jar is harvested from two hosts - chatgpt.com and
+   * openai.com - flattened to name and value, and then replayed to both. An
+   * external audit named it. Both hosts belong to the same company, so
+   * nothing was reaching a stranger; it was still a cookie scoped to one
+   * host being handed to another, which is not ours to decide.
+   */
+  domain?: string;
+}
+
+/**
+ * Should this cookie be sent to this host?
+ *
+ * The ordinary cookie-domain rule, and no more than it: an exact match, or a
+ * dot-prefixed domain that the host is under. A cookie carrying no domain is
+ * sent - see the field above.
+ */
+export function cookieAppliesTo(cookie: SessionCookie, host: string): boolean {
+  const domain = (cookie.domain ?? "").trim().toLowerCase();
+  if (!domain) return true;
+  const target = (host ?? "").trim().toLowerCase().replace(/^\.+/, "");
+  if (!target) return false;
+  const bare = domain.replace(/^\.+/, "");
+  return target === bare || target.endsWith("." + bare);
+}
+
+/** The Cookie header for one host, from a jar that may span several. */
+export function cookieHeaderFor(cookies: SessionCookie[], host: string): string {
+  return (cookies ?? [])
+    .filter((c) => cookieAppliesTo(c, host))
+    .map((c) => c.name + "=" + c.value)
+    .join("; ");
 }
 
 /** The cookie ChatGPT's login sets; a long token is chunked as `.0`, `.1`, … */
@@ -46,7 +85,9 @@ export interface SessionInfo {
 }
 
 export async function fetchAccessToken(cookies: SessionCookie[]): Promise<SessionInfo> {
-  const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  // Scoped to the host it is going to: the jar spans chatgpt.com and
+  // openai.com, and only one of them is being asked.
+  const cookieHeader = cookieHeaderFor(cookies, "chatgpt.com");
   const res = await fetch("https://chatgpt.com/api/auth/session", {
     headers: {
       cookie: cookieHeader,

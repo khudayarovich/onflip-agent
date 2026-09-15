@@ -296,6 +296,9 @@ const en = {
   setHeadedDesc: "Headed mode — useful when something goes wrong and you want to watch the page.",
   setHeadless: "Run the agent's own browser windowless",
   setHeadlessDesc: "The browser the browser_* tools drive.",
+  setEmbeddedBrowser: "Browser pane",
+  setEmbeddedBrowserDesc:
+    "The docked browser and the browser_* tools. It works over a local debugging port that anything else on this machine can also reach, so turn it off on a computer other people have accounts on. Takes effect after a restart.",
   setModels: "Models",
   setModelsKnown: "{n} models known",
   setModelsFromAccount: "Read from your own ChatGPT account.",
@@ -681,6 +684,9 @@ const ru: Partial<Record<StringKey, string>> = {
   setHeadedDesc: "Полезно, когда что-то идёт не так и нужно видеть страницу.",
   setHeadless: "Браузер агента без окна",
   setHeadlessDesc: "Браузер, которым управляют инструменты browser_*.",
+  setEmbeddedBrowser: "Панель браузера",
+  setEmbeddedBrowserDesc:
+    "Встроенный браузер и инструменты browser_*. Работает через локальный порт отладки, к которому может обратиться и любая другая программа на этом компьютере — выключите на машине с чужими учётными записями. Вступает в силу после перезапуска.",
   setModels: "Модели",
   setModelsKnown: "Известно моделей: {n}",
   setModelsFromAccount: "Считано из вашего аккаунта ChatGPT.",
@@ -1064,6 +1070,9 @@ const uz: Partial<Record<StringKey, string>> = {
   setHeadedDesc: "Biror narsa noto'g'ri ketganda sahifani kuzatish uchun foydali.",
   setHeadless: "Agent brauzerini oynasiz ishlatish",
   setHeadlessDesc: "browser_* vositalari boshqaradigan brauzer.",
+  setEmbeddedBrowser: "Brauzer paneli",
+  setEmbeddedBrowserDesc:
+    "Ichki brauzer va browser_* vositalari. U mahalliy nosozliklarni tuzatish porti orqali ishlaydi, unga shu kompyuterdagi boshqa dasturlar ham ulana oladi — begona hisoblar bor mashinada o'chiring. Qayta ishga tushirilgandan keyin kuchga kiradi.",
   setModels: "Modellar",
   setModelsKnown: "{n} ta model ma'lum",
   setModelsFromAccount: "ChatGPT hisobingizdan o'qilgan.",

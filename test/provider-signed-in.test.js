@@ -83,3 +83,54 @@ test("signing out in the app outranks every other signal", () => {
     false
   );
 });
+
+test("a probe that looked and found nothing outranks a cookie still in the jar", () => {
+  // Holding a cookie is not holding a session. The jar keeps what it was
+  // given until something expires it, and a cookie the service has stopped
+  // honouring looks exactly like one it still accepts.
+  //
+  // The engine already knew: a turn failing "signed-out" sets the probe to
+  // false precisely so the app stops claiming a connection through every
+  // failed turn. That intent was discarded one line later, because
+  // `hasCookies` answered first and the probe never got a say - so on
+  // ChatGPT the banner went on saying connected while every turn failed.
+  assert.equal(
+    reportsSignedIn({
+      signedOut: false,
+      browserProvider: false,
+      hasCookies: true,
+      hasStoredToken: true,
+      probe: false,
+    }),
+    false
+  );
+});
+
+test("but nobody having looked yet is not a verdict", () => {
+  // `null` is the startup path: ChatGPT with cookies is reported ready
+  // without probing at all, and turning "not asked" into "signed out" would
+  // put a red banner over every launch until the first turn.
+  assert.equal(
+    reportsSignedIn({
+      signedOut: false,
+      browserProvider: false,
+      hasCookies: true,
+      hasStoredToken: false,
+      probe: null,
+    }),
+    true
+  );
+});
+
+test("and a probe that says yes still stands on its own", () => {
+  assert.equal(
+    reportsSignedIn({
+      signedOut: false,
+      browserProvider: false,
+      hasCookies: false,
+      hasStoredToken: false,
+      probe: true,
+    }),
+    true
+  );
+});

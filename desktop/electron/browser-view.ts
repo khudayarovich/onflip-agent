@@ -1,6 +1,7 @@
 import { app, BrowserWindow, WebContentsView } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { randomBytes } from "node:crypto";
 import {
   hideAutomation,
@@ -49,12 +50,60 @@ const views = new WeakMap<BrowserWindow, WebContentsView>();
  *
  * The socket is loopback-only, which is Chromium's default and not something
  * this passes an option to change.
+ *
+ * What that port is, stated exactly, because an external audit raised it and
+ * a vague answer would be worse than none:
+ *
+ * It is the DevTools protocol for this whole Chromium — every view in it,
+ * including OnFlip's own interface. Anything that can reach it can drive the
+ * browser, read what is on a page and run script in it. There is no
+ * authentication; Chromium does not offer any. The DNS-rebinding case is
+ * already covered — Chromium validates the Host header, so a web page cannot
+ * reach it — and the port is ephemeral, so it is not a number to guess at
+ * once and reuse. What remains is a *local* process reaching loopback.
+ *
+ * Against a process running as this user that is not a meaningful step up:
+ * it can already read the browser profiles, the session tokens and the
+ * config directly. Against another account on a shared machine it is, and
+ * file permissions do not close it, because a port can be found by scanning
+ * where a 0700 directory cannot be read.
+ *
+ * The port cannot be secured while it exists, because the feature *is* the
+ * port: the agent's browser tool drives the docked view over it. So the
+ * honest control is whether it opens at all, and it is a setting rather than
+ * an environment variable — a defence nobody can find is not a defence.
+ * Left on by default, because turning it off silently would remove a working
+ * feature from everyone to protect the few on a shared machine.
  */
 export function enableEmbeddedBrowser(): void {
   if (process.env.ONFLIP_EMBEDDED_BROWSER === "0") return;
+  if (embeddedBrowserDisabled()) {
+    console.log("[browser] the embedded browser is off in Settings; no DevTools port will be opened");
+    return;
+  }
   viewMark = randomBytes(9).toString("hex");
   app.commandLine.appendSwitch("remote-debugging-port", process.env.ONFLIP_CDP_PORT ?? "0");
   app.commandLine.appendSwitch("remote-debugging-address", "127.0.0.1");
+}
+
+/**
+ * Read the setting straight off disk.
+ *
+ * This runs before `app.whenReady()` — the switch is ignored after Chromium
+ * has started — which is before anything else in the app is up, so there is
+ * nothing to ask but the file. Any failure leaves the feature on: a
+ * misparsed config should not quietly remove the Browser pane.
+ */
+function embeddedBrowserDisabled(): boolean {
+  try {
+    const file = path.join(os.homedir(), ".onflip", "config.json");
+    const raw = JSON.parse(fs.readFileSync(file, "utf8").replace(/^﻿/, "")) as {
+      embeddedBrowser?: unknown;
+    };
+    return raw.embeddedBrowser === false;
+  } catch {
+    return false;
+  }
 }
 
 /** The port Chromium actually took, or null if it never opened one. */

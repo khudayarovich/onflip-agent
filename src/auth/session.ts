@@ -129,11 +129,11 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
 
     const allRows = db
       .prepare(
-        `SELECT name, encrypted_value FROM cookies
+        `SELECT name, host_key, encrypted_value FROM cookies
          WHERE host_key LIKE '%chatgpt.com' OR host_key LIKE '%openai.com'
          ORDER BY host_key`
       )
-      .all() as { name: string; encrypted_value: Buffer }[];
+      .all() as { name: string; host_key: string; encrypted_value: Buffer }[];
 
     const cookies: SessionCookie[] = [];
     let deviceId: string | undefined;
@@ -141,7 +141,10 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
     for (const row of allRows) {
       try {
         const value = decryptChromiumCookieValue(row.encrypted_value, cookieKey);
-        cookies.push({ name: row.name, value });
+        // The host is kept now rather than discarded. Two hosts are read
+        // here and the jar used to be flattened to name and value, so a
+        // cookie set for one of them was replayed to the other.
+        cookies.push({ name: row.name, value, domain: row.host_key });
         if (row.name === "oai-did") deviceId = value;
       } catch (e) {
         if (e instanceof CryptoError && e.message.includes("v20")) throw e;

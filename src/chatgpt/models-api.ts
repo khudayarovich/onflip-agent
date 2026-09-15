@@ -1,4 +1,4 @@
-import { SessionCookie } from "../auth/access";
+import { SessionCookie, cookieHeaderFor } from "../auth/access";
 import { fetchModelsViaBrowser } from "./browser-client";
 
 /**
@@ -71,7 +71,8 @@ async function viaApi(accessToken: string, cookies: SessionCookie[], deviceId?: 
     "user-agent": UA,
   };
   if (deviceId) headers["oai-device-id"] = deviceId;
-  if (cookies.length) headers.cookie = cookies.map((c) => `${c.name}=${c.value}`).join("; ");
+  const jar = cookieHeaderFor(cookies, "chatgpt.com");
+  if (jar) headers.cookie = jar;
 
   const res = await fetch("https://chatgpt.com/backend-api/models", { headers });
   if (!res.ok) throw new Error(`HTTP ${res.status}`);

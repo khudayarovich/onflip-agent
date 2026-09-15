@@ -37,5 +37,21 @@ export interface SessionEvidence {
 export function reportsSignedIn(e: SessionEvidence): boolean {
   if (e.signedOut) return false;
   if (e.browserProvider) return e.probe === true;
+  // A probe that has looked and found nothing outranks credentials that are
+  // merely present.
+  //
+  // Holding a cookie is not holding a session: the jar keeps what it was
+  // given until something expires it, and a cookie the service stopped
+  // honouring looks exactly like one it still does. The engine already
+  // knows better — a turn that fails "signed-out" sets this to false
+  // precisely so the app stops claiming a connection through every failed
+  // turn — and that intent was being discarded one line later, because
+  // `hasCookies` answered first and the probe never got a say.
+  //
+  // Only `false` counts, and `null` still means nobody has looked. The
+  // difference matters at startup, where ChatGPT with cookies is reported
+  // ready without probing at all: null keeps that fast path, false does not
+  // exist yet, and nothing flickers.
+  if (e.probe === false) return false;
   return e.hasCookies || e.hasStoredToken || e.probe === true;
 }

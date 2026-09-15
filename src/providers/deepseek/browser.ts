@@ -251,29 +251,113 @@ export interface SignedInCheck {
  * nothing and the sidebar falls back to "DeepSeek account". The token is used
  * for the one request and never stored or logged.
  */
-async function readProfile(page: Page): Promise<{ name?: string; email?: string }> {
+/**
+ * What DeepSeek itself says about the token in this profile.
+ *
+ * Three answers, and the third is the one that keeps this honest:
+ *
+ * - `live`    — the service accepted the token and described the account.
+ * - `dead`    — the service refused it. 401 or 403 is DeepSeek saying, in
+ *               as many words, that this is not a session.
+ * - `unknown` — nobody could ask. Offline, a 5xx, a timeout, a page that
+ *               was not ready. Not evidence of anything.
+ *
+ * This request was already here, and its answer was already being thrown
+ * away: it existed to put a name in the sidebar, and every failure — a dead
+ * token included — returned the same empty object as a network hiccup. So
+ * the one piece of ground truth OnFlip could get about a DeepSeek session
+ * was fetched, received, and discarded, while the signed-in decision was
+ * made from a string in localStorage.
+ *
+ * That is the same fault Qwen was shipping for six releases: a token that
+ * is present, well-formed and refused. There the remedy had to be inferred
+ * from the page's own header, because Qwen offered nothing better. Here the
+ * service answers the question directly, and always could.
+ *
+ * `unknown` deliberately does not mean signed out. Being wrong that way
+ * sends somebody to a sign-in they did not need, which is exactly the
+ * complaint this whole line of work started from.
+ */
+export type SessionVerdict = "live" | "dead" | "unknown";
+
+/** What came back from asking DeepSeek, as facts rather than a conclusion. */
+export interface SessionAnswer {
+  /** HTTP status, or 0 when there was nothing to ask with or nobody answered. */
+  status?: number;
+  /** Did the request complete at all? False for offline, DNS, a timeout. */
+  reached?: boolean;
+  /** Did the answer actually describe an account? */
+  hasUser?: boolean;
+}
+
+/**
+ * The rule, kept out of the page so it can be held against every answer.
+ *
+ * The one case that means signed out is the service refusing the credential.
+ * Everything else that goes wrong — offline, a 502, a body that would not
+ * parse, a shape that changed — is this code failing to find out, and
+ * `unknown` says so. Being wrong in that direction costs a request; being
+ * wrong in the other sends somebody to a sign-in they did not need, which is
+ * the complaint this entire line of work began with.
+ *
+ * `status: 0` with `reached: true` is the one odd pair: it means the store
+ * had no token to ask with, which is not a service refusal but is certainly
+ * not a session either.
+ */
+export function sessionVerdict(answer: SessionAnswer | null | undefined): SessionVerdict {
+  if (!answer || answer.reached !== true) return "unknown";
+  const status = answer.status ?? 0;
+  if (status === 0) return "dead";
+  if (status === 401 || status === 403) return "dead";
+  if (status < 200 || status >= 300) return "unknown";
+  return answer.hasUser ? "live" : "unknown";
+}
+
+async function askDeepSeek(
+  page: Page
+): Promise<{ verdict: SessionVerdict; name?: string; email?: string }> {
   try {
     const raw = (await Promise.race([
       page.evaluate(`(async () => {
         let token = localStorage.getItem(${JSON.stringify(TOKEN_KEY)}) || "";
         try { token = JSON.parse(token).value || token; } catch (e) {}
-        if (!token) return null;
-        const res = await fetch("/api/v0/users/current", {
-          credentials: "include",
-          headers: { authorization: "Bearer " + token },
-        });
-        if (!res.ok) return null;
-        const body = await res.json();
-        const user = body && body.data && body.data.biz_data;
-        if (!user) return null;
-        return { name: (user.id_profile || {}).name || "", email: user.email || "" };
+        if (!token) return { status: 0, reached: true, hasUser: false };
+        let res;
+        try {
+          res = await fetch("/api/v0/users/current", {
+            credentials: "include",
+            headers: { authorization: "Bearer " + token },
+          });
+        } catch (e) {
+          return { status: 0, reached: false, hasUser: false };
+        }
+        let user = null;
+        try {
+          const body = await res.json();
+          user = body && body.data && body.data.biz_data;
+        } catch (e) { user = null; }
+        return {
+          status: res.status,
+          reached: true,
+          hasUser: Boolean(user),
+          name: user ? (user.id_profile || {}).name || "" : "",
+          email: user ? user.email || "" : "",
+        };
       })()`),
-      new Promise((resolve) => setTimeout(() => resolve(null), 8_000)),
-    ])) as { name?: string; email?: string } | null;
-    if (!raw) return {};
-    return { name: raw.name?.trim() || undefined, email: raw.email?.trim() || undefined };
+      new Promise((resolve) => setTimeout(() => resolve({ reached: false }), 8_000)),
+    ])) as SessionAnswer & { name?: string; email?: string };
+
+    const verdict = sessionVerdict(raw);
+    if (verdict !== "live") {
+      logger.info("deepseek", "asked the service about the session", {
+        verdict,
+        status: raw?.status ?? null,
+        reached: raw?.reached ?? false,
+      });
+    }
+    return { verdict, name: raw?.name?.trim() || undefined, email: raw?.email?.trim() || undefined };
   } catch {
-    return {};
+    return { verdict: "unknown" };
   }
 }
 
@@ -300,9 +384,27 @@ export async function checkSignedIn(opts: OpenOptions & { tries?: number } = {})
       const storage = await readStorage(page);
       const ok = isSignedIn(storage);
       if (ok) {
-        logger.info("deepseek", "checked the session", { signedIn: true, attempt });
-        const profile = await readProfile(page);
-        return { signedIn: true, account: profile.name, email: profile.email };
+        // The token is there. Whether it still means anything is DeepSeek's
+        // to say, and it will say so for the price of the request this line
+        // was already making to fill in the account name.
+        const asked = await askDeepSeek(page);
+        if (asked.verdict === "dead") {
+          logger.info("deepseek", "the token is in the profile and the service refuses it", {
+            attempt,
+          });
+          // Same shape as an empty store, because it is the same answer to
+          // the person: sign in. Retried like one too — a refusal seen once
+          // on a page that was still settling should not end the matter.
+          if (attempt === tries) return { signedIn: false };
+          await page.waitForTimeout(2_000);
+          continue;
+        }
+        logger.info("deepseek", "checked the session", {
+          signedIn: true,
+          attempt,
+          confirmed: asked.verdict === "live",
+        });
+        return { signedIn: true, account: asked.name, email: asked.email };
       }
       // An empty store on the last attempt is the answer; before that it may
       // just be early, so give the page another moment and look again.

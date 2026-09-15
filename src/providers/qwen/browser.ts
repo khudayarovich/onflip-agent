@@ -796,6 +796,19 @@ export async function sendTurn(
       .waitForSelector(COMPOSER, { timeout: 20_000 })
       .catch(() => logger.warn("qwen", "the composer did not come back after the reload"));
     await page.waitForTimeout(2_500);
+    // Ask before spending the second attempt. The page has just reloaded,
+    // so if the header is offering Log in there is nothing wrong with the
+    // send and nothing to be gained by repeating it - the session is gone,
+    // and the useful thing is to say so now rather than after another
+    // silence window spent waiting on a guest conversation that will never
+    // answer. This is the check the driver did not have when the first
+    // recovery was written; it had to send and wait to find out.
+    if (await pageShowsAuthPrompt(page)) {
+      throw new QwenError(
+        "Qwen is asking this browser to sign in, so the message could not be sent. Sign in again from the account menu.",
+        "signed-out"
+      );
+    }
     // The reload emptied the composer, so the turn has to go again - the
     // first attempt never reached the model.
     await submit();

@@ -64,7 +64,13 @@
       ],
       "icon": "buildResources/icon.png",
       "category": "public.app-category.developer-tools",
-      "artifactName": "OnFlip-${version}-mac-${arch}.${ext}"
+      "artifactName": "OnFlip-${version}-mac-${arch}.${ext}",
+      "extendInfo": {
+        "NSAppTransportSecurity": {
+          "NSAllowsArbitraryLoads": false,
+          "NSAllowsLocalNetworking": true
+        }
+      }
     },
     "nsis": {
       "oneClick": false,

@@ -96,6 +96,17 @@ export interface OnFlipConfig {
    */
   browserHeadless?: boolean;
   /**
+   * Open the DevTools port the docked Browser pane is driven over.
+   *
+   * On by default. Turning it off removes the agent's browser tool and the
+   * Browser pane along with it - the feature is that port, and there is no
+   * way to keep one without the other. Worth turning off on a machine other
+   * people have accounts on: the port is loopback-only and unauthenticated,
+   * which stops a web page reaching it but not another local account.
+   * Read before Chromium starts, so it takes effect on the next launch.
+   */
+  embeddedBrowser?: boolean;
+  /**
    * Send "continue" by itself when a turn dies on a transport failure.
    *
    * The failure this exists for arrives after an hour of unattended work:
