@@ -7,7 +7,7 @@ import { chromium, Browser, BrowserContext, Locator, Page } from "playwright";
 import type { ReplyMeta } from "./transport";
 import { SessionCookie } from "../auth/access";
 import { normalizeModel, thinkingDirective } from "../models";
-import { configDir, loadConfig, saveConfig } from "../config";
+import { configDir, loadConfig, mkdirPrivate, saveConfig } from "../config";
 import type { FailureCode } from "./backoff";
 import {
   COMPOSER_SELECTORS,
@@ -592,7 +592,7 @@ export function configureBrowser(opts: BrowserOptions): void {
 
 function profileDir(): string {
   const dir = path.join(configDir(), "browser-profile");
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirPrivate(dir);
   return dir;
 }
 

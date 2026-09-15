@@ -206,3 +206,38 @@ export function thinkingChoices(provider: string | undefined): { label: string; 
   if (provider === "deepseek") return DEEPSEEK_THINKING;
   return THINKING;
 }
+
+/**
+ * Is this a direct message from the person, rather than a group?
+ *
+ * Telegram guarantees that in a private chat the chat id *is* the user id,
+ * and gives groups and channels negative ids. So one comparison settles it
+ * without trusting a `type` field that has to be plumbed through.
+ *
+ * It matters because of what the bot is. A remembered chat becomes a
+ * destination for everything afterwards — answers, tool output, the contents
+ * of files, and permission prompts with live buttons. An authorized person
+ * inviting the bot into a group used to add that group permanently, so a
+ * later approval prompt for a shell command could appear in front of
+ * everybody in it, and removing that person from the allow-list did not
+ * remove the group they had introduced.
+ *
+ * Named in an external security audit. The bot answers in a direct message
+ * only.
+ */
+export function isDirectChat(chatId: number | undefined, userId: number | undefined): boolean {
+  if (typeof chatId !== "number" || typeof userId !== "number") return false;
+  if (!Number.isSafeInteger(chatId) || chatId <= 0) return false;
+  return chatId === userId;
+}
+
+/**
+ * Remembered chats, with anything that is not a direct message dropped.
+ *
+ * Run over what was persisted by an older build, which remembered any chat
+ * it was spoken to in. A group id is negative, so it cannot be a private
+ * chat, and it is removed rather than left to receive the next answer.
+ */
+export function directChatsOnly(saved: number[]): number[] {
+  return [...new Set((saved ?? []).filter((id) => Number.isSafeInteger(id) && id > 0))];
+}

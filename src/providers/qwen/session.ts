@@ -44,6 +44,43 @@ export const ROLE_KEY = "userRole";
  * wrong that way is one extra sign-in; the cost the other way is a run that
  * fails on its first send.
  */
+/**
+ * Has this token's own expiry already passed?
+ *
+ * A JWT carries `exp` — seconds since the epoch — in its payload, which is
+ * base64url and not encrypted. Reading it is not decryption and proves
+ * nothing about the signature: a token can be unexpired and still revoked,
+ * and only the service can settle that. What it does give is the one case
+ * that can be settled locally, for free, before anything is sent.
+ *
+ * That case is the whole of today. Qwen leaves an expired token in
+ * localStorage at full length and correct shape, `isSignedIn` looked only at
+ * the shape, the app reported itself connected, and the first message went to
+ * a guest chat and was never answered. The expiry was sitting in the token
+ * the entire time.
+ *
+ * Unreadable is not expired. A token in a shape this does not understand is
+ * left for the page to judge — refusing it here would turn one unfamiliar
+ * format into "you are signed out" for someone who is not.
+ *
+ * Sixty seconds of slack, because clocks disagree and a token about to expire
+ * is better refused a minute early than used a minute late.
+ */
+export function isExpiredToken(token: string, now: number = Date.now()): boolean {
+  const parts = (token ?? "").split(".");
+  if (parts.length !== 3) return false;
+  try {
+    const payload = parts[1].replace(/-/g, "+").replace(/_/g, "/");
+    const json = Buffer.from(payload, "base64").toString("utf8");
+    const exp = (JSON.parse(json) as { exp?: unknown }).exp;
+    if (typeof exp !== "number" || !Number.isFinite(exp)) return false;
+    return exp * 1000 <= now + 60_000;
+  } catch {
+    // Not a shape this understands; the page is the judge.
+    return false;
+  }
+}
+
 export function isSignedIn(storage: Record<string, string | null | undefined>): boolean {
   const raw = storage?.[TOKEN_KEY];
   if (typeof raw !== "string") return false;
@@ -53,7 +90,12 @@ export function isSignedIn(storage: Record<string, string | null | undefined>): 
   // reading it as a token would call a signed-out profile signed in.
   if (token.startsWith("{")) return false;
   const parts = token.split(".");
-  return parts.length === 3 && parts.every((p) => p.length > 0);
+  if (parts.length !== 3 || !parts.every((p) => p.length > 0)) return false;
+  // Shape is not liveness. The token carries its own expiry, and reading it
+  // costs nothing — so the one case that can be settled without asking Qwen
+  // is settled here rather than discovered by sending a message into a guest
+  // chat and waiting for an answer that never comes.
+  return !isExpiredToken(token);
 }
 
 /**

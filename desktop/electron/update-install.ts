@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import { app, net } from "electron";
 import { checkForUpdate, type UpdateInfo } from "./updates";
 
@@ -236,4 +237,111 @@ export function stopUpdateWatch(): void {
 /** For tests: forget what has been announced. */
 export function __resetAnnouncedForTest(): void {
   announced = null;
+}
+
+/**
+ * The published checksum for one file, out of a `sha256sum` listing.
+ *
+ * The format is what `sha256sum` and `shasum -a 256` emit: a hex digest, two
+ * spaces, the file name, one per line. Pure, so the parsing can be held
+ * against the real listings this project publishes without a network.
+ *
+ * Returns null when the file is not named in the list, which is not the same
+ * as a mismatch — a release that never published a sum for this artifact has
+ * nothing to disagree with.
+ */
+export function sumFor(listing: string, name: string): string | null {
+  for (const line of (listing ?? "").split(/\r?\n/)) {
+    const m = /^([0-9a-f]{64})\s+\*?(.+?)\s*$/i.exec(line.trim());
+    if (!m) continue;
+    // Some tools write a path; only the base name is ever compared.
+    const listed = m[2].split(/[\\/]/).pop();
+    if (listed === name) return m[1].toLowerCase();
+  }
+  return null;
+}
+
+/** The SHA-256 of a file on disk, lowercase hex. */
+export function sha256File(file: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = fs.createReadStream(file);
+    stream.on("error", reject);
+    stream.on("data", (chunk) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex")));
+  });
+}
+
+/** Fetch a small text asset, such as a checksum listing. */
+function fetchText(url: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const request = net.request({ url, redirect: "follow" });
+    request.on("response", (response) => {
+      const status = response.statusCode ?? 0;
+      if (status < 200 || status >= 300) {
+        reject(new Error(`the checksum list answered ${status}`));
+        return;
+      }
+      let text = "";
+      response.on("data", (chunk: Buffer) => {
+        text += chunk.toString("utf8");
+        // A checksum listing is a few hundred bytes. Anything large is not
+        // one, and is not going to be read into memory to find out.
+        if (text.length > 64_000) {
+          reject(new Error("the checksum list was far larger than one should be"));
+          request.abort();
+        }
+      });
+      response.on("end", () => resolve(text));
+      response.on("error", reject);
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
+/**
+ * Hold a downloaded artifact against the checksum the release published.
+ *
+ * Throws when they disagree, which is the only outcome that must stop an
+ * install. A release with no listing, or no entry for this file, is reported
+ * and allowed: those are older releases, and refusing them would strand
+ * anyone on one rather than protect them.
+ */
+export async function verifyDownload(
+  file: string,
+  name: string,
+  sumsUrl: string | undefined,
+  note: (line: string) => void,
+  /**
+   * How the listing is fetched. Injectable so the rule that matters — a
+   * mismatch refuses the install — can be tested without a network, which is
+   * the difference between a test of the logic and a test of GitHub.
+   */
+  fetcher: (url: string) => Promise<string> = fetchText
+): Promise<void> {
+  if (!sumsUrl) {
+    note("this release published no checksum list; installing on the download alone");
+    return;
+  }
+  let listing: string;
+  try {
+    listing = await fetcher(sumsUrl);
+  } catch (e) {
+    note(`the checksum list could not be fetched (${e instanceof Error ? e.message : String(e)})`);
+    return;
+  }
+  const expected = sumFor(listing, name);
+  if (!expected) {
+    note(`the checksum list does not name ${name}; installing on the download alone`);
+    return;
+  }
+  const actual = await sha256File(file);
+  if (actual !== expected) {
+    throw new Error(
+      `the downloaded file does not match the checksum this release published ` +
+        `(expected ${expected.slice(0, 16)}…, got ${actual.slice(0, 16)}…). Nothing was installed.`
+    );
+  }
+  note(`checksum verified (${expected.slice(0, 16)}…)`);
 }

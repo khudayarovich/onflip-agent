@@ -291,6 +291,36 @@ export function configDir(): string {
   return CONFIG_DIR;
 }
 
+/**
+ * Create a directory only this user can enter, and repair one that is not.
+ *
+ * `mkdirSync` takes the process umask, which on a typical Unix account means
+ * 0755 — readable and listable by every other account on the machine. For
+ * somewhere holding browser profiles, session files, logs, screenshots and
+ * transcripts, that is the wrong default: an external audit found the whole
+ * `~/.onflip` tree world-readable, with only the individual config files
+ * restricted.
+ *
+ * The mode is set explicitly rather than left to `mkdirSync`'s `mode`
+ * argument alone, because that argument is also masked by the umask and
+ * because a directory created by an earlier version is already there with
+ * the old mode. Both cases end at 0700.
+ *
+ * Failure is deliberately quiet. On Windows `chmod` is close to a no-op —
+ * the ACL is what matters there, and the per-user profile directory is
+ * already restricted — and a read-only home should not stop the agent
+ * running. The directory being created is the part that must work; its mode
+ * is a hardening step, not a precondition.
+ */
+export function mkdirPrivate(dir: string): void {
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try {
+    fs.chmodSync(dir, 0o700);
+  } catch {
+    /* not every filesystem or platform honours it */
+  }
+}
+
 export function configPath(): string {
   return CONFIG_PATH;
 }
@@ -449,7 +479,7 @@ function writeConfig(config: OnFlipConfig, action: string): void {
     return;
   }
   try {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true });
+    mkdirPrivate(CONFIG_DIR);
     writeFileAtomically(CONFIG_PATH, `${JSON.stringify(config, null, 2)}\n`);
   } catch {
     // A read-only home directory should not stop the agent from running.

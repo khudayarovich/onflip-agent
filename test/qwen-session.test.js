@@ -245,3 +245,47 @@ test("a guest chat id is never mistaken for a conversation", () => {
   // the next turn would resume a conversation that cannot answer.
   assert.equal(conversationIdFrom("https://chat.qwen.ai/c/guest"), null);
 });
+
+test("a token whose own expiry has passed is not a session", () => {
+  // From an external security audit, and from a day of this exact failure.
+  // Qwen leaves an expired token in localStorage at full length and correct
+  // shape; the check looked only at the shape, the app reported itself
+  // connected, and the first message went to a guest chat and was never
+  // answered. The expiry was sitting inside the token the whole time.
+  //
+  // This is an early rejection, not a verification: a token can be unexpired
+  // and still revoked, and only Qwen can settle that. It settles the one case
+  // that can be settled locally, before anything is sent.
+  const { isExpiredToken } = require("../dist/providers/qwen/session");
+  const make = (payload) =>
+    ["eyJhbGciOiJIUzI1NiJ9", Buffer.from(JSON.stringify(payload)).toString("base64url"), "sig"].join(".");
+
+  const hourAgo = Math.floor(Date.now() / 1000) - 3600;
+  const hourAway = Math.floor(Date.now() / 1000) + 3600;
+
+  assert.equal(isExpiredToken(make({ exp: hourAgo })), true);
+  assert.equal(isExpiredToken(make({ exp: hourAway })), false);
+  assert.equal(isSignedIn({ [TOKEN_KEY]: make({ exp: hourAgo }) }), false, "and it is not a session");
+  assert.equal(isSignedIn({ [TOKEN_KEY]: make({ exp: hourAway }) }), true);
+});
+
+test("a token about to expire is refused a minute early", () => {
+  // Clocks disagree, and a token that dies mid-turn costs a whole exchange.
+  const { isExpiredToken } = require("../dist/providers/qwen/session");
+  const make = (exp) =>
+    ["eyJhbGciOiJIUzI1NiJ9", Buffer.from(JSON.stringify({ exp })).toString("base64url"), "sig"].join(".");
+  assert.equal(isExpiredToken(make(Math.floor(Date.now() / 1000) + 30)), true);
+  assert.equal(isExpiredToken(make(Math.floor(Date.now() / 1000) + 300)), false);
+});
+
+test("a token this cannot read is left for the page to judge", () => {
+  // Unreadable is not expired. Turning one unfamiliar format into "you are
+  // signed out" would be the same mistake in the other direction.
+  const { isExpiredToken } = require("../dist/providers/qwen/session");
+  assert.equal(isExpiredToken("not.a.jwt"), false);
+  assert.equal(isExpiredToken("eyJhbGciOiJIUzI1NiJ9.bm90LWpzb24.sig"), false);
+  assert.equal(isExpiredToken(""), false);
+  // No `exp` claim at all: nothing to judge, so nothing is claimed.
+  const noExp = ["eyJhbGciOiJIUzI1NiJ9", Buffer.from(JSON.stringify({ sub: "x" })).toString("base64url"), "sig"].join(".");
+  assert.equal(isExpiredToken(noExp), false);
+});

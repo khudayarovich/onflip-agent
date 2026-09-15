@@ -1,3 +1,4 @@
+import * as fs from "node:fs";
 import * as path from "node:path";
 
 /**
@@ -134,21 +135,29 @@ export function assessCommand(command: string): DangerAssessment {
   return { dangerous: reasons.length > 0, reasons: [...new Set(reasons)] };
 }
 
-/** First meaningful token of a command, used as the allowlist key. */
+/**
+ * What "always allow" remembers: this command, not a class of them.
+ *
+ * It used to return the first token — or the first two for subcommand-driven
+ * tools — and a later command sharing that head was then treated as already
+ * approved. An external audit demonstrated the consequence against the
+ * shipped build: approving anything beginning with `python` stored the key
+ * `python`, after which `python -c "…"` ran with no prompt at all. The same
+ * held for `npm`, `git`, every shell interpreter, and every command whose
+ * arguments *are* its behaviour.
+ *
+ * The button said "Always allow python", which described the grant
+ * accurately — and the accuracy is exactly what made it invisible. Nobody
+ * reads that as "and anything else I ever run through Python".
+ *
+ * So an implicit grant is now exact. Whitespace is normalised, because two
+ * commands differing only in spacing are the same command, and nothing else
+ * is folded. Anyone who genuinely wants a class can still say so with a rule
+ * (`git *: allow`) — a decision written down deliberately rather than
+ * inferred from one click on one prompt.
+ */
 export function commandKey(command: string): string {
-  const cleaned = command.trim().replace(/^[(\s{]+/, "");
-  const parts = cleaned.split(/\s+/).filter(Boolean);
-  if (parts.length === 0) return "";
-  const head = parts[0].toLowerCase();
-  // Two-word keys read far better for subcommand-driven tools.
-  const SUBCOMMAND_TOOLS = new Set([
-    "git", "npm", "npx", "pnpm", "yarn", "cargo", "go", "docker", "kubectl",
-    "dotnet", "pip", "python", "poetry", "gh", "terraform", "make",
-  ]);
-  if (SUBCOMMAND_TOOLS.has(head) && parts[1] && !parts[1].startsWith("-")) {
-    return `${head} ${parts[1].toLowerCase()}`;
-  }
-  return head;
+  return command.trim().replace(/\s+/g, " ");
 }
 
 /**
@@ -282,11 +291,31 @@ const NEVER_REMEMBER = new Set(["sudo", "su", "doas", "runas"]);
  */
 export function isStorableCommandKey(key: string): boolean {
   if (key.length < 2) return false;
-  if (/["'`;|&$()<>*?=]/.test(key)) return false;
+  // Long enough to be a command, short enough that the list cannot be filled
+  // with one enormous entry.
+  if (key.length > 400) return false;
+  // Command substitution is refused, and only command substitution.
+  //
+  // The old rule rejected quotes and separators too, which made sense when a
+  // key was a prefix: the rest of the line was thrown away, so anything in it
+  // was an unknown. An exact key keeps the whole command, and `splitCommands`
+  // has already honoured quoting — a `;` surviving into a segment is literal
+  // text inside a string, not a second command. Refusing those would mean the
+  // "always allow" button silently doing nothing for any command containing a
+  // quote, which is its own kind of dishonesty.
+  //
+  // Substitution is different in kind. `$(…)` and backticks are a command
+  // whose text is decided when it runs, so the same stored string is not the
+  // same work twice, and an exact match gives no protection at all.
+  if (/[`]/.test(key) || key.includes("$(")) return false;
   const head = key.split(" ")[0];
   if (CONTROL_WORDS.has(head) || NEVER_REMEMBER.has(head)) return false;
-  // A bare name, a path, or a name and its subcommand.
-  return /^[a-z0-9._\/\\:+-]+( [a-z0-9._-]+)?$/i.test(key);
+  // A variable assignment is an environment, not a command.
+  if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(head)) return false;
+  // The head still has to look like a program: a bare name or a path. The
+  // arguments after it are free, because they are now part of what was
+  // approved rather than something the key throws away.
+  return /^[a-z0-9._/\\:+-]+$/i.test(head);
 }
 
 /** The allowlist key of every command on the line, in order. */
@@ -333,6 +362,44 @@ function isInside(parent: string, child: string): boolean {
   return rel === "" || (!rel.startsWith("..") && !path.isAbsolute(rel));
 }
 
+/**
+ * Where a path really leads, following any symlink on the way.
+ *
+ * `path.resolve` is lexical: it cancels `..` and joins, and knows nothing
+ * about links. So `workspace/linked/file` looks contained whatever `linked`
+ * points at, the policy clears it as a workspace edit, and `writeFileSync`
+ * then follows the link and writes outside. A repository containing one
+ * symlink turns an auto-approved workspace edit into an external write, and
+ * the approval dialog shows the lexical path, which conceals it.
+ *
+ * A file that does not exist yet cannot be resolved, so the nearest existing
+ * ancestor is resolved instead and the remainder joined back on — which is
+ * the part that matters, since the link is always a *directory* on the way.
+ *
+ * Both sides of a containment test must go through this. On macOS `/tmp` is
+ * itself a link to `/private/tmp`, so canonicalising only the target would
+ * put an ordinary workspace write outside its own workspace.
+ */
+export function realPath(target: string): string {
+  let current = path.resolve(target);
+  const tail: string[] = [];
+  // Bounded: a path has finitely many segments, and the loop consumes one
+  // each time it fails.
+  for (let depth = 0; depth < 64; depth++) {
+    try {
+      return path.join(fs.realpathSync(current), ...tail);
+    } catch {
+      const parent = path.dirname(current);
+      // The root does not exist either: nothing to canonicalise, so the
+      // lexical answer is the only one available.
+      if (parent === current) return path.resolve(target);
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+  return path.resolve(target);
+}
+
 export type PolicyVerdict =
   | { outcome: "allow"; reason?: string }
   | { outcome: "deny"; reason: string }
@@ -354,10 +421,13 @@ export function evaluate(policy: PolicyState, req: PermissionRequest): PolicyVer
   }
 
   if (req.kind === "write") {
-    const target = req.targetPath ? path.resolve(req.targetPath) : undefined;
-    const inWorkspace = target ? isInside(policy.workspace, target) : false;
+    // Where the write really lands, not where the path says it does.
+    // Both sides are canonicalised: see `realPath`.
+    const target = req.targetPath ? realPath(req.targetPath) : undefined;
+    const workspace = realPath(policy.workspace);
+    const inWorkspace = target ? isInside(workspace, target) : false;
     const preCleared =
-      target && [...policy.allowedWriteDirs].some((d) => isInside(d, target));
+      target && [...policy.allowedWriteDirs].some((d) => isInside(realPath(d), target));
 
     if (preCleared) return { outcome: "allow", reason: "directory previously approved" };
     if (policy.mode === "yolo") return { outcome: "allow" };

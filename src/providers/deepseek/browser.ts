@@ -12,6 +12,7 @@ import {
   deepseekProfileDir,
   isSignedIn,
 } from "./session";
+import { mkdirPrivate } from "../../config";
 
 /**
  * The browser OnFlip drives DeepSeek with.
@@ -165,7 +166,7 @@ export interface OpenOptions {
 export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContext> {
   if (context) return context;
   const dir = deepseekProfileDir();
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirPrivate(dir);
   logger.info("deepseek", "opening the browser", { profile: dir, headed: Boolean(opts.headed) });
   context = await chromium.launchPersistentContext(dir, {
     executablePath: executable(),

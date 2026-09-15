@@ -39,6 +39,7 @@ import { checkForUpdate, whyNotInstallable } from "./updates";
 import {
   applyUpdate,
   downloadUpdate,
+  verifyDownload,
   startUpdateWatch,
   type UpdateProgress,
 } from "./update-install";
@@ -275,6 +276,72 @@ function appIcon(): string {
 function wsOf(e: IpcMainInvokeEvent | IpcMainEvent): Workspace | null {
   const win = BrowserWindow.fromWebContents(e.sender);
   return win ? (workspaces.get(win.id) ?? null) : null;
+}
+
+/**
+ * Is this IPC really from one of OnFlip's own windows?
+ *
+ * The preload bridge exposes terminal execution, file operations, sign-in and
+ * sign-out, provider switching and a generic engine RPC. Most handlers took
+ * whatever arrived: fourteen of forty-one looked up a workspace and bailed
+ * without one, and the rest checked nothing at all. An external audit paired
+ * that with the debugging port below to describe a practical local privilege
+ * escalation — attach, evaluate script in the privileged page, call anything.
+ *
+ * Two questions, and both have to hold. The sender must be a window this
+ * process created, and the frame that sent it must be that window's *own*
+ * top-level document rather than an iframe embedded in it. An iframe inherits
+ * nothing from the preload bridge, but saying so explicitly costs one
+ * comparison and removes a whole class of "what if".
+ *
+ * `trustedHandle` and `trustedOn` below are the only registration paths used
+ * in this file, so a handler added later gets the check whether or not
+ * anybody remembered it. That is the point: a guard that must be repeated
+ * forty-one times is a guard that will be missed once.
+ */
+function isTrustedSender(e: IpcMainInvokeEvent | IpcMainEvent): boolean {
+  const contents = e.sender;
+  if (!contents || contents.isDestroyed()) return false;
+  if (!BrowserWindow.fromWebContents(contents)) return false;
+  // `senderFrame` is null once the frame has gone, which is not a frame we
+  // are willing to act for.
+  const frame = e.senderFrame;
+  if (!frame) return false;
+  return frame.parent === null;
+}
+
+function refuse(channel: string): void {
+  console.warn(`[ipc] refused ${channel}: the sender is not a trusted OnFlip window`);
+}
+
+/** `ipcMain.handle`, with the sender checked first. */
+function trustedHandle(
+  channel: string,
+  fn: (e: IpcMainInvokeEvent, ...args: never[]) => unknown
+): void {
+  ipcMain.handle(channel, (e, ...args) => {
+    if (!isTrustedSender(e)) {
+      refuse(channel);
+      // A thrown error is the honest answer to an invoke: a resolved
+      // `undefined` would look to a caller like the work was done.
+      throw new Error("refused: untrusted sender");
+    }
+    return (fn as (e: IpcMainInvokeEvent, ...a: unknown[]) => unknown)(e, ...args);
+  });
+}
+
+/** `ipcMain.on`, with the sender checked first. */
+function trustedOn(
+  channel: string,
+  fn: (e: IpcMainEvent, ...args: never[]) => void
+): void {
+  ipcMain.on(channel, (e, ...args) => {
+    if (!isTrustedSender(e)) {
+      refuse(channel);
+      return;
+    }
+    (fn as (e: IpcMainEvent, ...a: unknown[]) => void)(e, ...args);
+  });
 }
 
 /**
@@ -756,8 +823,19 @@ function startEngine(ws: Workspace, requested?: string): void {
   };
 }
 
-// Pending approval prompts, answered by the renderers. Ids are global so a
-// response cannot be credited to the wrong window's prompt.
+// Pending approval prompts, answered by the renderers.
+//
+// Ids are global, which stops two windows minting the same one - but that
+// was mistaken for ownership, and it is not. A global id prevents a
+// collision; it does nothing to stop one window answering another's
+// question. The waiter has carried its workspace since it was written and
+// nobody compared it, so any renderer could settle any prompt: with two
+// windows open, one workspace could approve a shell command the other was
+// asking about, and the person looking at the dialog would see it close
+// with an answer they did not give.
+//
+// `answerApproval` below is the one place a decision is accepted, and it
+// requires the owner.
 let nextApprovalId = 1;
 interface ApprovalWaiter {
   ws: Workspace;
@@ -1094,7 +1172,7 @@ async function switchProvider(id: unknown): Promise<{ ok: boolean; id?: string; 
 }
 function registerIpc(): void {
 
-  ipcMain.handle("engine-call", async (e, payload: { method: string; params?: unknown }) => {
+  trustedHandle("engine-call", async (e, payload: { method: string; params?: unknown }) => {
     const ws = wsOf(e);
     if (!ws?.peer || ws.engineExited) throw new Error("The engine is not running.");
     // A fresh renderer — first load or a reload — announces itself with init.
@@ -1105,25 +1183,44 @@ function registerIpc(): void {
     return await ws.peer.request(payload.method, payload.params ?? {});
   });
 
-  ipcMain.on("approval-response", (_e, payload: { id: number; decision: ApprovalDecisionDTO }) => {
+  trustedOn("approval-response", (e, payload: { id: number; decision: ApprovalDecisionDTO }) => {
+    const waiter = approvalWaiters.get(payload.id);
+    // The window that was asked is the only window that may answer.
+    //
+    // Not a theoretical boundary: approvals are what stand between the
+    // model and a shell command, and a second window - or a renderer
+    // somebody has got into - could settle a prompt it was never shown.
+    // The sender was available here all along and simply discarded.
+    if (waiter && waiter.ws !== wsOf(e)) {
+      console.warn(
+        "[approval] a window tried to answer a prompt belonging to another; ignored"
+      );
+      return;
+    }
+    // A decision is two booleans and nothing else. A renderer that has been
+    // tampered with should not be able to widen one by sending extra.
+    const decision: ApprovalDecisionDTO = {
+      allow: payload?.decision?.allow === true,
+      remember: payload?.decision?.remember === true,
+      abort: payload?.decision?.abort === true,
+    };
     // Answered in the app: close the phone's copy so nobody is left holding
     // live buttons for a settled question.
     if (approvalWaiters.has(payload.id)) {
-      telegramApprovalDone(payload.id, payload.decision.allow ? "allowed here" : "denied here");
+      telegramApprovalDone(payload.id, decision.allow ? "allowed here" : "denied here");
     }
     settleApprovalToast(payload.id);
-    const waiter = approvalWaiters.get(payload.id);
     setImmediate(refreshIndicator);
     if (!waiter) return;
     approvalWaiters.delete(payload.id);
-    waiter.resolve(payload.decision);
+    waiter.resolve(decision);
   });
 
   // Another window, another engine, another concurrent session.
   // The panel owns the layout, so it measures its own placeholder and sends
   // the rectangle; a native view knows nothing about CSS and would otherwise
   // have to be positioned by guessing at the app's geometry.
-  ipcMain.handle(
+  trustedHandle(
     "browser-view-bounds",
     (e, payload: { x: number; y: number; width: number; height: number }) => {
       const win = BrowserWindow.fromWebContents(e.sender);
@@ -1134,7 +1231,7 @@ function registerIpc(): void {
 
   // Closing the panel must not throw the page away — the agent may still be
   // working in it — so this only takes it off screen.
-  ipcMain.handle("browser-view-hide", (e) => {
+  trustedHandle("browser-view-hide", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (win) hideView(win);
     return true;
@@ -1142,13 +1239,13 @@ function registerIpc(): void {
 
   // The renderer decides whether to draw a placeholder or the old screencast,
   // and it cannot know which until it is told whether the port opened.
-  ipcMain.handle("browser-view-available", () => resolveEndpoint() !== null);
+  trustedHandle("browser-view-available", () => resolveEndpoint() !== null);
 
-  ipcMain.handle("browser-view-chrome", (e) => {
+  trustedHandle("browser-view-chrome", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return win ? viewChrome(win) : null;
   });
-  ipcMain.handle("browser-view-act", (e, payload: { action: ViewAction }) => {
+  trustedHandle("browser-view-act", (e, payload: { action: ViewAction }) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return win ? actOnView(win, payload.action) : false;
   });
@@ -1160,7 +1257,7 @@ function registerIpc(): void {
    * anything at all, a `file://` path included. Http and https only, and
    * only what the view is actually showing.
    */
-  ipcMain.handle("browser-view-external", (e) => {
+  trustedHandle("browser-view-external", (e) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     const showing = win ? (viewChrome(win)?.url ?? "") : "";
     // A refusal page is not worth opening anywhere: see `externalTarget`.
@@ -1170,7 +1267,7 @@ function registerIpc(): void {
     return true;
   });
 
-  ipcMain.handle("browser-view-go", (e, payload: { url: string }) => {
+  trustedHandle("browser-view-go", (e, payload: { url: string }) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     return win ? navigateView(win, payload.url) : false;
   });
@@ -1184,7 +1281,7 @@ function registerIpc(): void {
    * The renderer knows what is open and how wide it is, so it does the
    * arithmetic and the window follows.
    */
-  ipcMain.handle("set-min-width", (e, payload: { width: number }) => {
+  trustedHandle("set-min-width", (e, payload: { width: number }) => {
     const win = BrowserWindow.fromWebContents(e.sender);
     if (!win) return false;
     // Never wider than the display it is on: a minimum bigger than the
@@ -1206,8 +1303,8 @@ function registerIpc(): void {
   });
 
   // -- scheduled prompts ---------------------------------------------------
-  ipcMain.handle("indicator-get", () => indicatorSettings());
-  ipcMain.handle(
+  trustedHandle("indicator-get", () => indicatorSettings());
+  trustedHandle(
     "indicator-set",
     (_e, payload: { enabled?: boolean; size?: number }) => {
       const next = applyIndicator(payload);
@@ -1216,15 +1313,15 @@ function registerIpc(): void {
     }
   );
 
-  ipcMain.handle("telegram-get", () => telegramPublic());
-  ipcMain.handle(
+  trustedHandle("telegram-get", () => telegramPublic());
+  trustedHandle(
     "telegram-save",
     (_e, payload: { enabled?: boolean; token?: string; allowedIds?: string }) =>
       saveTelegram(payload)
   );
 
-  ipcMain.handle("schedules-list", () => listSchedules());
-  ipcMain.handle(
+  trustedHandle("schedules-list", () => listSchedules());
+  trustedHandle(
     "schedule-create",
     (e, payload: { prompt: string; cron: string; cwd?: string }) => {
       const ws = wsOf(e);
@@ -1233,22 +1330,22 @@ function registerIpc(): void {
       return createSchedule({ prompt: payload.prompt, cron: payload.cron, cwd });
     }
   );
-  ipcMain.handle(
+  trustedHandle(
     "schedule-update",
     (_e, payload: { id: string; prompt?: string; cron?: string; enabled?: boolean }) =>
       updateSchedule(payload.id, payload)
   );
-  ipcMain.handle("schedule-delete", (_e, payload: { id: string }) =>
+  trustedHandle("schedule-delete", (_e, payload: { id: string }) =>
     deleteSchedule(payload.id)
   );
-  ipcMain.handle("schedule-run", (_e, payload: { id: string }) => runScheduleNow(payload.id));
+  trustedHandle("schedule-run", (_e, payload: { id: string }) => runScheduleNow(payload.id));
 
-  ipcMain.handle("new-window", () => {
+  trustedHandle("new-window", () => {
     createWindow();
     return true;
   });
 
-  ipcMain.handle("pick-folder", async (e) => {
+  trustedHandle("pick-folder", async (e) => {
     const ws = wsOf(e);
     if (!ws) return null;
     const result = await dialog.showOpenDialog(ws.win, {
@@ -1258,7 +1355,7 @@ function registerIpc(): void {
     return result.canceled || result.filePaths.length === 0 ? null : result.filePaths[0];
   });
 
-  ipcMain.handle(
+  trustedHandle(
     "save-file",
     async (e, payload: { suggestedName: string; content: string }) => {
       const ws = wsOf(e);
@@ -1277,7 +1374,7 @@ function registerIpc(): void {
   // Attachments: the picker returns paths, and the engine hands them to the
   // ChatGPT composer. Nothing is copied — the file is uploaded from where it
   // already lives.
-  ipcMain.handle("pick-files", async (e) => {
+  trustedHandle("pick-files", async (e) => {
     const ws = wsOf(e);
     if (!ws) return [];
     const result = await dialog.showOpenDialog(ws.win, {
@@ -1299,7 +1396,7 @@ function registerIpc(): void {
 
   // Saving an image the model drew. It arrives as a data URL because it lived
   // on the ChatGPT page rather than on disk.
-  ipcMain.handle(
+  trustedHandle(
     "save-image",
     async (e, payload: { dataUrl: string; suggestedName: string }) => {
       const ws = wsOf(e);
@@ -1324,7 +1421,7 @@ function registerIpc(): void {
   // A file a folder-less chat produced, copied wherever the user points.
   // Copy, not move: the scratch workspace stays intact, so the chat can keep
   // editing the document it just delivered.
-  ipcMain.handle(
+  trustedHandle(
     "save-artifact",
     async (e, payload: { path: string; suggestedName: string }) => {
       const ws = wsOf(e);
@@ -1343,7 +1440,7 @@ function registerIpc(): void {
     }
   );
 
-  ipcMain.handle("open-artifact", async (_e, payload: { path: string }) => {
+  trustedHandle("open-artifact", async (_e, payload: { path: string }) => {
     if (!payload?.path || !fs.existsSync(payload.path)) return false;
     const error = await shell.openPath(payload.path);
     return error === "";
@@ -1353,13 +1450,13 @@ function registerIpc(): void {
   // names a file that was sent; the useful thing to do with it is find it
   // again, and opening an unknown file with its default application is a
   // bigger step than the click implies.
-  ipcMain.handle("reveal-file", (_e, payload: { path: string }) => {
+  trustedHandle("reveal-file", (_e, payload: { path: string }) => {
     if (!payload?.path || !fs.existsSync(payload.path)) return false;
     shell.showItemInFolder(path.resolve(payload.path));
     return true;
   });
 
-  ipcMain.handle("restart-engine", async (e, payload: { cwd?: string }) => {
+  trustedHandle("restart-engine", async (e, payload: { cwd?: string }) => {
     const ws = wsOf(e);
     if (!ws) return false;
     await stopEngine(ws);
@@ -1367,12 +1464,12 @@ function registerIpc(): void {
     return true;
   });
 
-  ipcMain.handle("app-info", () => ({
+  trustedHandle("app-info", () => ({
     version: app.getVersion(),
     platform: process.platform,
   }));
 
-  ipcMain.handle("check-update", () => checkForUpdate());
+  trustedHandle("check-update", () => checkForUpdate());
 
   /**
    * Download the update and hand it to the installer.
@@ -1383,7 +1480,7 @@ function registerIpc(): void {
    * click on a modal that is already working — the button is disabled too,
    * but the IPC is what actually has to hold.
    */
-  ipcMain.handle("start-update", async (event) => {
+  trustedHandle("start-update", async (event) => {
     if (updating) return { started: false, reason: "an update is already running" };
     const info = await checkForUpdate();
     // Three different things used to answer "no installable build for this
@@ -1404,6 +1501,15 @@ function registerIpc(): void {
       try {
         console.log(`[desktop] downloading update ${info.latest}: ${info.installable!.name}`);
         const file = await downloadUpdate(info.installable!.url, info.installable!.name, report);
+        // Held against the checksum the release publishes, before anything is
+        // unpacked or run. It cannot stop a release somebody controls — the
+        // listing lives beside the artifact — but it does stop a truncated,
+        // corrupted or substituted download becoming an installed
+        // application, and it throws rather than warning: a file that does
+        // not match is not installed.
+        await verifyDownload(file, info.installable!.name, info.installable!.sumsUrl, (line: string) =>
+          console.log(`[desktop] update: ${line}`)
+        );
         console.log(`[desktop] update downloaded to ${file}; handing off to the installer`);
         report({ phase: "installing" });
         const { relaunches } = applyUpdate(file);
@@ -1431,7 +1537,7 @@ function registerIpc(): void {
 
   // The renderer decides when to offer an update; opening the page is the
   // one thing it cannot do for itself.
-  ipcMain.handle("open-release", (_e, payload: { url: string }) => {
+  trustedHandle("open-release", (_e, payload: { url: string }) => {
     const url = String(payload?.url ?? "");
     // Only ever our own releases. This url arrives from the renderer and
     // openExternal will launch anything at all, including a file:// path.
@@ -1456,24 +1562,24 @@ function registerIpc(): void {
    * cleanly, and it is what makes "your DeepSeek chats and your ChatGPT chats
    * are separate" true rather than merely intended.
    */
-  ipcMain.handle("provider-get", () => ({
+  trustedHandle("provider-get", () => ({
     id: activeProvider(),
     label: providerLabel(),
     all: PROVIDER_IDS.map((id) => ({ id, label: providerLabel(id) })),
   }));
 
-  ipcMain.handle("provider-set", async (_e, payload: { id?: string }) =>
+  trustedHandle("provider-set", async (_e, payload: { id?: string }) =>
     switchProvider(payload?.id)
   );
 
-  ipcMain.handle("set-theme", (_e, payload: { theme: "dark" | "light" }) => {
+  trustedHandle("set-theme", (_e, payload: { theme: "dark" | "light" }) => {
     nativeTheme.themeSource = payload.theme;
     return true;
   });
 
   // Notification preference and interface language, which the main process
   // needs because the toasts are its own.
-  ipcMain.handle("set-prefs", (_e, payload: { notifications?: boolean; language?: string }) => {
+  trustedHandle("set-prefs", (_e, payload: { notifications?: boolean; language?: string }) => {
     const prefs: Partial<DesktopState> = {};
     if (typeof payload?.notifications === "boolean") prefs.notifications = payload.notifications;
     if (typeof payload?.language === "string") prefs.language = payload.language.slice(0, 8);
@@ -1484,7 +1590,7 @@ function registerIpc(): void {
   // Window controls for the frameless titlebar. Close goes through the same
   // close path as the OS button, so the last window hides to the tray rather
   // than quitting.
-  ipcMain.handle("win-control", (e, payload: { action: string }) => {
+  trustedHandle("win-control", (e, payload: { action: string }) => {
     const ws = wsOf(e);
     if (!ws) return { maximized: false };
     switch (payload.action) {
@@ -1502,7 +1608,21 @@ function registerIpc(): void {
     return { maximized: ws.win.isDestroyed() ? false : ws.win.isMaximized() };
   });
 
-  ipcMain.handle("sign-in", async (e) => {
+  // ChatGPT's own sign-in window, and ChatGPT's alone.
+  //
+  // It logs into chatgpt.com and hands the cookies to the engine, which
+  // used to file them under whichever service was active - so a DeepSeek or
+  // Qwen session could be reported as established on the strength of a
+  // ChatGPT login. The browser-driven services have their own flow
+  // (`signInWithBrowser`, an engine call, routed by provider), and this
+  // route now refuses rather than quietly doing the wrong service's work.
+  trustedHandle("sign-in", async (e) => {
+    if (activeProvider() !== "chatgpt") {
+      return {
+        ok: false,
+        reason: `This sign-in is ChatGPT's. Use "Sign in" in the account menu to sign in to ${providerLabel()}.`,
+      };
+    }
     const ws = wsOf(e);
     const result = await runSignIn(ws?.win ?? null);
     if (result.ok && result.cookies?.length && ws?.peer) {
@@ -1518,12 +1638,16 @@ function registerIpc(): void {
     return { ok: result.ok, reason: result.reason };
   });
 
-  // Signing out clears the window's partition here and the stored session
-  // plus the automation profile in the engine — all three, or the next send
-  // simply signs back in.
-  ipcMain.handle("sign-out", async (e) => {
+  // Signing out clears the stored session and the automation profile in the
+  // engine, or the next send simply signs back in.
+  //
+  // The window partition is ChatGPT's and is only cleared when ChatGPT is
+  // the service being signed out of. It used to be cleared for every
+  // sign-out, so signing out of DeepSeek or Qwen quietly signed the person
+  // out of ChatGPT as well - a service they had not asked about losing.
+  trustedHandle("sign-out", async (e) => {
     const ws = wsOf(e);
-    await clearSignIn();
+    if (activeProvider() === "chatgpt") await clearSignIn();
     if (ws?.peer) {
       try {
         await ws.peer.request("applySignOut", {});
@@ -1553,7 +1677,7 @@ function registerIpc(): void {
 const CWD_SENTINEL = "\x01ONFLIP_CWD:";
 
 function registerTerminal(): void {
-  ipcMain.handle("term-run", (e, payload: { command: string; cwd: string }) => {
+  trustedHandle("term-run", (e, payload: { command: string; cwd: string }) => {
     const ws = wsOf(e);
     if (!ws) return { ok: false, error: "No window." };
     if (ws.termChild) {
@@ -1652,7 +1776,7 @@ function registerTerminal(): void {
     return { ok: true };
   });
 
-  ipcMain.handle("term-kill", (e) => {
+  trustedHandle("term-kill", (e) => {
     const ws = wsOf(e);
     const child = ws?.termChild;
     if (!child?.pid) return false;

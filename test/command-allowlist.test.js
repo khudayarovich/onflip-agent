@@ -30,19 +30,25 @@ const {
 
 test("a separator inside quotes does not split the command", () => {
   // The macOS case, exactly.
-  assert.deepEqual(commandKeys('sqlite3 db "select * from x ; select * from vnc"'), ["sqlite3"]);
-  assert.deepEqual(commandKeys("grep -r 'a|b' ."), ["grep"]);
-  assert.deepEqual(commandKeys('echo "a && b"'), ["echo"]);
+  // The keys are whole commands now — an implicit grant is exact — so these
+  // assert what they always meant: the quoted separator did not split it.
+  assert.deepEqual(commandKeys('sqlite3 db "select * from x ; select * from vnc"'), [
+    'sqlite3 db "select * from x ; select * from vnc"',
+  ]);
+  assert.deepEqual(commandKeys("grep -r 'a|b' ."), ["grep -r 'a|b' ."]);
+  assert.deepEqual(commandKeys('echo "a && b"'), ['echo "a && b"']);
 });
 
 test("a real separator still splits", () => {
-  assert.deepEqual(commandKeys("npm run build && node --test"), ["npm run", "node"]);
-  assert.deepEqual(commandKeys("cat x | grep y ; ls"), ["cat", "grep", "ls"]);
+  assert.deepEqual(commandKeys("npm run build && node --test"), ["npm run build", "node --test"]);
+  assert.deepEqual(commandKeys("cat x | grep y ; ls"), ["cat x", "grep y", "ls"]);
   assert.deepEqual(commandKeys("ls\nps"), ["ls", "ps"]);
 });
 
 test("an escaped quote inside double quotes does not end the string", () => {
-  assert.deepEqual(commandKeys('echo "she said \\"; rm -rf /\\" and left"'), ["echo"]);
+  assert.deepEqual(commandKeys('echo "she said \\"; rm -rf /\\" and left"'), [
+    'echo "she said \\"; rm -rf /\\" and left"',
+  ]);
 });
 
 test("the junk found on real machines can never be stored", () => {
@@ -77,7 +83,12 @@ test("real commands are still storable", () => {
 test("approving a quoted command stores the command, not the quoted text", () => {
   const policy = createPolicy(process.cwd(), "ask");
   remember(policy, { kind: "command", subject: 'sqlite3 db "select * from x ; drop table vnc"' });
-  assert.deepEqual([...policy.allowedCommands], ["sqlite3"]);
+  // The whole command, because an implicit grant is exact now — approving
+  // this one must not also approve `sqlite3` doing anything else later.
+  assert.deepEqual(
+    [...policy.allowedCommands],
+    ['sqlite3 db "select * from x ; drop table vnc"']
+  );
 });
 
 test("approving a PowerShell assignment stores nothing it should not", () => {
@@ -109,7 +120,10 @@ test("a here-document body is not a list of commands", () => {
     "EOF",
     "echo done",
   ].join("\n");
-  assert.deepEqual(commandKeys(cmd), ["cat", "echo"]);
+  // The body is still skipped, which is what this test is for. The keys are
+  // whole commands now, so what would be remembered is this exact redirect
+  // into this exact file — not `cat`, which used to mean every later `cat`.
+  assert.deepEqual(commandKeys(cmd), ["cat > report.md <<'EOF'", "echo done"]);
 });
 
 test("the validator could not have caught it, which is why the body is skipped", () => {
@@ -121,22 +135,72 @@ test("the validator could not have caught it, which is why the body is skipped",
 });
 
 test("an unquoted and an indented here-doc are both skipped", () => {
-  assert.deepEqual(commandKeys("cat <<EOF\nrm -rf /\nEOF\nls"), ["cat", "ls"]);
-  assert.deepEqual(commandKeys("cat <<-END\n\tsudo su\n\tEND\nls"), ["cat", "ls"]);
+  assert.deepEqual(commandKeys("cat <<EOF\nrm -rf /\nEOF\nls"), ["cat <<EOF", "ls"]);
+  assert.deepEqual(commandKeys("cat <<-END\n\tsudo su\n\tEND\nls"), ["cat <<-END", "ls"]);
 });
 
 test("two here-docs on one line consume two bodies in order", () => {
   const cmd = ["diff <<A <<B", "first body", "A", "second body", "B", "echo after"].join("\n");
-  assert.deepEqual(commandKeys(cmd), ["diff", "echo"]);
+  assert.deepEqual(commandKeys(cmd), ["diff <<A <<B", "echo after"]);
 });
 
 test("a here-doc that is never terminated does not leak its tail", () => {
   // A truncated command must not start handing out keys from whatever
   // follows it.
-  assert.deepEqual(commandKeys("cat <<EOF\nstray line\nanother"), ["cat"]);
+  assert.deepEqual(commandKeys("cat <<EOF\nstray line\nanother"), ["cat <<EOF"]);
 });
 
 test("a here-string is not a here-doc", () => {
   // `<<<` feeds one word, and the line after it is an ordinary command.
-  assert.deepEqual(commandKeys("grep x <<<'text'\nls"), ["grep", "ls"]);
+  assert.deepEqual(commandKeys("grep x <<<'text'\nls"), ["grep x <<<'text'", "ls"]);
+});
+
+test("approving a command does not approve a different one with the same name", () => {
+  // The audit's demonstration, against the shipped build: an `ask` policy
+  // holding the remembered key `python` let `python -c "..."` run with no
+  // prompt, because the key was the first token and everything after it was
+  // discarded. The same held for `npm`, `git`, every shell interpreter, and
+  // every command whose arguments are its behaviour.
+  //
+  // The button said "Always allow python", which described that grant
+  // accurately — and the accuracy is what made it invisible. Nobody reads it
+  // as "and anything else I ever run through Python".
+  const { evaluate } = require("../dist/agent/permissions");
+  const policy = createPolicy(process.cwd(), "ask");
+  remember(policy, { kind: "command", subject: "python scripts/build.py" });
+
+  // The command that was approved runs again without asking.
+  assert.equal(
+    evaluate(policy, { kind: "command", subject: "python scripts/build.py" }).outcome,
+    "allow"
+  );
+  // Anything else through the same interpreter does not.
+  for (const other of [
+    'python -c "import os; os.system(\'rm -rf .\')"',
+    "python scripts/deploy.py",
+    "python",
+  ]) {
+    assert.equal(evaluate(policy, { kind: "command", subject: other }).outcome, "ask", other);
+  }
+});
+
+test("spacing is not a different command", () => {
+  // The one thing folded, because two commands differing only in whitespace
+  // are the same command and prompting twice for them is noise.
+  const { evaluate } = require("../dist/agent/permissions");
+  const policy = createPolicy(process.cwd(), "ask");
+  remember(policy, { kind: "command", subject: "npm run build" });
+  assert.equal(evaluate(policy, { kind: "command", subject: "npm  run   build" }).outcome, "allow");
+  assert.equal(evaluate(policy, { kind: "command", subject: " npm run build " }).outcome, "allow");
+});
+
+test("a command whose text is decided when it runs is never remembered", () => {
+  // Substitution is different in kind from quoting: `$(…)` and backticks are
+  // a command whose text is chosen at run time, so an exact match gives no
+  // protection — the same stored string is not the same work twice.
+  assert.equal(isStorableCommandKey("echo $(whoami)"), false);
+  assert.equal(isStorableCommandKey("echo `whoami`"), false);
+  // Quoting is fine, because the match is exact and splitCommands has already
+  // honoured it: the `;` here is text inside a string, not a second command.
+  assert.equal(isStorableCommandKey('sqlite3 db "select * from x ; drop table y"'), true);
 });

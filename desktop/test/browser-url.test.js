@@ -53,7 +53,11 @@ test("a full URL is left exactly as it is", { skip: needsBuild }, () => {
   assert.equal(normaliseUrl("https://example.com/a?b=c"), "https://example.com/a?b=c");
   assert.equal(normaliseUrl("http://example.com"), "http://example.com");
   assert.equal(normaliseUrl("about:blank"), "about:blank");
-  assert.equal(normaliseUrl("file:///C:/x.html"), "file:///C:/x.html");
+  // `file:` used to be preserved here too. It is not any more, and the test
+  // below this one says why: the address bar navigates the web, and a local
+  // path is not something a person types into it — but it is something a page
+  // can talk somebody into pasting.
+  assert.ok(normaliseUrl("file:///C:/x.html").startsWith("https://duckduckgo.com/"));
 });
 
 test("a local dev server goes to http, not https", { skip: needsBuild }, () => {
@@ -96,4 +100,40 @@ test("an empty bar goes nowhere rather than searching for nothing", { skip: need
 
   assert.equal(normaliseUrl(""), "about:blank");
   assert.equal(normaliseUrl("   "), "about:blank");
+});
+
+test("the address bar navigates the web and nothing else", { skip: needsBuild }, () => {
+  // From an external security audit. The bar used to accept `file:`, `data:`,
+  // `blob:`, `view-source:`, `chrome:` and `devtools:` — none of which is an
+  // address a person types, and all of which are the interesting half of a
+  // browser's attack surface. Reachable by anything that can get a string in
+  // front of somebody, including a page telling them to paste one.
+  const { normaliseUrl } = load();
+
+  for (const hostile of [
+    "file:///etc/passwd",
+    "file:///C:/Users/me/.onflip/config.json",
+    "devtools://devtools/bundled/inspector.html",
+    "chrome://settings",
+    "view-source:https://example.com",
+    "data:text/html,<script>alert(1)</script>",
+    "blob:https://example.com/abc",
+  ]) {
+    const out = normaliseUrl(hostile);
+    assert.ok(
+      out.startsWith("https://duckduckgo.com/"),
+      `${hostile} should have fallen through to a search, got ${out}`
+    );
+  }
+});
+
+test("and ordinary browsing is untouched", { skip: needsBuild }, () => {
+  const { normaliseUrl } = load();
+  assert.equal(normaliseUrl("https://example.com/x"), "https://example.com/x");
+  assert.equal(normaliseUrl("http://example.com"), "http://example.com");
+  assert.equal(normaliseUrl("example.com"), "https://example.com");
+  assert.equal(normaliseUrl("localhost:5173"), "http://localhost:5173");
+  assert.equal(normaliseUrl("127.0.0.1:55377"), "http://127.0.0.1:55377");
+  assert.equal(normaliseUrl(""), "about:blank");
+  assert.equal(normaliseUrl("about:blank"), "about:blank");
 });

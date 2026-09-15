@@ -6,6 +6,7 @@ import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { checkSignedIn, closeBrowser } from "./browser";
 import { DEEPSEEK_SIGN_IN_URL, TOKEN_KEY, deepseekProfileDir } from "./session";
+import { mkdirPrivate } from "../../config";
 
 /**
  * Signing in to DeepSeek, in a browser DeepSeek's identity providers accept.
@@ -194,7 +195,7 @@ export async function signInWithRealBrowser(
   await closeBrowser();
 
   const dir = deepseekProfileDir();
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirPrivate(dir);
   cancelled = false;
 
   const args = [

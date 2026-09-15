@@ -286,3 +286,34 @@ test("the reasoning picker offers what the service actually has", { skip: needsB
   // an older engine that does not report one is running ChatGPT.
   assert.deepEqual(thinkingChoices(undefined), chatgpt);
 });
+
+test("the bot answers in a direct message only", { skip: needsBuild }, () => {
+  // From an external security audit. A remembered chat becomes a destination
+  // for everything afterwards — answers, tool output, file contents, and
+  // approval prompts with live buttons. An authorized person inviting the bot
+  // into a group used to add that group permanently, and removing them from
+  // the allow-list did not remove the group they had introduced.
+  //
+  // Telegram guarantees the chat id IS the user id in a private chat, and
+  // gives groups and channels negative ids, so one comparison settles it.
+  const { isDirectChat } = load();
+
+  assert.equal(isDirectChat(12345, 12345), true, "a private chat");
+  assert.equal(isDirectChat(-100987654321, 12345), false, "a supergroup");
+  assert.equal(isDirectChat(-4242, 12345), false, "a group");
+  assert.equal(isDirectChat(99999, 12345), false, "someone else's chat id");
+  assert.equal(isDirectChat(undefined, 12345), false);
+  assert.equal(isDirectChat(12345, undefined), false);
+  assert.equal(isDirectChat(0, 0), false, "zero is not an id");
+});
+
+test("groups an older build remembered are dropped on read", { skip: needsBuild }, () => {
+  // An install that ever used the bot in a group still has that group on disk
+  // as a destination. Leaving it for the user to notice is not a migration.
+  const { directChatsOnly } = load();
+
+  assert.deepEqual(directChatsOnly([12345, -100987654321, 67890, -4242]), [12345, 67890]);
+  assert.deepEqual(directChatsOnly([]), []);
+  assert.deepEqual(directChatsOnly(undefined), []);
+  assert.deepEqual(directChatsOnly([12345, 12345]), [12345], "and duplicates collapse");
+});

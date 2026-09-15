@@ -40,6 +40,7 @@ import {
   rationedPlan,
 } from "onflip/dist/chatgpt/plans";
 import { activeProvider, isBrowserProvider, providerLabel } from "onflip/dist/providers/id";
+import { reportsSignedIn } from "onflip/dist/providers/signed-in";
 import { attachmentsBlockedReason, uploadsAvailable } from "onflip/dist/chatgpt/transport";
 import {
   configureBrowser,
@@ -383,7 +384,21 @@ export class Engine {
       persistProfile: this.config.persistProfile ?? true,
     });
 
-    this.auth = await resolveAuth();
+    // ChatGPT's resolver, for ChatGPT only.
+    //
+    // `resolveAuth` reads ChatGPT's cookies, asks ChatGPT's session endpoint
+    // for an access token and stores ChatGPT's session. It ran on every
+    // start whatever service was selected, which is both wrong and
+    // needless: a Qwen run has no use for a ChatGPT token, and holding one
+    // is what let `hasSession` below report a signed-in Qwen on the strength
+    // of a ChatGPT cookie.
+    //
+    // A browser-driven service starts with nothing, which is the truth: its
+    // session lives in its own browser profile and the probe is what finds
+    // it.
+    this.auth = isBrowserProvider()
+      ? { accessToken: "", model: "", maxIterations: 0, cookies: [], sessionToken: "" }
+      : await resolveAuth();
     const choice = chooseTransport(this.auth);
     // Counting rides on the transport: one send is one request against the
     // account's limits, whichever code path asked for it.
@@ -925,10 +940,16 @@ export class Engine {
    * on sign-out, so the menu flips back to offering a sign-in.
    */
   private hasSession(): boolean {
-    if (loadConfig().signedOut) return false;
-    if (this.auth?.cookies.length) return true;
-    if (loadConfig().sessionToken) return true;
-    return this.probeSignedIn === true;
+    // The rule itself is in `reportsSignedIn`, pure and tested. Inline, it
+    // counted ChatGPT's cookies for every service and reported a signed-out
+    // Qwen as signed in.
+    return reportsSignedIn({
+      signedOut: Boolean(loadConfig().signedOut),
+      browserProvider: isBrowserProvider(),
+      hasCookies: Boolean(this.auth?.cookies.length),
+      hasStoredToken: Boolean(loadConfig().sessionToken),
+      probe: this.probeSignedIn,
+    });
   }
 
   /** The panel telling the browser what shape to render at. */

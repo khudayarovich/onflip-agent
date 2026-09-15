@@ -395,9 +395,21 @@ export function normaliseUrl(input: string): string {
   // A scheme, but only a real one. "localhost:3000" also matches "a word
   // followed by a colon", and treating that as a scheme leaves it untouched
   // — so the commonest address anybody types into this bar went nowhere.
-  // Either a named scheme, or anything with the "//" that makes it a URL.
-  if (/^(https?|file|about|data|blob|view-source|chrome|devtools|ftp):/i.test(text)) return text;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(text)) return text;
+  //
+  // The list used to include `file:`, `data:`, `blob:`, `view-source:`,
+  // `chrome:` and `devtools:`. An external audit flagged the breadth, and it
+  // is hard to argue with: this is the bar a person types an address into,
+  // and none of those six is an address a person types. What they are is the
+  // interesting half of a browser's attack surface — `devtools:` most of all
+  // — reachable by anything that can put a string in front of somebody,
+  // including a page telling them to paste one.
+  //
+  // So the bar navigates the web, and nothing else. Anything unrecognised
+  // falls through to the search below rather than being loaded, which is
+  // what a browser does with a word it cannot parse.
+  if (/^https?:/i.test(text)) return text;
+  if (text.toLowerCase() === "about:blank") return "about:blank";
+  if (/^https?:\/\//i.test(text)) return text;
 
   // Loopback and bare IPv4 first, and over http. An address like
   // "127.0.0.1:5173" is word characters separated by dots, so a

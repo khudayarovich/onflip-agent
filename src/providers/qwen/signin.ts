@@ -7,6 +7,7 @@ import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { checkSignedIn, closeBrowser } from "./browser";
 import { QWEN_SIGN_IN_URL, TOKEN_KEY, qwenProfileDir } from "./session";
+import { mkdirPrivate } from "../../config";
 
 /**
  * Signing in to Qwen, in a browser Qwen's identity providers accept.
@@ -241,7 +242,7 @@ export async function signInWithRealBrowser(
   await closeBrowser();
 
   const dir = qwenProfileDir();
-  fs.mkdirSync(dir, { recursive: true });
+  mkdirPrivate(dir);
   cancelled = false;
 
   const args = [

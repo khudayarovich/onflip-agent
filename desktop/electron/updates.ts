@@ -35,7 +35,12 @@ export interface UpdateInfo {
    * build for this architecture — in which case the offer falls back to
    * opening `url`, which is what the app did before it could install.
    */
-  installable?: { url: string; name: string };
+  installable?: {
+    url: string;
+    name: string;
+    /** The checksum listing this release publishes, when it has one. */
+    sumsUrl?: string;
+  };
 }
 
 /**
@@ -111,7 +116,9 @@ function assetFor(release: GitHubRelease): string | undefined {
  * bundle directly and needs no disk image mounted, no window opened and no
  * `hdiutil` in the path. Windows uses the same NSIS installer either way.
  */
-export function installableAssetFor(release: GitHubRelease): { url: string; name: string } | undefined {
+export function installableAssetFor(
+  release: GitHubRelease
+): { url: string; name: string; sumsUrl?: string } | undefined {
   const wanted =
     process.platform === "win32"
       ? /\.exe$/i
@@ -120,9 +127,26 @@ export function installableAssetFor(release: GitHubRelease): { url: string; name
         : null;
   if (!wanted) return undefined;
   const hit = release.assets?.find((a) => a.name && wanted.test(a.name));
-  return hit?.browser_download_url && hit.name
-    ? { url: hit.browser_download_url, name: hit.name }
-    : undefined;
+  if (!hit?.browser_download_url || !hit.name) return undefined;
+
+  // The checksum list this release already publishes — and which, until an
+  // audit pointed it out, was written, uploaded and never read by anything.
+  //
+  // Its limits are worth stating exactly, because it is easy to mistake for
+  // more than it is. It lives in the same release as the artifact, so anyone
+  // able to swap one could swap both: it is no defence against a compromised
+  // release. What it does catch is a truncated or corrupted download, a
+  // proxy or mirror serving something else, and an artifact that came from a
+  // different release than the one being installed. That is worth one small
+  // request, and it is the difference between a length check and a content
+  // check.
+  //
+  // The real defence is a signature made with a key that is not in the
+  // release, which needs a Developer ID certificate this project does not
+  // have. That is a purchase, not a patch, and it is not pretended here.
+  const sumsName = process.platform === "win32" ? "SHA256SUMS-windows.txt" : "SHA256SUMS-macos.txt";
+  const sums = release.assets?.find((a) => a.name === sumsName);
+  return { url: hit.browser_download_url, name: hit.name, sumsUrl: sums?.browser_download_url };
 }
 
 /**

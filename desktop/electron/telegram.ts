@@ -16,6 +16,8 @@ import {
 import {
   CallbackTable,
   COMMAND_MENU,
+  directChatsOnly,
+  isDirectChat,
   thinkingChoices,
   isAllowed,
   parseAllowList,
@@ -200,7 +202,15 @@ export function loadTelegram(): void {
       allowedIds: raw.allowedIds ?? "",
     };
     chats.clear();
-    for (const id of raw.chats ?? []) if (typeof id === "number") chats.add(id);
+    // Only direct messages, including from whatever an older build wrote.
+    //
+    // A build before this one remembered any chat it was spoken to in, so an
+    // install that ever used the bot in a group still has that group on disk
+    // as a destination. Group ids are negative and a private chat id is the
+    // user's own, so they are dropped on read — a stale group must not
+    // receive the next answer, and waiting for the user to notice and clear
+    // it by hand is not a migration.
+    for (const id of directChatsOnly(raw.chats ?? [])) chats.add(id);
   } catch {
     settings = { enabled: false, token: "", allowedIds: "" };
   }
@@ -576,6 +586,10 @@ async function handleIncomingFile(message: {
     );
     return;
   }
+  // Same rule as a message: a file sent in a group would otherwise make
+  // that group a destination for everything afterwards.
+  if (!isDirectChat(chatId, message.from?.id)) return;
+
   if (!chats.has(chatId)) {
     chats.add(chatId);
     persist();
@@ -818,6 +832,26 @@ async function handleMessage(chatId: number, userId: number | undefined, text: s
       chatId,
       "🔒 <b>Not allowed</b>\n\nThis OnFlip only answers to its owner. " +
         `Send /id to see your Telegram id, then add it in OnFlip → Settings → Telegram.`
+    );
+    return;
+  }
+
+  // A group is not a place for this bot.
+  //
+  // Everything it says afterwards goes to every remembered chat: answers,
+  // tool output, the contents of files, and permission prompts with live
+  // buttons. An authorized person inviting it into a group used to add
+  // that group permanently, and removing them from the allow-list did not
+  // remove the group they had introduced.
+  if (!isDirectChat(chatId, userId)) {
+    await say(
+      chatId,
+      [
+        "🔒 <b>Not here</b>",
+        "",
+        "OnFlip answers in a direct message only — what it sends back can include " +
+          "file contents and approval buttons. Message the bot privately.",
+      ].join("\n")
     );
     return;
   }
