@@ -1,3 +1,6 @@
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { spawn, ChildProcess } from "node:child_process";
 import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
@@ -103,6 +106,49 @@ async function closeWindowGracefully(): Promise<void> {
   }
 }
 
+/**
+ * Has an account's cookie reached the profile on disk yet?
+ *
+ * Read while the browser still holds the file, which is the whole point.
+ * On macOS closing a window does not quit the application, so waiting for
+ * the process to exit means waiting for somebody to find the button in
+ * OnFlip — and clicking Sign in again instead spawns a second browser onto
+ * the same profile. Reported exactly that way: a fresh browser every time
+ * and no account at the end of it.
+ *
+ * Chromium stores cookies in a SQLite file whose *values* are encrypted and
+ * whose *names* are not, so the name is findable by scanning the bytes. No
+ * parsing, no sqlite binding, and nothing decrypted — the question is only
+ * whether a cookie by this name exists, and the profile is opened and asked
+ * properly afterwards regardless.
+ *
+ * Copied first because the running browser holds the original open, which is
+ * the same move Qwen's sign-in makes on its LevelDB for the same reason.
+ *
+ * A false negative costs nothing: the flow simply waits, as it did before.
+ */
+function accountCookieOnDisk(dir: string): boolean {
+  const candidates = [
+    path.join(dir, "Default", "Network", "Cookies"),
+    path.join(dir, "Default", "Cookies"),
+  ];
+  const needle = Buffer.from("arena-auth-prod-v");
+  for (const file of candidates) {
+    const tmp = path.join(os.tmpdir(), `onflip-arena-signin-${process.pid}-${Date.now()}`);
+    try {
+      fs.copyFileSync(file, tmp);
+      const found = fs.readFileSync(tmp).includes(needle);
+      if (found) return true;
+    } catch {
+      // Not there, or held in a way that refuses a copy; the next poll asks
+      // again and the proper check runs at the end either way.
+    } finally {
+      fs.rmSync(tmp, { force: true });
+    }
+  }
+  return false;
+}
+
 export async function signInWithRealBrowser(
   onProgress?: (state: SignInProgress) => void
 ): Promise<ArenaSignInResult> {
@@ -149,7 +195,15 @@ export async function signInWithRealBrowser(
   }
   child = started;
   const startedAt = Date.now();
-  logger.info("arena", "sign-in window opened", { channel: pick.channel });
+  // The profile is logged because "the sign-in did not stick" and "a
+  // different provider's sign-in ran" look identical from outside, and the
+  // difference is one path. Reported that way: a browser opening fresh every
+  // time, and no account afterwards.
+  logger.info("arena", "sign-in window opened", {
+    channel: pick.channel,
+    profile: dir,
+    executable: pick.executable,
+  });
   onProgress?.("waiting");
 
   const finished = new Promise<"finished">((resolve) => {
@@ -175,6 +229,13 @@ export async function signInWithRealBrowser(
       const step = await Promise.race([exited, finished, tick()]);
       if (step !== "tick") return step;
       if (Date.now() > deadline) return "timeout";
+      // The session reaching the profile is the thing being waited for, so
+      // it ends the wait — rather than the window closing, which on macOS
+      // is not an event that happens.
+      if (accountCookieOnDisk(dir)) {
+        logger.info("arena", "the account reached the profile; closing the sign-in window");
+        return "finished";
+      }
     }
   })();
   declareFinished = null;
@@ -202,9 +263,16 @@ export async function signInWithRealBrowser(
   await closeBrowser();
 
   if (check.signedIn) {
-    logger.info("arena", "signed in");
+    logger.info("arena", "signed in", { profile: dir });
     return { ok: true };
   }
+  // Said plainly in the log, because the message a person sees cannot
+  // distinguish "you did not finish" from "it did not persist" and the two
+  // need different things done about them.
+  logger.warn("arena", "no account in the profile after the sign-in window closed", {
+    profile: dir,
+    error: check.error ?? null,
+  });
   if (check.error) {
     logger.warn("arena", "the profile could not be read after sign-in", { error: check.error });
     return {
