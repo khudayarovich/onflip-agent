@@ -5,7 +5,7 @@ import { ToolCard } from "./ToolCard";
 import logo from "../assets/logo.svg";
 import { LangContext, useT } from "../i18n";
 import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/skills";
-import { ChevronDown, Close, Info, fileGlyph } from "./icons";
+import { ChevronDown, Close, Info, Pencil, Reload, fileGlyph } from "./icons";
 import { CopyButton } from "./CopyButton";
 
 export interface StreamingState {
@@ -294,7 +294,7 @@ export function Transcript({
                 {onUnqueue && (
                   <span className="queue-actions">
                     <button title={t("queueEdit")} onClick={() => onUnqueue(q.id, "edit")}>
-                      ✎
+                      <Pencil size={14} />
                     </button>
                     <button title={t("queueRemove")} onClick={() => onUnqueue(q.id, "delete")}>
                       <Close size={12} />
@@ -407,13 +407,28 @@ function UserMessage({
       <div className="msg-user-row">
         {onRevise && (
           <div className="msg-actions">
-            <button title={t("editTip")} onClick={() => onRevise(id, "edit")}>
-              ✎
+            {/* Icons, not characters. These were "✎" and "↻" beside a
+                stroked SVG, which is three different drawing systems in a
+                row of three buttons: the glyphs come from whatever font the
+                system falls back to, at their own weights and optical
+                sizes, and no amount of CSS makes them agree with each other
+                or with the icon next to them. Reported as buttons that were
+                too small and mismatched, which is exactly what that is. */}
+            <button
+              title={t("editTip")}
+              aria-label={t("editTip")}
+              onClick={() => onRevise(id, "edit")}
+            >
+              <Pencil size={14} />
             </button>
-            <button title={t("resendTip")} onClick={() => onRevise(id, "resend")}>
-              ↻
+            <button
+              title={t("resendTip")}
+              aria-label={t("resendTip")}
+              onClick={() => onRevise(id, "resend")}
+            >
+              <Reload size={14} />
             </button>
-            <CopyButton text={text} label={t("copyMessage")} />
+            <CopyButton text={text} size={14} label={t("copyMessage")} />
           </div>
         )}
         <div className="msg-user">{bubble}</div>

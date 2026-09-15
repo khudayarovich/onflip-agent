@@ -874,15 +874,35 @@ a:hover {
 .msg-user-wrap:hover .msg-actions {
   opacity: 1;
 }
-.msg-actions button {
-  width: 26px;
-  height: 26px;
+/*
+ * One size for all three, set in one place.
+ *
+ * Two of these used to be text characters and the third an SVG, so they
+ * disagreed however the box was sized — a glyph's drawn size is the font's
+ * business, not the button's. They are all icons now, and the rule below
+ * covers the copy button too: `.msg-actions button` outranks `.copy-btn` on
+ * specificity, which was already quietly overriding its 24px with 26px, so
+ * saying so here is the honest version of what was happening anyway.
+ *
+ * 28px because these are hover-revealed controls on a dense row: small
+ * enough to stay out of the way, large enough to hit without aiming.
+ */
+.msg-actions button,
+.msg-actions .copy-btn {
+  width: 28px;
+  height: 28px;
   border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 13px;
+  padding: 0;
   color: var(--text-muted);
+}
+/* The icon fills the same box in each, so the three read as one control. */
+.msg-actions button svg {
+  width: 14px;
+  height: 14px;
+  display: block;
 }
 .msg-actions button:hover {
   background: var(--bg-hover);
