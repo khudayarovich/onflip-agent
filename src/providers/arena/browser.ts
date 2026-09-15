@@ -431,9 +431,13 @@ export async function sendTurn(
   const before = await read(page);
 
   const submit = async (): Promise<void> => {
-    await page.click(COMPOSER).catch(() => {
-      /* focus is a nicety; the fill below is what matters */
-    });
+    // Focus is a nicety; the native-setter fill below is what actually puts
+    // the text in. But a bare `click` carries Playwright's default thirty
+    // second actionability timeout, so a composer that is momentarily
+    // covered - which is exactly what a conversation page does while it
+    // settles - costs half a minute per turn before the catch swallows it.
+    // Measured: a second turn spent thirty seconds here and then worked.
+    await page.click(COMPOSER, { timeout: 2_500 }).catch(() => {});
     // The native setter, because React owns the textarea's value and writing
     // `el.value` leaves its state holding the old string with Send disabled.
     const fill = `(() => {
