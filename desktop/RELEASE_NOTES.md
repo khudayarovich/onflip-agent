@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.30
+# OnFlip Desktop 0.10.31
 
-**The Qwen sign-in loop.** Sign in, the window shuts before you can type, the app says you are signed in, the next message goes nowhere, and it asks again. Fixed.
+**Qwen turns that failed saying your session had expired — when it had not.** 0.10.30 was too quick to give up; it now tries again first.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.30.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.30/OnFlip-Setup-0.10.30.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.30-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.30/OnFlip-0.10.30-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.30-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.30/OnFlip-0.10.30-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.31.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.31/OnFlip-Setup-0.10.31.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.31-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.31/OnFlip-0.10.31-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.31-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.31/OnFlip-0.10.31-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside if you want to check a download by hand.
 
@@ -18,16 +18,16 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 ## Fixed
 
-**Signing in to Qwen went round in circles.** The window opened and closed again within a couple of seconds, OnFlip reported you signed in, and the next message went nowhere — then it asked you to sign in again.
+**"The session has expired" on a session that was working.** The previous release learned to spot when Qwen drops the browser into a signed-out guest chat — and then treated it as final. It is not: messages kept going through in between the failures, which an expired session cannot do.
 
-OnFlip closes that window for you as soon as your sign-in reaches the browser profile, so you do not have to press a button as well. It was checking whether a sign-in token was present, on the assumption that a signed-out profile has none. Qwen does not work that way: it leaves the expired token behind, looking perfectly valid. So on any profile whose session had lapsed, OnFlip decided you had signed in the instant the window appeared — and closed it in your face.
+OnFlip now does what you were doing by hand — reloads and sends it again — and only tells you the session has expired if the guest chat survives that. When it really has expired you are told in about five seconds rather than ninety.
 
-It now waits for a token that was **not there before**, so the window stays open until you have actually signed in. And finishing without signing in — cancelling, or closing the window — is no longer mistaken for success on the strength of the old token.
+**A likely cause of the guest chat itself, reduced.** When OnFlip opens a fresh Qwen chat it used to wait a flat two seconds before typing. On a slower machine that is not always long enough for Qwen to apply your sign-in to the page, and a message sent a moment too early is treated as a message from a signed-out visitor — which Qwen accepts and never answers. It now waits for the message box to appear rather than for a fixed count.
 
-<i>If Qwen has been asking you to sign in repeatedly: update, then sign in once more. It will hold this time.</i>
+<i>If Qwen is showing the Sign in button: sign in. 0.10.30 fixed the window that used to close itself before you could, so it will hold now.</i>
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT, DeepSeek or Qwen account — one, or all three. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.29...desktop-v0.10.30](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.29...desktop-v0.10.30)
+**Full changelog:** [desktop-v0.10.30...desktop-v0.10.31](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.30...desktop-v0.10.31)
