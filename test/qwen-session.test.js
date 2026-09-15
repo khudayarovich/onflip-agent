@@ -211,3 +211,37 @@ test("a page that is not on Qwen has no session to report, and never 'signed out
   // And a storage that could not be read at all is not an empty one.
   assert.equal(sessionStateFrom("https://chat.qwen.ai/", null), "unreadable");
 });
+
+test("a guest conversation is the session being gone, whatever the token says", () => {
+  // The one that cost four releases, and it was in the URL the whole time.
+  //
+  // Reproduced locally at last: three turns answered, then every turn sat at
+  // /c/guest with nothing generating and no reply, until the silence window
+  // blamed the send. Qwen puts a visitor whose session has lapsed into a
+  // guest conversation, and a send from there is never answered — measured on
+  // the very first probe of this service, before the driver existed.
+  //
+  // The token cannot see it. Qwen leaves an expired JWT in localStorage at
+  // full length and correct shape, so `isSignedIn` says yes, the account bar
+  // says connected, and every turn goes somewhere that will never answer.
+  const { sessionStateFrom } = require("../dist/providers/qwen/browser");
+  const { isGuestChat } = require("../dist/providers/qwen/session");
+  const stale = { token: "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2ln" };
+
+  assert.equal(isGuestChat("https://chat.qwen.ai/c/guest"), true);
+  assert.equal(isGuestChat("https://chat.qwen.ai/c/42744914-ad9b-44cb-8b7f-ddd783e2c6b9"), false);
+  assert.equal(isGuestChat("https://chat.qwen.ai/"), false);
+
+  // The address outranks the token, which is the whole point.
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/c/guest", stale), "absent");
+  assert.equal(
+    sessionStateFrom("https://chat.qwen.ai/c/42744914-ad9b-44cb-8b7f-ddd783e2c6b9", stale),
+    "present"
+  );
+});
+
+test("a guest chat id is never mistaken for a conversation", () => {
+  // `guest` in the id slot must not be adopted as a thread to append to, or
+  // the next turn would resume a conversation that cannot answer.
+  assert.equal(conversationIdFrom("https://chat.qwen.ai/c/guest"), null);
+});

@@ -69,6 +69,25 @@ export function isSignInPage(url: string): boolean {
 }
 
 /**
+ * Has the page fallen back to a guest conversation?
+ *
+ * `https://chat.qwen.ai/c/guest` is where Qwen puts a visitor whose session
+ * is not in effect, and a send from there produces no reply at all — measured
+ * before this driver was written, on the very first probe.
+ *
+ * It is the signal this driver spent four releases missing. The token check
+ * cannot see it: Qwen leaves an expired JWT in localStorage at full length
+ * and correct shape, so `isSignedIn` says yes, the app reports connected, and
+ * every turn goes to a page that will never answer. What the person sees is a
+ * message that sits on "sending" for ninety seconds and then blames the send.
+ *
+ * The address says it outright, instantly, with nothing to parse.
+ */
+export function isGuestChat(url: string): boolean {
+  return /\/c\/guest\b/i.test(url || "");
+}
+
+/**
  * The conversation id in a Qwen URL, when the page is in one.
  *
  * `https://chat.qwen.ai/c/<uuid>` once a chat has its first message; a fresh

@@ -3,6 +3,7 @@ import { chromium, BrowserContext, Page } from "playwright";
 import { logger } from "../../log";
 import type { FailureCode } from "../../chatgpt/backoff";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
+import { paceNewChat, paceSend } from "../../chatgpt/backoff";
 import { EXTRACT_REPLY as EXTRACT_REPLY_SCRIPT, normalizeNodes, toMarkdown } from "./extract";
 import {
   QWEN_CHAT_URL,
@@ -10,6 +11,7 @@ import {
   TOKEN_KEY,
   ROLE_KEY,
   conversationIdFrom,
+  isGuestChat,
   isSignedIn,
   qwenProfileDir,
 } from "./session";
@@ -308,6 +310,11 @@ export function sessionStateFrom(
   storage: Record<string, string | null | undefined> | null
 ): SessionState {
   if (!url || !url.startsWith(QWEN_ORIGIN)) return "unreadable";
+  // A guest conversation is Qwen saying the session is not in effect, and
+  // it outranks anything in storage: the token sitting there is stale, and
+  // believing it is how the app reported itself connected while every turn
+  // went to a page that could not answer.
+  if (isGuestChat(url)) return "absent";
   if (!storage) return "unreadable";
   return isSignedIn(storage) ? "present" : "absent";
 }
@@ -495,10 +502,24 @@ export async function sendTurn(
   // Bracketing the setup, because a turn that hangs before the first poll
   // used to leave nothing at all in the log between the user's message and
   // silence - which is what made a stuck send impossible to place.
+  // A floor between messages, the same one ChatGPT's transport has kept
+  // since an account was told it was sending too quickly. A tool loop can
+  // finish in milliseconds and come straight back; a person cannot, and
+  // Alibaba's risk control is watching this page for exactly that.
+  //
+  // Added after a session died mid-task: three turns answered, then two
+  // that never started, then a sign-in prompt over a token still in place.
+  // That is the shape of a service ending a session under load, not of a
+  // driver breaking, and pacing is the part of it OnFlip controls.
+  await paceSend(opts.signal);
   logger.info("qwen", "turn: opening the page", { chars: text.length });
   let page = await chatPage(opts);
   if (pendingNewChat) {
     pendingNewChat = false;
+    // Opening a conversation is the expensive request as far as an abuse
+    // control is concerned, and the agent opens them far more eagerly than
+    // a person does - a compaction, a sub-agent, a recovery each start one.
+    await paceNewChat(opts.signal);
     await gotoChat(page);
     await page.waitForTimeout(2_000);
   }
@@ -653,6 +674,19 @@ export async function sendTurn(
       }
       const fresh = now.count > before.count || now.text !== before.text;
       if (!fresh || !now.text) {
+        // Before anything else: has the page dropped into a guest
+        // conversation? Nothing sent from there is ever answered, so there
+        // is nothing to wait for and ninety seconds of waiting only delays
+        // the one sentence that helps.
+        if (isGuestChat(page.url())) {
+          logger.warn("qwen", "the page is in a guest conversation; the session is not in effect", {
+            url: page.url(),
+          });
+          throw new QwenError(
+            "Qwen dropped this browser into a signed-out guest chat, so the message could not be answered. The session has expired — sign in again from the account menu.",
+            "signed-out"
+          );
+        }
         // Before waiting the window out: is the page already saying why
         // nothing is coming? The login wall is the common one, and it is
         // readable in a second rather than in ninety.

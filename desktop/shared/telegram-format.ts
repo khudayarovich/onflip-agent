@@ -142,6 +142,8 @@ export function oneLine(text: string, max = 90): string {
 
 export interface StatusLike {
   cwd?: string;
+  /** The app's own version, so a fault reported from a phone names its build. */
+  version?: string;
   /** Which service is answering: "chatgpt", "deepseek", "qwen". */
   provider?: string;
   model?: string;
@@ -168,7 +170,12 @@ export function shortCwd(cwd: string | undefined): string {
  */
 export function statusCard(status: StatusLike): string {
   const rows = [
-    `<b>OnFlip</b>${status.busy ? " · <i>working…</i>" : ""}`,
+    // The version belongs here, on the one card a person can reach from a
+    // phone. Diagnosing a fault reported from another machine needs to
+    // start with what is running on it, and every route to that answer ran
+    // through the app's own window — which is exactly where somebody
+    // driving from Telegram is not.
+    `<b>OnFlip</b>${status.version ? ` <code>${escapeHtml(status.version)}</code>` : ""}${status.busy ? " · <i>working…</i>" : ""}`,
     "",
     // Which service, above the model, because the model names mean
     // different things on each and a card that shows "qwen3-plus" without

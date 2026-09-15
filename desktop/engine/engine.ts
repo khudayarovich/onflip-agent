@@ -1433,6 +1433,21 @@ export class Engine {
       // cannot work. The code says so directly now, rather than being
       // guessed at from the sentence.
       const resumable = isResumableFailure(message, code) && !this.abort.signal.aborted;
+      // A turn that failed for want of a session is the most direct evidence
+      // there is that the account bar is wrong, so the bar is corrected from
+      // it rather than left saying "connected" until something re-probes.
+      //
+      // It matters most on a service whose session can lapse while the page
+      // still looks perfectly normal: Qwen shows a working composer, no
+      // sign-in controls and a valid-looking token right up until a send is
+      // attempted, so nothing before the send can know — and without this the
+      // app would go on claiming a connection through every failed turn.
+      if (code === "signed-out" && this.probeSignedIn !== false) {
+        this.probeSignedIn = false;
+        this.account = null;
+        this.emitConnect("signed-out", message);
+        this.pushStatus();
+      }
       this.peer.emit("item", {
         type: "error",
         id: randomUUID(),

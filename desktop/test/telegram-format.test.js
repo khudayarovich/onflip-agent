@@ -241,3 +241,21 @@ test("the help card lists the service switch", { skip: needsBuild }, () => {
   const { helpCard } = load();
   assert.match(helpCard(), /\/provider/);
 });
+
+test("the status card names the build it is running", { skip: needsBuild }, () => {
+  const { statusCard } = load();
+  // Added after a fault reported from a Mac, over Telegram, where every route
+  // to "which version is this?" ran through the app's own window — which is
+  // precisely where somebody driving from a phone is not. Two rounds of
+  // diagnosis were spent on an assumption about the build that turned out to
+  // be wrong.
+  const card = statusCard({ version: "0.10.29", provider: "qwen" });
+  assert.match(card, /0\.10\.29/);
+});
+
+test("and says nothing where there is no version to name", { skip: needsBuild }, () => {
+  const { statusCard } = load();
+  const card = statusCard({ provider: "qwen" });
+  assert.match(card, /<b>OnFlip<\/b>/);
+  assert.ok(!/<code><\/code>/.test(card), card);
+});
