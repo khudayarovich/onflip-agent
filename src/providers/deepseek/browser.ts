@@ -13,6 +13,7 @@ import {
   isSignedIn,
 } from "./session";
 import { mkdirPrivate } from "../../config";
+import { releaseProfileLock } from "../profile-lock";
 
 /**
  * The browser OnFlip drives DeepSeek with.
@@ -167,6 +168,12 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
   if (context) return context;
   const dir = deepseekProfileDir();
   mkdirPrivate(dir);
+  // Chromium allows one process per profile directory and refuses the
+  // second outright. On a Mac the sign-in browser is still alive after
+  // its window closes, so without this the read that follows a sign-in
+  // fails with "Failed to create a ProcessSingleton" - reported as "could
+  // not check the session" to somebody who had just signed in.
+  await releaseProfileLock(dir, (message, data) => logger.info("deepseek", message, data));
   logger.info("deepseek", "opening the browser", { profile: dir, headed: Boolean(opts.headed) });
   context = await chromium.launchPersistentContext(dir, {
     executablePath: executable(),

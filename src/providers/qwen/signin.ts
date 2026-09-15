@@ -217,6 +217,36 @@ export function isRealSignIn(opts: {
   if (!opts.pageSaysSignedIn) return false;
   return opts.newTokenAppeared || !opts.hadTokenBefore;
 }
+/**
+ * What to tell somebody whose profile could not be read after signing in.
+ *
+ * The old version pasted Chromium's own sentence in, cut to 140 characters.
+ * On a Mac that produced, verbatim: "Failed to create a ProcessSingleton for
+ * your profile directory. This usually means that the profile is )" — an
+ * explanation severed exactly where it was about to explain, followed by a
+ * stray bracket. Somebody reading that learns nothing except that the app is
+ * broken.
+ *
+ * The lock is worth naming on its own because it is the one case with a
+ * plain cause and a plain remedy, and on macOS it is the likely one: closing
+ * a window there does not quit the application, so the sign-in browser is
+ * still running and still holding the profile. OnFlip now takes that lock
+ * back by itself before opening, so reaching this message means the holder
+ * would not let go — which is worth saying differently from a profile that
+ * could not be read for some other reason.
+ */
+export function profileReadFailure(error: string): string {
+  const first = (error ?? "").split(String.fromCharCode(10))[0].trim();
+  if (/ProcessSingleton|profile directory is (already )?in use|SingletonLock/i.test(first)) {
+    return (
+      "Another browser is still using OnFlip's Qwen profile, so the session could not be read. " +
+      "If a Chrome window opened for signing in is still around, quit Chrome entirely — on a Mac, " +
+      "closing the window is not enough — then try again."
+    );
+  }
+  return `OnFlip could not open the Qwen profile to check the session (${first.slice(0, 160)}). Quit any browser still using it and try again.`;
+}
+
 export async function signInWithRealBrowser(
   onProgress?: (state: SignInProgress) => void
 ): Promise<QwenSignInResult> {
@@ -377,7 +407,7 @@ export async function signInWithRealBrowser(
     logger.warn("qwen", "the profile could not be read after sign-in", { error: check.error });
     return {
       ok: false,
-      reason: `OnFlip could not open the Qwen profile to check the session (${check.error.split("\n")[0].slice(0, 140)}). Close any Chrome window still using it and try again.`,
+      reason: profileReadFailure(check.error),
     };
   }
   return {
