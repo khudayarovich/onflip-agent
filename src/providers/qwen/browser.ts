@@ -641,6 +641,46 @@ const SETTLE_POLLS = 2;
 const POLL_MS = 350;
 /** How long the page may show nothing new before the send is called failed. */
 const SILENCE_MS = 90_000;
+
+/**
+ * How long Qwen may claim to be working without producing a character.
+ *
+ * "Generating" here means one thing: the Stop control is on the page. That
+ * is a good signal for a model thinking before it writes, and it is also a
+ * piece of UI that can be left behind — an answer interrupted mid-stream,
+ * a socket dropped, a render that never cleaned up. When it is stale it is
+ * indistinguishable from a model deep in thought, and it says so forever.
+ *
+ * That mattered because "generating" reset the silence clock on every poll.
+ * A stuck Stop button therefore made the silence window unreachable, and
+ * the turn ran to the full reply timeout — ten minutes of a UI saying
+ * "thinking" with nothing behind it. Reported after a sub-agent was
+ * interrupted: every turn afterwards froze the same way, because each one
+ * started on a page still showing the last answer's Stop control.
+ *
+ * So thinking is allowed, and bounded. Past this, with not one character
+ * written, the claim stops holding the clock open and the silence window
+ * is allowed to do its job.
+ */
+const THINKING_MS = 150_000;
+
+/**
+ * Should a page claiming to work be believed enough to keep waiting?
+ *
+ * Pure, because the alternative is discovering the answer in ten-minute
+ * increments. `since` is when this stretch of claimed work began, and text
+ * arriving at any point makes the question moot — the answer is happening.
+ */
+export function thinkingStillCredible(
+  generating: boolean,
+  wroteAnything: boolean,
+  sinceMs: number,
+  limitMs: number = THINKING_MS
+): boolean {
+  if (!generating) return false;
+  if (wroteAnything) return true;
+  return sinceMs < limitMs;
+}
 /** How often to ask the page whether it has already said no. */
 const SERVICE_CHECK_MS = 4_000;
 
@@ -678,14 +718,83 @@ async function readLast(page: Page): Promise<{ text: string; count: number; gene
  * the button is its icon and an SVG element has no `click()` method — the
  * mistake DeepSeek's driver made and logged.
  */
-async function stopGenerating(page: Page): Promise<void> {
+/**
+ * Stop the answer, and check that it stopped.
+ *
+ * Try, then CHECK, then escalate — the rule `submit` already follows, for
+ * the same reason. Qwen marks controls disabled with a CSS class rather than
+ * the attribute, so Playwright's actionability check reads them as clickable
+ * and the click lands on nothing. This used to click once and take the click
+ * not throwing as success.
+ *
+ * What that cost: an interrupted turn left the page still generating, every
+ * turn after it began behind a live answer, saw a Stop control that was
+ * never going away, and waited out the full reply timeout. Reported as a
+ * session that froze after a sub-agent was stopped and would not continue
+ * however many times it was asked.
+ *
+ * Returns whether the page is actually quiet, so the caller can decide what
+ * a refusal is worth — here, a reload, which always works.
+ */
+async function stopGenerating(page: Page): Promise<boolean> {
+  for (const attempt of [1, 2]) {
+    await pressStop(page, attempt);
+    await page.waitForTimeout(700);
+    if (!(await isGenerating(page))) {
+      logger.info("qwen", "the page is quiet", { attempt });
+      return true;
+    }
+  }
+  logger.warn("qwen", "the page is still generating after being asked to stop");
+  return false;
+}
+
+/** Is Qwen's own Stop control on the page? */
+async function isGenerating(page: Page): Promise<boolean> {
+  try {
+    return (await withTimeout(
+      page.evaluate(`Boolean(document.querySelector(${JSON.stringify(STOP_BUTTON)}))`),
+      "reading the stop control"
+    )) as boolean;
+  } catch {
+    // Could not look. Saying "yes" would block a turn on a guess.
+    return false;
+  }
+}
+
+/**
+ * Make sure a new turn does not begin behind the last one's answer.
+ *
+ * The page is shared between turns, and between a parent and its sub-agents,
+ * so an answer that was interrupted — or one whose Stop control was simply
+ * left on screen — is still there when the next message is sent. The wait
+ * loop then reads that stale control as "working" and waits on an answer
+ * that finished, or never was.
+ *
+ * Asked before every send, and cheap when the page is already quiet, which
+ * is the ordinary case.
+ */
+async function settlePage(page: Page): Promise<void> {
+  if (!(await isGenerating(page))) return;
+  logger.warn("qwen", "the page was still generating when a turn began; settling it");
+  if (await stopGenerating(page)) return;
+  // It would not stop. A reload always does, and losing a half-written
+  // answer nobody is waiting for costs nothing.
+  await gotoChat(page);
+  await page
+    .waitForSelector(COMPOSER, { timeout: 20_000 })
+    .catch(() => logger.warn("qwen", "the composer did not come back after settling the page"));
+}
+
+async function pressStop(page: Page, attempt: number): Promise<void> {
   try {
     await page.click(STOP_BUTTON, { timeout: 3_000 });
-    logger.info("qwen", "stop pressed", { clicked: true });
+    logger.info("qwen", "stop pressed", { clicked: true, attempt });
   } catch (e) {
     // Not necessarily a failure: the button is gone the moment the answer
     // finishes, which is the outcome being asked for.
     logger.info("qwen", "stop not pressed", {
+      attempt,
       why: e instanceof Error ? e.message.split("\n")[0].slice(0, 120) : String(e).slice(0, 120),
     });
   }
@@ -736,6 +845,10 @@ export async function sendTurn(
       .catch(() => logger.warn("qwen", "the composer did not appear on the new chat"));
     await page.waitForTimeout(1_500);
   }
+  // Never begin behind the previous answer. The page is shared between
+  // turns and with any sub-agent, so a Stop control left behind by an
+  // interrupted one would be read as this turn working.
+  await settlePage(page);
   const before = await readLast(page);
 
   /**
@@ -847,6 +960,8 @@ export async function sendTurn(
   let quiet = 0;
   let recovered = false;
   let lastChange = Date.now();
+  /** When this stretch of claimed work began; 0 when it is not claiming. */
+  let generatingSince = 0;
   let lastServiceCheck = Date.now();
   let sawGenerating = false;
   /** One reload-and-resend is a recovery; two in a turn is a loop. */
@@ -913,17 +1028,26 @@ export async function sendTurn(
       }
       if (now.generating) {
         sawGenerating = true;
+        if (!generatingSince) generatingSince = Date.now();
         // Working, therefore not silent. The silence window exists to catch
         // a send that never arrived, and a page showing its own stop control
         // has plainly received one - so the clock belongs to the answer, not
-        // to the wait for it.
+        // to the wait for it. Without it, a model that thinks for more than
+        // ninety seconds before writing is reported as a send that did not
+        // land, because reply text is what the clock watches and thinking
+        // produces none.
         //
-        // Without this, a model that thinks for more than ninety seconds
-        // before writing anything is reported as a send that did not land,
-        // because the reply text is what the clock was watching and thinking
-        // produces none. Reported from the field as a turn frozen on
-        // thinking; the deadline above is what bounds a genuinely long one.
-        lastChange = Date.now();
+        // Bounded, though, because "generating" is only "the Stop control is
+        // on the page" and that control can be left behind - by an answer
+        // interrupted mid-stream most of all. A stale one is
+        // indistinguishable from deep thought and says so for ever, which
+        // made the silence window unreachable and ran every later turn to
+        // the full reply timeout. See `thinkingStillCredible`.
+        if (thinkingStillCredible(true, now.text.length > 0, Date.now() - generatingSince)) {
+          lastChange = Date.now();
+        }
+      } else {
+        generatingSince = 0;
       }
       const fresh = now.count > before.count || now.text !== before.text;
       if (!fresh || !now.text) {

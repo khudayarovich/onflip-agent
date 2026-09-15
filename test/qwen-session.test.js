@@ -478,3 +478,66 @@ test("the driver no longer decides anything from the page's header", () => {
   );
   assert.match(source, /\/api\/v1\/auths\//);
 });
+
+// ---------------------------------------------------------------------------
+// A page that claims to be working, and how long that is worth believing
+// ---------------------------------------------------------------------------
+
+const { thinkingStillCredible } = require("../dist/providers/qwen/browser");
+
+test("a model thinking before it writes is waited for", () => {
+  // The reason this signal exists at all: reply text is what the silence
+  // clock watches, and thinking produces none. Without it a model that
+  // thinks for more than ninety seconds is reported as a send that never
+  // landed.
+  assert.equal(thinkingStillCredible(true, false, 60_000), true);
+});
+
+test("and once it writes, it is simply answering", () => {
+  // Text arriving makes the question moot, however long it has been.
+  assert.equal(thinkingStillCredible(true, true, 10 * 60_000), true);
+});
+
+test("but a Stop button with nothing behind it stops holding the clock", () => {
+  // "Generating" means one thing: Qwen's Stop control is on the page. It is
+  // also a piece of UI that gets left behind — by an interrupted answer most
+  // of all — and a stale one is indistinguishable from deep thought while
+  // saying so for ever.
+  //
+  // That is what froze every turn after a sub-agent was stopped: the claim
+  // reset the silence clock on each poll, so the silence window could never
+  // fire and the turn ran to the full reply timeout.
+  assert.equal(thinkingStillCredible(true, false, 151_000), false);
+  assert.equal(thinkingStillCredible(true, false, 10 * 60_000), false);
+});
+
+test("a page that is not claiming anything never holds it", () => {
+  assert.equal(thinkingStillCredible(false, false, 1_000), false);
+  assert.equal(thinkingStillCredible(false, true, 1_000), false);
+});
+
+test("the limit is a parameter, because the right one is a judgement", () => {
+  assert.equal(thinkingStillCredible(true, false, 5_000, 1_000), false);
+  assert.equal(thinkingStillCredible(true, false, 5_000, 10_000), true);
+});
+
+test("a turn never begins behind the previous answer", () => {
+  // Source-level: this lives inside sendTurn, which needs a browser. What it
+  // pins is that the page is settled before the send — the page is shared
+  // between turns and with any sub-agent, so an interrupted answer's Stop
+  // control is still there when the next message goes.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "providers", "qwen", "browser.ts"),
+    "utf8"
+  );
+  const send = source.slice(source.indexOf("export async function sendTurn("));
+  const setup = send.slice(0, send.indexOf("const submit = async"));
+
+  assert.match(setup, /await settlePage\(page\);/);
+  // And stopping is checked rather than assumed: the click can land on a
+  // control Qwen disabled with a CSS class and do nothing at all.
+  assert.match(source, /async function stopGenerating\(page: Page\): Promise<boolean>/);
+  assert.match(source, /if \(!\(await isGenerating\(page\)\)\) return/);
+});
