@@ -296,32 +296,38 @@ test("a token this cannot read is left for the page to judge", () => {
 
 const { isUsableChatUrl, sessionStateFrom } = require("../dist/providers/qwen/browser");
 
-test("the page's own sign-in header outranks a token that looks fine", () => {
-  // The fault six releases missed, measured on a real profile rather than
-  // reasoned about: a token 209 characters long, correctly shaped, with its
-  // own expiry twenty-nine days away - and the page rendering the Log in /
-  // Sign up pair, structurally identical to a profile created seconds
-  // earlier that had never seen Qwen. The service had dropped the session;
-  // nothing readable offline could tell.
+test("the service's own answer outranks a token that looks fine", () => {
+  // The fault six releases missed, measured rather than reasoned about: a
+  // token 209 characters long, correctly shaped, with its own expiry
+  // twenty-nine days away - and `/api/v1/auths/` answering 401, in words:
+  // "Your session has expired, or the token is no longer valid."
   //
-  // So the app reported itself connected, every message went into a guest
-  // conversation that is never answered, and the person was told to sign in
-  // to an account the app insisted was already signed in.
+  // Nothing readable offline could tell. So the app reported itself
+  // connected, every message went into a guest conversation that is never
+  // answered, and the person was told to sign in to an account the app
+  // insisted was already signed in.
   const live = { token: jwt, userRole: "user" };
 
-  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, true), "absent");
-  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, false), "present");
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, "dead"), "absent");
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, "live"), "present");
 });
 
-test("only a sighting counts; nobody looking is not evidence of anything", () => {
-  // `undefined` is "nobody asked" and `false` is "the header had not
-  // rendered yet". Reading either as signed out would refuse a working
-  // session on a slow machine, which is the same fault in the other
-  // direction - and that direction is the one that costs a sign-in.
+test("a session the service confirms is present even with nothing in the store", () => {
+  // The service is the authority. If it says the credential is good, an
+  // empty or unreadable store is this code's problem, not the person's.
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", {}, "live"), "present");
+});
+
+test("nobody having found out falls back to the token, never to signed out", () => {
+  // `unknown` is an outage, a timeout, a shape that changed. It must behave
+  // exactly as this function did before the service was ever asked -
+  // anything else turns a bad network into a sign-in prompt.
   const live = { token: jwt, userRole: "user" };
 
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, "unknown"), "present");
   assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, undefined), "present");
   assert.equal(sessionStateFrom("https://chat.qwen.ai/", live), "present");
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", {}, "unknown"), "absent");
 });
 
 test("and it cannot rescue a page that was never readable", () => {
@@ -374,7 +380,7 @@ test("the recovery asks before spending its second attempt", () => {
   const recovery = source.slice(source.indexOf("const recoverAndResend"));
   const body = recovery.slice(0, recovery.indexOf("await submit();"));
 
-  assert.match(body, /await pageShowsAuthPrompt\(page\)/);
+  assert.match(body, /await askQwen\(page\)\) === "dead"/);
   assert.match(body, /"signed-out"/);
 });
 
@@ -410,4 +416,65 @@ test("and a real navigation failure is still a real one", () => {
   ]) {
     assert.equal(isNavigationRace(real), false, real);
   }
+});
+
+// ---------------------------------------------------------------------------
+// Asking the service, and what its answer means
+// ---------------------------------------------------------------------------
+
+const { qwenSessionVerdict } = require("../dist/providers/qwen/browser");
+
+test("the service refusing the token is the one answer that means signed out", () => {
+  // Measured: 401 with {"error":"Your session has expired, or the token is
+  // no longer valid. Please sign in again to proceed."}
+  assert.equal(qwenSessionVerdict({ reached: true, status: 401 }), "dead");
+  assert.equal(qwenSessionVerdict({ reached: true, status: 403 }), "dead");
+});
+
+test("and accepting it is a live session", () => {
+  assert.equal(qwenSessionVerdict({ reached: true, status: 200 }), "live");
+  assert.equal(qwenSessionVerdict({ reached: true, status: 204 }), "live");
+});
+
+test("a service having a bad day is not a verdict on your session", () => {
+  // The failure that would otherwise sign people out during an outage.
+  for (const status of [500, 502, 503, 504, 429, 418]) {
+    assert.equal(qwenSessionVerdict({ reached: true, status }), "unknown", String(status));
+  }
+});
+
+test("and neither is a request that never completed", () => {
+  assert.equal(qwenSessionVerdict({ reached: false }), "unknown");
+  assert.equal(qwenSessionVerdict(null), "unknown");
+  assert.equal(qwenSessionVerdict(undefined), "unknown");
+  assert.equal(qwenSessionVerdict({}), "unknown");
+});
+
+test("no token to ask with is signed out, not unknown", () => {
+  assert.equal(qwenSessionVerdict({ reached: true, status: 0 }), "dead");
+});
+
+test("the driver no longer decides anything from the page's header", () => {
+  // The 0.10.33 fix, and the reason it had to go. Measured on a real load:
+  // the Log in button became visible at 1815ms and the 401 that decides what
+  // the header should say arrived at 2561ms - three quarters of a second
+  // later. So a genuinely signed-in profile renders Log in on every load,
+  // briefly, and a check looking in that window told somebody who had just
+  // signed in that they were signed out. Signing in again raced the same
+  // way. That is the sign-in loop, shipped by the release meant to end it.
+  //
+  // A request has no such race, so the header must not be consulted at all -
+  // leaving it in as a tie-breaker would leave the race in.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "providers", "qwen", "browser.ts"),
+    "utf8"
+  );
+
+  assert.ok(
+    !/header-right-auth-button/.test(source),
+    "the racy header selector is back in the driver"
+  );
+  assert.match(source, /\/api\/v1\/auths\//);
 });

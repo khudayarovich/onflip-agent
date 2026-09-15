@@ -138,52 +138,39 @@ const USER_MESSAGE = ".qwen-chat-message-user";
 /** Shown in Send's place while an answer is being written. */
 const STOP_BUTTON = 'button[aria-label="Stop"]';
 /**
- * The header's Log in / Sign up pair, which only a signed-out visitor sees.
+ * Ask Qwen whether this profile's token is still a session.
  *
- * This is the signal the driver spent six releases without, and the one that
- * settles what localStorage cannot. Measured on the real profile: a token
- * 209 characters long, correctly shaped, with its own expiry twenty-nine
- * days away — and the page rendering these two buttons, structurally
- * identical to a profile created thirty seconds earlier that had never seen
- * Qwen. The token was valid by every test that can be made of it offline
- * and dead as far as the service was concerned.
+ * `/api/v1/auths/` is Qwen's own answer, and it is not ambiguous. With the
+ * dead token from the real profile it returns 401 and says so in words:
+ * "Your session has expired, or the token is no longer valid. Please sign in
+ * again to proceed." With a live one it returns the account.
  *
- * That is the whole of the fault people reported. `isSignedIn` read the
- * token, said yes, the app reported itself connected, and every message went
- * into a guest conversation that is never answered — which surfaced as "the
- * message went nowhere", ninety-second waits, and being told to sign in to
- * an account already signed in.
+ * This replaces reading the page's Log in button, which was the 0.10.33 fix
+ * and was wrong in the worst available direction. The header renders its
+ * signed-out state *before* the app has heard back from this very endpoint —
+ * measured on a real load: the button became visible at 1815ms and the 401
+ * arrived at 2561ms, three quarters of a second later. So a genuinely
+ * signed-in profile shows Log in for about a second on every load, and a
+ * check that looked during that second told somebody who had just signed in
+ * that they were signed out. Signing in again did not help, because the next
+ * check raced the same way. That is the sign-in loop, and it was introduced
+ * by the release that was meant to end it.
  *
- * Classes, not text: the same page renders "Войти" or "Log in" depending on
- * the locale cookie, and matching words would make the check work in English
- * and fail silently everywhere else.
- *
- * One class, not a family of them, and deliberately the narrow one. The two
- * ways this can be wrong are not equally bad. If Qwen renames it the check
- * stops firing and the driver behaves as it did before this release — a
- * fault already understood. If it ever matched something a *signed-in* page
- * draws, everybody would be told to sign in for ever, and signing in would
- * not clear it. The second is unrecoverable by the person it happens to, so
- * the selector only claims what was actually observed.
- *
- * Stated plainly because it could not be tested from here: this was measured
- * against a signed-out page and a dead-session page, which rendered it
- * identically. There was no live session on this machine to confirm a
- * signed-in page does *not* draw it — the profile's session was already gone,
- * which is how the fault was found at all.
+ * A request has no such race: it answers about the session rather than about
+ * what has painted so far.
  */
-const AUTH_PROMPT = "button.header-right-auth-button";
-
-/**
- * The same question as a page script, because this module has no DOM types.
- *
- * `offsetParent` is the cheap honest test of "a person would see this": the
- * markup can be in the tree and hidden, and a hidden button is not a page
- * telling somebody to sign in.
- */
-const AUTH_PROMPT_SCRIPT = `(() => {
-  const el = document.querySelector(${JSON.stringify(AUTH_PROMPT)});
-  return Boolean(el && el.offsetParent !== null);
+const SESSION_PROBE_SCRIPT = `(async () => {
+  const token = localStorage.getItem(${JSON.stringify(TOKEN_KEY)}) || "";
+  if (!token) return { status: 0, reached: true };
+  try {
+    const res = await fetch("/api/v1/auths/", {
+      credentials: "include",
+      headers: { authorization: "Bearer " + token },
+    });
+    return { status: res.status, reached: true };
+  } catch (e) {
+    return { status: 0, reached: false };
+  }
 })()`;
 
 /**
@@ -392,6 +379,9 @@ export async function readStorage(page: Page): Promise<Record<string, string | n
  */
 export type SessionState = "present" | "absent" | "unreadable";
 
+/** What the service said about the token: accepted, refused, or no answer. */
+export type SessionVerdict = "live" | "dead" | "unknown";
+
 /**
  * What to do about a sign-in prompt on the page, given what the profile says.
  *
@@ -438,7 +428,7 @@ export function verdictForPrompt(
 export function sessionStateFrom(
   url: string,
   storage: Record<string, string | null | undefined> | null,
-  authPrompt?: boolean
+  session?: SessionVerdict
 ): SessionState {
   if (!url || !url.startsWith(QWEN_ORIGIN)) return "unreadable";
   // A guest conversation is Qwen saying the session is not in effect, and
@@ -446,40 +436,73 @@ export function sessionStateFrom(
   // believing it is how the app reported itself connected while every turn
   // went to a page that could not answer.
   if (isGuestChat(url)) return "absent";
-  // The page's own verdict outranks the token, because the token cannot be
-  // checked offline and the page has already asked. A profile holding a
-  // well-formed, unexpired token that the service no longer honours renders
-  // the Log in / Sign up pair, and that is the case this driver kept
-  // reading as a live session.
+  // The service's verdict outranks the token, because the token cannot be
+  // checked offline: Qwen leaves a well-formed, unexpired one behind after
+  // it stops honouring it, and that is the case this driver kept reading as
+  // a live session.
   //
-  // Only a positive sighting counts. `undefined` means nobody looked and
-  // `false` means the header had not rendered yet - neither is evidence of
-  // being signed in, so both fall through to the token, which is the same
-  // answer this function gave before the page was ever consulted.
-  if (authPrompt === true) return "absent";
+  // `unknown` is not a verdict and falls through to the token - the answer
+  // this function gave before the service was ever asked. Nobody having
+  // found out must never cost somebody a sign-in.
+  if (session === "dead") return "absent";
+  if (session === "live") return "present";
   if (!storage) return "unreadable";
   return isSignedIn(storage) ? "present" : "absent";
 }
 
+/** What came back from asking Qwen, as facts rather than a conclusion. */
+export interface SessionAnswer {
+  /** HTTP status, or 0 when there was no token to ask with or nobody answered. */
+  status?: number;
+  /** Did the request complete at all? False for offline, DNS, a timeout. */
+  reached?: boolean;
+}
+
 /**
- * Is the page showing the signed-out header?
+ * The rule, kept out of the page so it can be held against every answer.
  *
- * Visibility matters: the markup can be present and hidden behind a
- * rendered-but-not-displayed header, and an offsetParent check is the
- * cheapest honest test of "a person would see this".
- *
- * Any failure answers `false` — not signed out. A driver that reports
- * somebody signed out because an evaluate timed out is the failure this
- * whole file has been correcting, in the other direction.
+ * The same shape DeepSeek's uses, and for the same reason. Only the service
+ * refusing the credential means signed out. An outage, a timeout, a shape
+ * that changed are this code failing to find out, and `unknown` says so —
+ * which falls back to the token, the behaviour before any of this. Being
+ * wrong that way costs a request; being wrong the other way costs somebody a
+ * sign-in that will not help, which is the fault this is fixing.
  */
-async function pageShowsAuthPrompt(page: Page): Promise<boolean> {
+export function qwenSessionVerdict(answer: SessionAnswer | null | undefined): SessionVerdict {
+  if (!answer || answer.reached !== true) return "unknown";
+  const status = answer.status ?? 0;
+  // Reached the point of asking with nothing to ask with: an empty store by
+  // another name, which this driver already calls signed out.
+  if (status === 0) return "dead";
+  if (status === 401 || status === 403) return "dead";
+  if (status < 200 || status >= 300) return "unknown";
+  return "live";
+}
+
+/**
+ * Ask the service, and say which of the three answers came back.
+ *
+ * Any failure to ask is `unknown`. A driver that reports somebody signed out
+ * because an evaluate timed out is the fault this file has spent six
+ * releases correcting, in one direction or the other.
+ */
+async function askQwen(page: Page): Promise<SessionVerdict> {
   try {
-    return await withTimeout(
-      page.evaluate<boolean>(AUTH_PROMPT_SCRIPT),
-      "reading the sign-in header"
-    );
+    const raw = (await withTimeout(
+      page.evaluate<SessionAnswer>(SESSION_PROBE_SCRIPT),
+      "asking Qwen about the session"
+    )) as SessionAnswer;
+    const verdict = qwenSessionVerdict(raw);
+    if (verdict !== "live") {
+      logger.info("qwen", "asked the service about the session", {
+        verdict,
+        status: raw?.status ?? null,
+        reached: raw?.reached ?? false,
+      });
+    }
+    return verdict;
   } catch {
-    return false;
+    return "unknown";
   }
 }
 
@@ -488,7 +511,7 @@ async function sessionState(page: Page): Promise<SessionState> {
   try {
     url = page.url();
     const storage = await readStorage(page);
-    return sessionStateFrom(url, storage, await pageShowsAuthPrompt(page));
+    return sessionStateFrom(url, storage, await askQwen(page));
   } catch {
     return "unreadable";
   }
@@ -561,10 +584,10 @@ export async function checkSignedIn(
       const state = sessionStateFrom(
         page.url(),
         await readStorage(page),
-        // Asked of the page, not of the token: this is the check that draws
-        // the Sign in button, and it was the one telling people they were
-        // connected while the header in front of them said Log in.
-        await pageShowsAuthPrompt(page)
+        // Asked of the service, not of the token and not of the header:
+        // this is the check that draws the Sign in button, and the header
+        // races the very request that decides what it should say.
+        await askQwen(page)
       );
       if (state === "present") {
         const profile = await readProfile(page);
@@ -850,7 +873,7 @@ export async function sendTurn(
     // silence window spent waiting on a guest conversation that will never
     // answer. This is the check the driver did not have when the first
     // recovery was written; it had to send and wait to find out.
-    if (await pageShowsAuthPrompt(page)) {
+    if ((await askQwen(page)) === "dead") {
       throw new QwenError(
         "Qwen is asking this browser to sign in, so the message could not be sent. Sign in again from the account menu.",
         "signed-out"
