@@ -63,6 +63,62 @@ export function isApprovalMode(v: string): v is ApprovalMode {
   return (APPROVAL_MODES as string[]).includes(v);
 }
 
+/**
+ * The modes that run without a person, and are therefore not offered on macOS.
+ *
+ * `full-auto` and `yolo` remove the last human check: the model's output goes
+ * straight to the shell, and what stands between it and the machine is a list
+ * of regular expressions. That list cannot see through an interpreter, a
+ * package manager, `find -exec`, an alias, or code the model just downloaded
+ * — and an external audit demonstrated exactly that against the shipped
+ * build, on a Mac left in `full-auto`.
+ *
+ * Disabled on macOS at the owner's request, after that audit. The honest
+ * caveat, stated here rather than left to be discovered: the risk is not
+ * macOS-specific. It is the same mode with the same reach on every platform.
+ * What is specific is that this is the machine running unattended from a
+ * phone, so it is the machine where nobody is watching the screen when a
+ * command runs.
+ *
+ * `ONFLIP_ALLOW_FULL_ACCESS=1` puts them back, because a guard with no way
+ * past it is a guard people work around by worse means. Setting an
+ * environment variable is a deliberate act; clicking a menu entry is not.
+ */
+const UNATTENDED_MODES: ApprovalMode[] = ["full-auto", "yolo"];
+
+export function unattendedAllowed(
+  platform: string = process.platform,
+  override: string | undefined = process.env.ONFLIP_ALLOW_FULL_ACCESS
+): boolean {
+  if (override === "1") return true;
+  return platform !== "darwin";
+}
+
+/** The modes this machine may actually be put into. */
+export function availableModes(
+  platform: string = process.platform,
+  override: string | undefined = process.env.ONFLIP_ALLOW_FULL_ACCESS
+): ApprovalMode[] {
+  if (unattendedAllowed(platform, override)) return [...APPROVAL_MODES];
+  return APPROVAL_MODES.filter((m) => !UNATTENDED_MODES.includes(m));
+}
+
+/**
+ * The mode this machine will honour, given the one that was asked for.
+ *
+ * Applied both to what is read from the config and to what is set later, so
+ * a value stored by another machine — or by a build before this rule — cannot
+ * put a Mac back into full access without anyone choosing it.
+ */
+export function clampApprovalMode(
+  mode: ApprovalMode,
+  platform: string = process.platform,
+  override: string | undefined = process.env.ONFLIP_ALLOW_FULL_ACCESS
+): ApprovalMode {
+  if (unattendedAllowed(platform, override)) return mode;
+  return UNATTENDED_MODES.includes(mode) ? "ask" : mode;
+}
+
 export type PermissionKind = "read" | "write" | "command" | "network";
 
 export interface PermissionRequest {

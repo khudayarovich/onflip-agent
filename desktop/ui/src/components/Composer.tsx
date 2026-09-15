@@ -8,6 +8,7 @@ import type {
 import { Menu, useMenu } from "./common";
 import { useT, StringKey, LangContext } from "../i18n";
 import { SKILLS, canonicaliseSkillMentions, findSkillMention } from "../../../shared/skills";
+import { isOffered } from "../../../shared/approval";
 import { ChevronDown, Close, fileGlyph } from "./icons";
 
 export { SLASH_COMMANDS, slashCommands } from "../../../shared/commands";
@@ -32,6 +33,18 @@ const APPROVAL_MODES: { mode: ApprovalMode; label: StringKey; hint: StringKey }[
 
 function approvalInfo(mode: ApprovalMode | undefined) {
   return APPROVAL_MODES.find((m) => m.mode === mode) ?? APPROVAL_MODES[1];
+}
+
+/**
+ * The modes this machine will actually honour — see `isOffered`, which is
+ * the same filter the phone's `/access` keyboard runs.
+ *
+ * Note this filters the *menu*, not `approvalInfo`. Whatever mode is in
+ * effect should still be named correctly on the chip even if it is no longer
+ * on offer: a label that goes blank is worse than one that says the truth.
+ */
+function offeredModes(status: EngineStatus | null): typeof APPROVAL_MODES {
+  return APPROVAL_MODES.filter((m) => isOffered(m.mode, status?.approvalModes));
 }
 
 /**
@@ -728,7 +741,7 @@ export function Composer({
           openUp
           entries={[
             { key: "_h", heading: t("menuApproval"), label: "" },
-            ...APPROVAL_MODES.map((entry) => ({
+            ...offeredModes(status).map((entry) => ({
               key: entry.mode,
               label: t(entry.label),
               hint: t(entry.hint),

@@ -26,6 +26,7 @@ import {
 import { arrivalPrompt, inboxTarget, TELEGRAM_DOWNLOAD_MAX } from "../shared/inbox";
 import { serviceLabel } from "../shared/providers";
 import type { ApprovalMode } from "../shared/protocol";
+import { isOffered } from "../shared/approval";
 
 /**
  * Driving OnFlip from a phone.
@@ -713,6 +714,22 @@ const ACCESS: { label: string; value: ApprovalMode }[] = [
   { label: "Full-access", value: "full-auto" },
 ];
 
+/**
+ * The access modes this machine will honour — the same filter the window's
+ * chip runs, from the same place, so the two menus cannot disagree.
+ */
+export function accessChoices(
+  allowed: readonly string[] | undefined,
+  all: { label: string; value: ApprovalMode }[] = ACCESS
+): { label: string; value: ApprovalMode }[] {
+  return all.filter((a) => isOffered(a.value, allowed));
+}
+
+/** The picker as it stands right now, asked of the live status. */
+function accessRows(): ReturnType<typeof rows> {
+  return rows("access", accessChoices(host?.status().approvalModes), 2);
+}
+
 async function sendModelPicker(chatId: number): Promise<void> {
   let models: { slug: string; label: string; workOnly?: boolean }[] = [];
   try {
@@ -910,7 +927,7 @@ async function handleMessage(chatId: number, userId: number | undefined, text: s
       await say(
         chatId,
         "🛡 <b>Access</b>\nWhat may OnFlip do without asking?",
-        rows("access", ACCESS, 2)
+        accessRows()
       );
       break;
     case "settings":
@@ -990,7 +1007,7 @@ async function handleCallback(
         if (decoded.value === "model") await sendModelPicker(chatId);
         else if (decoded.value === "thinking") await sendThinkingPicker(chatId);
         else if (decoded.value === "access")
-          await say(chatId, "🛡 <b>Access</b>", rows("access", ACCESS, 2));
+          await say(chatId, "🛡 <b>Access</b>", accessRows());
         else if (decoded.value === "folder") await sendFolderPicker(chatId);
         else if (decoded.value === "provider") await sendProviderPicker(chatId);
         return;

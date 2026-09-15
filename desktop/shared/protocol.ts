@@ -210,6 +210,14 @@ export interface EngineStatus {
   model: string;
   thinking?: ThinkingLevel;
   approvalMode: ApprovalMode;
+  /**
+   * The modes this machine will actually honour.
+   *
+   * Carried on the status so the window and the phone both draw the same
+   * list without either of them re-deriving the rule - a picker offering
+   * a mode the engine clamps away is a control that lies.
+   */
+  approvalModes?: ApprovalMode[];
   shellEnabled: boolean;
   networkEnabled: boolean;
   maxIterations: number;

@@ -96,6 +96,8 @@ import { runTurn, compactNow, reducibleChars, AgentOptions } from "onflip/dist/a
 import {
   ApprovalMode,
   isApprovalMode,
+  clampApprovalMode,
+  availableModes,
   createPolicy,
   evaluate,
   remember,
@@ -338,9 +340,12 @@ export class Engine {
     this.model = normalizeModel(process.env.ONFLIP_MODEL ?? cfg.model) ?? defaultModel();
     const rawThinking = process.env.ONFLIP_THINKING ?? cfg.thinking ?? "";
     this.thinking = isThinkingLevel(rawThinking) ? rawThinking : undefined;
-    this.approvalMode = isApprovalMode(cfg.approvalMode ?? "")
-      ? (cfg.approvalMode as ApprovalMode)
-      : "ask";
+    // Clamped on read as well as on write, so a value stored by another
+    // machine - or by a build before this rule - cannot put a Mac back
+    // into full access without anyone choosing it.
+    this.approvalMode = clampApprovalMode(
+      isApprovalMode(cfg.approvalMode ?? "") ? (cfg.approvalMode as ApprovalMode) : "ask"
+    );
     this.shellEnabled = cfg.shell ?? true;
     this.networkEnabled = cfg.network ?? true;
     this.maxIterations = firstPositiveInt(
@@ -910,6 +915,7 @@ export class Engine {
       model: this.model,
       thinking: this.thinking,
       approvalMode: this.approvalMode,
+      approvalModes: availableModes(),
       shellEnabled: this.shellEnabled,
       networkEnabled: this.networkEnabled,
       maxIterations: this.maxIterations,
@@ -2415,9 +2421,17 @@ export class Engine {
 
   setApproval(mode: ApprovalMode): EngineStatus {
     if (!isApprovalMode(mode)) throw new Error(`Unknown approval mode: ${mode}`);
-    this.approvalMode = mode;
-    this.policy.mode = mode;
-    saveConfig({ approvalMode: mode });
+    // Asking for a mode this machine does not offer settles at `ask`
+    // rather than failing: the caller may be the phone, an older window,
+    // or a config written elsewhere, and none of them should be able to
+    // turn the last check off.
+    const allowed = clampApprovalMode(mode);
+    if (allowed !== mode) {
+      this.notice(`"${mode}" is not available on this machine, so the mode is "${allowed}".`);
+    }
+    this.approvalMode = allowed;
+    this.policy.mode = allowed;
+    saveConfig({ approvalMode: allowed });
     this.seedSystemPrompt();
     this.pushStatus();
     return this.statusPayload();

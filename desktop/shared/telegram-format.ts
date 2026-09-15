@@ -149,6 +149,13 @@ export interface StatusLike {
   model?: string;
   thinking?: string;
   approvalMode?: string;
+  /**
+   * The modes this machine will honour, so the phone's picker offers the
+   * same list the window does. Absent from an older engine, and then the
+   * picker falls back to offering all of them — which is what that engine
+   * accepts.
+   */
+  approvalModes?: string[];
   shellEnabled?: boolean;
   busy?: boolean;
   sessionTitle?: string;
