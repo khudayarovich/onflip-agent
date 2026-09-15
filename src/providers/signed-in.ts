@@ -87,3 +87,28 @@ export function watchVerdict(
   if (found.signedIn === known) return "ignore";
   return found.signedIn ? "signed-in" : "signed-out";
 }
+
+
+/**
+ * What to say when a session ends by itself.
+ *
+ * "Sign in again" is true everywhere and useless on Qwen, where the usual
+ * cause is not a lapse but a rotation: the service hands the page a new
+ * token whenever it answers with the user, and the previous one stops
+ * working. Opening Qwen in an ordinary browser, on a phone, or on a second
+ * machine therefore takes the session from OnFlip. Its own refusal names
+ * both cases — "expired, or the token is no longer valid".
+ *
+ * Somebody signing in for the fourth time in a day is owed that sentence.
+ * It is the difference between a fault they cannot explain and a
+ * consequence they can choose to avoid.
+ */
+export function sessionEndedNotice(label: string, provider: string): string {
+  const base = `The ${label} session has ended — open the account menu (bottom left) and choose "Sign in".`;
+  if (provider !== "qwen") return base;
+  return (
+    base +
+    ` Qwen moves a session to whichever browser used it last, so opening Qwen` +
+    ` elsewhere — another browser, a phone, a second machine — ends this one.`
+  );
+}

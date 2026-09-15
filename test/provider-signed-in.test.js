@@ -175,3 +175,34 @@ test("the first definite answer counts, whichever way it goes", () => {
   assert.equal(watchVerdict({ signedIn: false, reachable: true }, null), "signed-out");
   assert.equal(watchVerdict({ signedIn: true, reachable: true }, null), "signed-in");
 });
+
+// ---------------------------------------------------------------------------
+// What a session ending is worth saying about
+// ---------------------------------------------------------------------------
+
+const { sessionEndedNotice } = require("../dist/providers/signed-in");
+
+test("Qwen's notice names the cause, because the cause is avoidable", () => {
+  // Settled by reading Qwen's own bundle: the page stores a new token every
+  // time the service answers with the user object, and the refusal says
+  // "expired, or the token is no longer valid" - naming invalidation as
+  // something separate from expiry. So opening Qwen elsewhere takes the
+  // session, and somebody signing in for the fourth time in a day is owed
+  // that sentence rather than "sign in again".
+  const notice = sessionEndedNotice("Qwen", "qwen");
+
+  assert.match(notice, /Sign in/);
+  assert.match(notice, /elsewhere/);
+  assert.match(notice, /phone|second machine/);
+});
+
+test("and the others are not given a reason that is not theirs", () => {
+  // ChatGPT and DeepSeek sessions end for their own reasons. Borrowing
+  // Qwen's explanation would send people looking for a second browser that
+  // has nothing to do with it.
+  for (const [label, id] of [["ChatGPT", "chatgpt"], ["DeepSeek", "deepseek"]]) {
+    const notice = sessionEndedNotice(label, id);
+    assert.match(notice, new RegExp(label));
+    assert.ok(!/elsewhere/.test(notice), `${id} got Qwen's explanation`);
+  }
+});

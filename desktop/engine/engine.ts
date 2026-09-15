@@ -41,7 +41,11 @@ import {
   rationedPlan,
 } from "onflip/dist/chatgpt/plans";
 import { activeProvider, isBrowserProvider, providerLabel } from "onflip/dist/providers/id";
-import { reportsSignedIn, watchVerdict } from "onflip/dist/providers/signed-in";
+import {
+  reportsSignedIn,
+  watchVerdict,
+  sessionEndedNotice,
+} from "onflip/dist/providers/signed-in";
 import { attachmentsBlockedReason, uploadsAvailable } from "onflip/dist/chatgpt/transport";
 import {
   configureBrowser,
@@ -777,7 +781,7 @@ export class Engine {
         logger.info("session", "the session has gone", { provider: activeProvider() });
         this.emitConnect(
           "signed-out",
-          `The ${providerLabel()} session has ended — open the account menu (bottom left) and choose "Sign in".`
+          sessionEndedNotice(providerLabel(), activeProvider())
         );
       }
       this.pushStatus();

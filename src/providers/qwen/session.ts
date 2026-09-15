@@ -24,6 +24,35 @@ export function qwenProfileDir(): string {
   return path.join(providerStateDir("qwen"), "browser-profile");
 }
 
+/**
+ * Why a Qwen session ends while its token still has weeks left on it.
+ *
+ * Settled by reading Qwen's own bundle rather than guessing, after the
+ * question came up once too often. The page stores a token whenever the
+ * service hands one back with the user object:
+ *
+ *   localStorage.setItem("token", t.token)   — on every user fetch
+ *
+ * which is the rotation visible on disk: nine token records in one profile's
+ * log, each with a fresh thirty-day expiry, minutes apart. And the refusal
+ * says what happens to the one before it, in as many words — "Your session
+ * has expired, **or the token is no longer valid**". Expiry and invalidation
+ * are two different things and it names both.
+ *
+ * So the account rotates, and whoever is holding the previous token loses.
+ * Open Qwen in an ordinary browser, or on a phone, or on a second machine,
+ * and OnFlip's token stops working — not because anything here broke, but
+ * because the service moved the session and OnFlip was not the one holding
+ * it when it moved. Measured lifetime on a machine doing other things with
+ * the same account: about three and a half hours.
+ *
+ * There is nothing OnFlip can do to prevent that. There is no refresh cookie
+ * to fall back on — the jar on this origin is analytics and risk control,
+ * `cna`, `tfstk`, `isg`, and nothing that authenticates. What OnFlip can do
+ * is notice quickly and say so plainly, which is what the session watchdog
+ * and `/api/v1/auths/` are for, rather than discovering it in the middle of
+ * a message.
+ */
 export const QWEN_ORIGIN = "https://chat.qwen.ai";
 export const QWEN_CHAT_URL = `${QWEN_ORIGIN}/`;
 export const QWEN_SIGN_IN_URL = `${QWEN_ORIGIN}/auth`;

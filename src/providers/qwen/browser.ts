@@ -148,11 +148,20 @@ const USER_MESSAGE = ".qwen-chat-message-user";
  * English-only selector against that looked like the answer to years of
  * "works sometimes, freezes sometimes".
  *
- * It is not. Qwen's translation bundle keys every string by its English
- * text — "Scroll down" → "Прокрутить вниз" — and there is no entry for
- * "Stop" at all, which puts it with "Select Model" and "Upload files": aria
- * labels the page leaves in English whatever the locale. So the original
- * selector almost certainly does match, and the freeze has another cause.
+ * It is not, and the component settles it. Qwen renders the control as:
+ *
+ *   className: "stop-button " + (disabled ? "disabled" : ""),
+ *   "aria-label": t("Stop")
+ *
+ * The label does go through the translator — so it is locale-dependent in
+ * principle — but the Russian bundle has no "Stop" key, and i18next falls
+ * back to the key itself. It renders "Stop" in Russian, the old selector
+ * matched, and the freeze had another cause.
+ *
+ * The class is the better signal regardless: it is not translated, it cannot
+ * fall back to anything, and the control is only in the tree while an answer
+ * is being written. So the class leads, and the labels are the fallback for
+ * the day Qwen adds that key.
  *
  * The list stays anyway. It costs one CSS selector, it covers the day Qwen
  * translates that label or renames the class, and a driver that can lose
