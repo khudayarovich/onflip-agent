@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.24
+# OnFlip Desktop 0.10.25
 
-**OnFlip drives Qwen now, alongside ChatGPT and DeepSeek.** A third free account to run the agent on, chosen from the account menu, with its own sign-in and its own chats.
+**Qwen turns that failed saying you were signed out, when you were not.** A fix for the one real problem in yesterday's release.
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,32 +8,28 @@
 
 | Platform | File | Size |
 | --- | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.24.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.24/OnFlip-Setup-0.10.24.exe) | ~89 MB |
-| **macOS** · Apple Silicon | [OnFlip-0.10.24-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.24/OnFlip-0.10.24-mac-arm64.dmg) | ~108 MB |
-| **macOS** · Intel | [OnFlip-0.10.24-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.24/OnFlip-0.10.24-mac-x64.dmg) | ~115 MB |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.25.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.25/OnFlip-Setup-0.10.25.exe) | ~89 MB |
+| **macOS** · Apple Silicon | [OnFlip-0.10.25-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.25/OnFlip-0.10.25-mac-arm64.dmg) | ~108 MB |
+| **macOS** · Intel | [OnFlip-0.10.25-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.25/OnFlip-0.10.25-mac-x64.dmg) | ~115 MB |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside if you want to check a download by hand.
 
 **On 0.8.7 or later?** You should not need this page: the app offers the update itself.
 
-## New
-
-**Qwen, as a third service.** Pick it from the account menu — the service list is there now, with all three and a tick on the one you are using — and OnFlip drives `chat.qwen.ai` the same way it drives the other two: a real browser, a real account, no API key. The title bar says **OnFlip × Qwen** so you can see which one is answering from across the room.
-
-It is free, it offers two models (Qwen3.7-Plus and Qwen3.8-Max), and it decides for itself when a question is worth thinking about — so there is no reasoning control on Qwen, because there is nothing on its page for one to drive.
-
-Each service keeps its own sign-in, its own chats and its own settings, exactly as ChatGPT and DeepSeek already do. Signing in to Qwen means signing in once more, in its own browser profile; nothing carries across, which is the point.
-
-Two things Qwen does not have yet: attachments, which OnFlip now **declines out loud** in the composer rather than quietly dropping, and reopening a chat it did not start.
-
 ## Fixed
 
-**A ChatGPT name could appear on another service's account bar.** The account panel showed a real name and email over a DeepSeek or Qwen session that had never been signed in to — in one case directly above a banner saying the app was not signed in. OnFlip was reading the account from ChatGPT's own session endpoint whoever was running, and filing it under the service that happened to be active. It is filed by whose it is now, and a name that was already misfiled is ignored rather than shown.
+**"The browser profile is signed out of Qwen, so the message went nowhere" — on a profile that was signed in the whole time.** Reported on macOS, often enough that retrying became a habit. It was never your session.
 
-**Three colours that were never defined.** Eleven style rules pointed at theme colours that do not exist, which does not make them dim — it makes the whole declaration invalid. Four pieces of text meant to read as secondary were rendering at full strength, and the update dialog had no background at all: its heading, progress bar and buttons sat directly on the blurred page behind it.
+A browser's stored session belongs to one website, not to the browser. While OnFlip's hidden browser was still on its way to Qwen — a blank page, an error page, a page part-way through loading — it looked for your Qwen session *on that page*, found nothing, and concluded you were signed out. You were not; it was simply looking in the wrong place, and a slower machine leaves it looking there for longer. That is why a Mac saw it and why sending again usually worked: the second attempt found the page loaded.
+
+OnFlip now checks where it is before it decides what it found. Only your Qwen session, read from Qwen's own page, can say you are signed out.
+
+**A sign-in prompt is no longer taken as proof on its own.** Qwen shows that wording for a signed-out account, for an expired session, and in a promotion offered to people who are perfectly signed in. OnFlip checks your session first, reloads once and sends the message again by itself, and only asks you to sign in when your session really has gone.
+
+**The account bar could show "signed out" on a working account** for the same reason, from a single glance taken before the browser had finished starting. It looks more than once now, and says "could not be read" when that is what happened rather than blaming your account.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT, DeepSeek or Qwen account — one, or all three. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.23...desktop-v0.10.24](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.23...desktop-v0.10.24)
+**Full changelog:** [desktop-v0.10.24...desktop-v0.10.25](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.24...desktop-v0.10.25)
