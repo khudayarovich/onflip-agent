@@ -24,12 +24,46 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const path = require("node:path");
 const fs = require("node:fs");
+const Module = require("node:module");
 
 const DIST = path.join(__dirname, "..", "dist", "electron", "update-install.js");
 const needsBuild = fs.existsSync(DIST)
   ? false
   : "desktop/dist is not built (run: cd desktop && npm run build:node)";
-const load = () => require(DIST);
+
+/**
+ * The module reaches for Electron at the top; only pure exports are used.
+ *
+ * Without this the file loaded the real `electron` package, which works on a
+ * machine that has run the app and throws everywhere else. CI installs with
+ * `--ignore-scripts`, so Electron's binary is never downloaded and
+ * `require("electron")` raises "Electron failed to install correctly" - eight
+ * failures, none of them about checksums.
+ *
+ * It went unnoticed for six releases because every other desktop test that
+ * loads from `dist/electron` already stubs it, and the machine this was
+ * written on has Electron installed. build-guards.test.js now checks the
+ * rule rather than leaving it to be remembered.
+ */
+function load() {
+  const originalResolve = Module._resolveFilename;
+  Module._resolveFilename = function (request, ...rest) {
+    if (request === "electron") return "electron-stub-verify";
+    return originalResolve.call(this, request, ...rest);
+  };
+  require.cache["electron-stub-verify"] = {
+    id: "electron-stub-verify",
+    filename: "electron-stub-verify",
+    loaded: true,
+    exports: { app: { getPath: () => "", getVersion: () => "0.0.0", quit() {} }, net: {} },
+  };
+  try {
+    delete require.cache[require.resolve(DIST)];
+    return require(DIST);
+  } finally {
+    Module._resolveFilename = originalResolve;
+  }
+}
 
 // Exactly what the release workflow writes, two spaces and all.
 const LISTING = [

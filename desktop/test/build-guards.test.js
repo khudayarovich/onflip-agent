@@ -70,3 +70,44 @@ test("and passes that guard to every one of its tests", () => {
     }
   }
 });
+
+/** The `dist/electron/<name>.js` modules a test file loads. */
+function electronModulesLoadedBy(source) {
+  const names = [];
+  for (const m of source.matchAll(/["']electron["']\s*,\s*["']([\w.-]+)\.js["']/g)) names.push(m[1]);
+  for (const m of source.matchAll(/dist\/electron\/([\w.-]+)\.js/g)) names.push(m[1]);
+  return [...new Set(names)];
+}
+
+test("every test that loads a compiled Electron module stubs Electron", () => {
+  // CI installs with `--ignore-scripts`, so Electron's binary is never
+  // downloaded and `require("electron")` throws "Electron failed to install
+  // correctly". A test that loads something from `dist/electron` which
+  // imports Electron, without replacing that import, therefore passes on a
+  // developer machine - where the app has been run - and fails on every CI
+  // machine.
+  //
+  // Not hypothetical: update-verify.test.js landed without a stub and the
+  // desktop job was red for six releases while the suite passed locally
+  // every time. Exactly the `needsBuild` lesson above, one dependency
+  // further out, so it is checked rather than remembered.
+  //
+  // The question is asked of the module's own source rather than of the
+  // path: plenty of things under `electron/` are pure, and demanding a stub
+  // for those would be a rule people learn to work around.
+  for (const name of files) {
+    const source = fs.readFileSync(path.join(__dirname, name), "utf8");
+    const needsStub = electronModulesLoadedBy(source).filter((mod) => {
+      const src = path.join(__dirname, "..", "electron", `${mod}.ts`);
+      return fs.existsSync(src) && /from ["']electron["']/.test(fs.readFileSync(src, "utf8"));
+    });
+    if (!needsStub.length) continue;
+    assert.ok(
+      source.includes("_resolveFilename"),
+      `${name} loads ${needsStub.join(", ")} from dist/electron, which import ` +
+        `Electron, but does not stub it - it will throw "Electron failed to ` +
+        `install correctly" on CI, where node_modules is installed with ` +
+        `--ignore-scripts`
+    );
+  }
+});
