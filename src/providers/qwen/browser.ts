@@ -244,12 +244,39 @@ const SERVICE_MESSAGES: { pattern: RegExp; code: FailureCode }[] = [
     pattern: /verify you are human|checking your browser|just a moment|滑动验证|安全验证|проверка браузера|подтвердите, что вы человек|минуточку/i,
     code: "refused",
   },
+  // A daily or per-minute cap, in any of the shapes Qwen actually uses.
+  //
+  // The previous Russian half of this was a phrase I invented - "превышен
+  // лимит" - and it missed the real one by a word. What a person saw:
+  //
+  //   Вы достигли дневного лимита использования. Пожалуйста, подождите
+  //   4 часов перед следующей попыткой.
+  //
+  // OnFlip read that page, matched nothing, and waited out its whole window
+  // reporting a silence it could not explain. Qwen had said exactly what was
+  // wrong, in the first sentence, and how long it would last.
+  //
+  // Written with `\S*` rather than `\w*` for the Russian word endings,
+  // because `\w` in JavaScript is [A-Za-z0-9_] and matches no Cyrillic at
+  // all - the first version of this fix failed on the very word it was
+  // written for.
+  //
+  // These come from Qwen's own translation file instead, which keys every
+  // string by its English text, so the pattern covers the family rather than
+  // one wording: "Today's chat limit has been reached", "You've reached the
+  // upper limit for today's usage", "Reached rate limited: too many requests
+  // in a day", and their Russian values.
   {
-    pattern: /rate limit|too many requests|请求过于频繁|访问频繁|слишком много запросов|превышен лимит/i,
+    pattern:
+      /rate limit(ed)? (exceeded|reached)|reached rate limit|too many requests|reached .{0,40}limit|limit .{0,25}(has been )?reached|请求过于频繁|访问频繁|достигл\S* .{0,40}(лимит|предел)|(лимит|предел)\S* .{0,30}достигнут|превышен\S* лимит|слишком много запросов/i,
     code: "throttled",
   },
   {
-    pattern: /server (is )?busy|系统繁忙|服务器繁忙|服务异常|сервер занят|сервер перегружен/i,
+    // "Oops! There was an issue connecting to <model>." is Qwen's wrapper
+    // around a refusal, and it arrives above the sentence that says why - so
+    // it is last, and the specific rules above win when both are present.
+    pattern:
+      /server (is )?busy|系统繁忙|服务器繁忙|服务异常|сервер занят|сервер перегружен|issue connecting to|проблема .{0,25}подключени/i,
     code: "service-error",
   },
 ];
@@ -270,6 +297,37 @@ export function matchServiceMessage(body: string): { text: string; code: Failure
         .map((l) => l.trim())
         .find((l) => rule.pattern.test(l)) ?? hit[0];
     return { text: line, code: rule.code };
+  }
+  return null;
+}
+
+/**
+ * How long the service said to wait, when it said.
+ *
+ * Qwen's limit message carries the one fact that decides what to do next:
+ *
+ *   Вы достигли дневного лимита использования. Пожалуйста, подождите
+ *   4 часов перед следующей попыткой.
+ *
+ * Four hours is not "try again in a moment". Dropping it and reporting a
+ * bare throttle invites exactly the retrying that cannot work, and leaves
+ * somebody guessing at whether to wait or go and do something else.
+ *
+ * Both languages, because this is read off the page and the page is in the
+ * user's own. Nothing is inferred when nothing is stated - a missing hint
+ * is not a reason to invent one.
+ */
+export function retryHintFrom(text: string): string | null {
+  if (!text) return null;
+  const hours = /(\d{1,2})\s*(hours?|hrs?|час\S*)/i.exec(text);
+  if (hours) {
+    const n = Number(hours[1]);
+    if (n > 0 && n <= 72) return n === 1 ? "about an hour" : `about ${n} hours`;
+  }
+  const minutes = /(\d{1,3})\s*(minutes?|mins?|минут\S*)/i.exec(text);
+  if (minutes) {
+    const n = Number(minutes[1]);
+    if (n > 0 && n <= 600) return n === 1 ? "about a minute" : `about ${n} minutes`;
   }
   return null;
 }
@@ -1293,7 +1351,13 @@ export async function sendTurn(
           lastServiceCheck = Date.now();
           const said = await serviceMessage(page);
           if (said && said.code !== "signed-out") {
-            throw new QwenError(`Qwen says: ${said.text}`, said.code);
+            // The wait, when the service named one. "Four hours" is the
+            // difference between waiting and retrying into a wall.
+            const wait = retryHintFrom(said.text);
+            throw new QwenError(
+              `Qwen says: ${said.text}${wait ? ` Nothing will get through for ${wait}.` : ""}`,
+              said.code
+            );
           }
           if (said) {
             // A sign-in prompt on the page is not proof of a signed-out
