@@ -144,6 +144,7 @@ import {
   SessionSummaryDTO,
   ToolCallDTO,
   ToolResultDTO,
+  SubTaskDTO,
 } from "../shared/protocol";
 import { buildFileDiff, FULL_MAX_CHARS, FULL_MAX_LINES } from "./diffs";
 import { replayItems, stripMentionNote } from "./replay";
@@ -245,6 +246,15 @@ export const ENGINE_VERSION = readVersion();
  * a terminal. One engine process owns one working directory, one transport,
  * and one live session at a time — exactly the shape of the CLI.
  */
+/**
+ * How many of a sub-agent's steps the panel keeps.
+ *
+ * A summary somebody reads to follow the work, not a second transcript. One
+ * that ran fifty greps should say so rather than list them, and the answer
+ * it hands back is the thing that actually matters.
+ */
+const SUB_TASK_ACTIVITY_MAX = 40;
+
 export class Engine {
   private config = loadConfig();
   private auth!: ResolvedAuth;
@@ -252,6 +262,14 @@ export class Engine {
   private transportReason = "";
   /** Last answer from the sign-in probe, when one has run. */
   private probeSignedIn: boolean | null = null;
+  /**
+   * Sub-tasks this session has run, for the panel that shows them.
+   *
+   * In memory and per session on purpose: this is "what is the agent doing",
+   * not an audit trail, and a sub-agent's work is only interesting beside
+   * the conversation that asked for it.
+   */
+  private subTasks: SubTaskDTO[] = [];
   /** Who the ChatGPT session belongs to, once identified. */
   private account: { name?: string; email?: string } | null = null;
   /** User message awaiting proof of delivery — cleared by the first send. */
@@ -880,6 +898,16 @@ export class Engine {
         this.systemPromptChars()
       )
     );
+  }
+
+  /** Tell the window the sub-task list has moved on. */
+  private pushSubTasks(): void {
+    this.peer.emit("sub-tasks", { subTasks: this.subTasks });
+  }
+
+  /** Everything this session has handed to a sub-agent, oldest first. */
+  listSubTasks(): SubTaskDTO[] {
+    return this.subTasks;
   }
 
   statusPayload(): EngineStatus {
@@ -1793,6 +1821,23 @@ export class Engine {
     // steps is not a sub-task, it is the whole job in the wrong place.
     const budget = Math.max(5, Math.min(25, this.maxIterations));
 
+    // The record the sub-task panel reads. Kept here rather than in the
+    // transcript on purpose: a sub-agent's tool calls are exactly what the
+    // parent conversation is meant not to carry, and the reason to hand work
+    // to one at all. Out of the transcript should not have meant out of
+    // sight, which is what it did mean until now.
+    const record: SubTaskDTO = {
+      id: randomUUID(),
+      description: req.description,
+      status: "running",
+      startedAt: Date.now(),
+      steps: 0,
+      budget,
+      activity: [],
+    };
+    this.subTasks.push(record);
+    this.pushSubTasks();
+
     this.notice(`Working on a sub-task: ${req.description}`);
     // The child's chat is its own. The parent's is abandoned here rather
     // than after, so an interrupt mid-sub-task cannot leave the parent
@@ -1812,19 +1857,43 @@ export class Engine {
           onNotice: (text) => req.onProgress?.(text),
           onThinking: (iteration) => {
             this.markActivity();
+            record.steps = iteration;
+            this.pushSubTasks();
             req.onProgress?.(`${req.description}: step ${iteration}`);
+          },
+          // What it did, as it does it. Capped, because this is a summary
+          // somebody reads to follow the work - a sub-agent that ran fifty
+          // greps needs to say so, not list them.
+          onToolEnd: (call, toolResult) => {
+            if (record.activity.length < SUB_TASK_ACTIVITY_MAX) {
+              record.activity.push({
+                tool: call.tool,
+                subject: subjectFor(call.tool, call.arguments),
+                ok: !toolResult.error,
+              });
+              this.pushSubTasks();
+            }
           },
         },
       });
-      return {
-        answer: result.finalAnswer,
-        steps: result.iterations,
-        stopped: result.interrupted
-          ? "it was interrupted"
-          : result.exhausted
-            ? `it ran out of steps (${budget})`
-            : undefined,
-      };
+      const stopped = result.interrupted
+        ? "it was interrupted"
+        : result.exhausted
+          ? `it ran out of steps (${budget})`
+          : undefined;
+      record.status = result.interrupted ? "stopped" : "done";
+      record.steps = result.iterations;
+      record.answer = result.finalAnswer;
+      record.stopped = stopped;
+      record.endedAt = Date.now();
+      this.pushSubTasks();
+      return { answer: result.finalAnswer, steps: result.iterations, stopped };
+    } catch (e) {
+      record.status = "failed";
+      record.stopped = e instanceof Error ? e.message : String(e);
+      record.endedAt = Date.now();
+      this.pushSubTasks();
+      throw e;
     } finally {
       // Back to a clean thread for the parent, whatever happened. Its next
       // send replays the transcript, which is the cost this tool is named

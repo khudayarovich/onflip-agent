@@ -60,6 +60,42 @@ export interface ToolCallDTO {
   args: Record<string, unknown>;
 }
 
+/**
+ * One thing a sub-agent did, for the panel that shows its work.
+ *
+ * A sub-agent runs in a conversation of its own and its tool calls are kept
+ * out of the transcript on purpose - the whole point of handing work to one
+ * is that the parent gains a paragraph instead of thirty file listings. But
+ * "not in the transcript" turned into "nowhere at all", and there was no way
+ * to see what a sub-task had done or was doing. This is the record that was
+ * missing: enough to follow the work, in its own place rather than in the
+ * conversation.
+ */
+export interface SubTaskStepDTO {
+  tool: string;
+  /** The one-line summary the tool card would have shown: a path, a command. */
+  subject: string;
+  ok: boolean;
+}
+
+export interface SubTaskDTO {
+  id: string;
+  /** What the parent said it was for, in its own words. */
+  description: string;
+  status: "running" | "done" | "stopped" | "failed";
+  startedAt: number;
+  endedAt?: number;
+  /** Model turns it took, against the budget it was given. */
+  steps: number;
+  budget: number;
+  /** What it did, in order. Capped: this is a summary, not a second log. */
+  activity: SubTaskStepDTO[];
+  /** What it handed back. Present once it has finished. */
+  answer?: string;
+  /** Why it stopped early, when it did. */
+  stopped?: string;
+}
+
 export interface ToolResultDTO {
   title?: string;
   /** Text handed back to the model; the UI shows it collapsed. */
@@ -495,6 +531,7 @@ export interface EngineMethods {
   setModel: { params: { slug: string }; result: EngineStatus };
   setThinking: { params: { level: ThinkingLevel | null }; result: EngineStatus };
   setApproval: { params: { mode: ApprovalMode }; result: EngineStatus };
+  listSubTasks: { params: Record<string, never>; result: SubTaskDTO[] };
   setShell: { params: { enabled: boolean }; result: EngineStatus };
   setNetwork: { params: { enabled: boolean }; result: EngineStatus };
 

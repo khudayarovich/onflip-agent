@@ -6,7 +6,16 @@ import type {
   SessionSummaryDTO,
 } from "../../../shared/protocol";
 import { Menu, useMenu, relativeTime, baseName } from "./common";
-import { Check, ChevronDown, Clock, Close, Folder, Plus, providerMark } from "./icons";
+import {
+  Check,
+  ChevronDown,
+  Clock,
+  Close,
+  Folder,
+  Plus,
+  SubTaskIcon,
+  providerMark,
+} from "./icons";
 import { useT } from "../i18n";
 import { serviceLabel } from "../../../shared/providers";
 
@@ -31,6 +40,7 @@ export function Sidebar({
   onOpenSkills,
   onOpenHealth,
   onOpenSchedules,
+  onOpenSubTasks,
   onSignIn,
   onSignOut,
 }: {
@@ -58,6 +68,7 @@ export function Sidebar({
   onOpenSkills: () => void;
   onOpenHealth: () => void;
   onOpenSchedules: () => void;
+  onOpenSubTasks: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
 }): React.ReactElement {
@@ -213,6 +224,7 @@ export function Sidebar({
         onOpenSkills={onOpenSkills}
         onOpenHealth={onOpenHealth}
         onOpenSchedules={onOpenSchedules}
+        onOpenSubTasks={onOpenSubTasks}
         onSignIn={onSignIn}
         onSignOut={onSignOut}
       />
@@ -521,6 +533,7 @@ function AccountBar({
   onOpenSkills,
   onOpenHealth,
   onOpenSchedules,
+  onOpenSubTasks,
   onSignIn,
   onSignOut,
 }: {
@@ -533,6 +546,7 @@ function AccountBar({
   onOpenSkills: () => void;
   onOpenHealth: () => void;
   onOpenSchedules: () => void;
+  onOpenSubTasks: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
 }): React.ReactElement {
@@ -661,6 +675,18 @@ function AccountBar({
                 <Clock />
               </span>{" "}
               {t("menuSchedules")}
+            </button>
+            <button
+              className="pop-item"
+              onClick={() => {
+                setOpen(false);
+                onOpenSubTasks();
+              }}
+            >
+              <span className="pop-icon">
+                <SubTaskIcon />
+              </span>{" "}
+              {t("menuSubTasks")}
             </button>
             <button
               className="pop-item"

@@ -360,6 +360,24 @@ export const Clock = (p: IconProps = {}): React.ReactElement =>
     p
   );
 
+/**
+ * Work handed off: one line branching into two that carry on separately.
+ *
+ * Deliberately not a robot or a second avatar. What matters about a sub-task
+ * is that a piece of the job went somewhere else and came back, not that
+ * something vaguely agent-shaped exists.
+ */
+export const SubTaskIcon = (p: IconProps = {}): React.ReactElement =>
+  svg(
+    <>
+      <path d="M5 4v6a3 3 0 0 0 3 3h11" />
+      <path d="M5 10v4a3 3 0 0 0 3 3h11" />
+      <circle cx="20" cy="13" r="1.6" />
+      <circle cx="20" cy="17" r="1.6" />
+    </>,
+    p
+  );
+
 /** Copy to the clipboard: the two-sheets glyph everyone recognises. */
 export const Copy = (p: IconProps = {}): React.ReactElement =>
   svg(

@@ -32,6 +32,7 @@ import { HealthModal } from "./components/HealthModal";
 import { SessionPeekModal } from "./components/SessionPeekModal";
 import { SignInModal } from "./components/SignInModal";
 import { SchedulesModal } from "./components/SchedulesModal";
+import { SubTasksModal } from "./components/SubTasksModal";
 import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
 import { ChevronDown, CircleHalf } from "./components/icons";
@@ -47,6 +48,7 @@ type ModalName =
   | "skills"
   | "health"
   | "schedules"
+  | "subtasks"
   | "signin"
   | null;
 
@@ -1015,6 +1017,7 @@ export function App(): React.ReactElement {
         onOpenSkills={() => setModal("skills")}
         onOpenHealth={() => setModal("health")}
         onOpenSchedules={() => setModal("schedules")}
+        onOpenSubTasks={() => setModal("subtasks")}
         onSignOut={() =>
           setConfirm({
             message: t("signOutConfirm", {
@@ -1392,6 +1395,9 @@ export function App(): React.ReactElement {
 
       {modal === "schedules" && (
         <SchedulesModal cwd={status?.cwd ?? null} onClose={() => setModal(null)} />
+      )}
+      {modal === "subtasks" && (
+        <SubTasksModal onClose={() => setModal(null)} />
       )}
 
       {modal === "health" && <HealthModal onClose={() => setModal(null)} />}

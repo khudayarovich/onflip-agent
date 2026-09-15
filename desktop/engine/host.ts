@@ -153,6 +153,8 @@ peer.onRequest = async (method, rawParams) => {
       return engine.setModel(String(params.slug));
     case "setThinking":
       return engine.setThinking((params.level ?? null) as ThinkingLevel | null);
+    case "listSubTasks":
+      return engine.listSubTasks();
     case "setApproval":
       return engine.setApproval(params.mode as ApprovalMode);
     case "setShell":

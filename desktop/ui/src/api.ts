@@ -12,6 +12,7 @@ import type {
   RuleAction,
   HealthReportDTO,
   SessionSummaryDTO,
+  SubTaskDTO,
   ThinkingLevel,
 } from "../../shared/protocol";
 
@@ -22,6 +23,7 @@ const call = <T>(method: string, params?: unknown): Promise<T> =>
 export const api = {
   init: () => call<EngineStatus>("init"),
   status: () => call<EngineStatus>("status"),
+  listSubTasks: () => call<SubTaskDTO[]>("listSubTasks", {}),
   send: (text: string, attachments?: string[]) =>
     call<{ queued: boolean }>("send", { text, attachments }),
   interrupt: () => call<null>("interrupt"),

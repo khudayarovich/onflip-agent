@@ -4291,3 +4291,162 @@ a:hover {
   -webkit-box-orient: vertical;
   overflow: hidden;
 }
+
+/*
+ * The sub-task panel.
+ *
+ * A sub-agent's tool calls are kept out of the transcript on purpose — the
+ * reason to hand work to one is that the conversation gains a paragraph
+ * instead of thirty file listings. This is where that work lives instead,
+ * so it stays out of the chat without being nowhere at all.
+ */
+.subtask-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.subtask {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg);
+  overflow: hidden;
+}
+
+.subtask-head {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 10px 12px;
+  background: none;
+  border: none;
+  color: var(--text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.subtask-head:hover {
+  background: var(--bg-hover);
+}
+
+.subtask-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+
+.subtask-dot.running {
+  background: var(--accent, #d98b2b);
+  animation: subtask-pulse 1.4s ease-in-out infinite;
+}
+
+.subtask-dot.done {
+  background: #4a9e5c;
+}
+
+.subtask-dot.stopped,
+.subtask-dot.failed {
+  background: #c05656;
+}
+
+@keyframes subtask-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.25;
+  }
+}
+
+.subtask-desc {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.subtask-meta {
+  flex: none;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+
+.subtask-body {
+  padding: 2px 12px 12px 28px;
+  border-top: 1px solid var(--border);
+}
+
+.subtask-steps {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.subtask-steps li {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.subtask-steps li.failed {
+  color: #c05656;
+}
+
+.subtask-steps code {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text);
+  margin-right: 7px;
+}
+
+.subtask-subject {
+  word-break: break-all;
+}
+
+.subtask-stopped {
+  margin-top: 9px;
+  font-size: 12px;
+  color: #c05656;
+}
+
+.subtask-answer {
+  margin-top: 11px;
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+}
+
+.subtask-answer-head {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.subtask-answer-body {
+  font-size: 13px;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.subtask-empty,
+.subtask-hint {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.subtask-hint {
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.subtask-live {
+  margin-top: 10px;
+  font-size: 12px;
+  color: var(--text-muted);
+}
