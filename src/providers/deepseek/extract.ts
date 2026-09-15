@@ -15,24 +15,22 @@
  * and opening a second, empty block with the leftover. Read naively, the tool
  * call silently loses the last line of the file it was writing.
  *
- * `repairFences` puts that back together. The DOM half is a script the page
- * runs; everything below it is pure, so the rules can be tested against the
- * shapes a real reply produced without launching a browser.
+ * `repairFences` puts that back together. It is not DeepSeek's rule and never
+ * was — it is markdown's — so it lives in `../markdown` with the rest of the
+ * assembly, shared with every other page that renders a reply and discards
+ * the source. What stays here is the DeepSeek-specific half: a script the
+ * page runs, returning the node shape that module knows how to assemble.
  */
 
-export type ReplyNode =
-  | { kind: "text"; text: string }
-  | { kind: "list"; ordered: boolean; items: string[] }
-  | { kind: "code"; lang: string; body: string }
-  | { kind: "heading"; level: number; text: string };
+export { repairFences, toMarkdown, type ReplyNode } from "../markdown";
 
 /**
  * Read the reply out of the page.
  *
  * Runs in the browser, so it is a string rather than a function: it has no
  * access to anything here, and nothing here can hold a reference into the
- * page. Returns the structure, not the markdown — assembling that is the
- * pure part below, where it can be tested.
+ * page. Returns the structure, not the markdown — assembling that is
+ * `../markdown`, where it can be tested without a browser.
  */
 export const EXTRACT_REPLY = `(() => {
   const els = document.querySelectorAll(".ds-markdown.ds-assistant-message-main-content");
@@ -90,70 +88,3 @@ export const EXTRACT_REPLY = `(() => {
   }
   return out;
 })()`;
-
-/** Three backticks, as a value, so a template literal can hold them. */
-const FENCE = "```";
-
-/** How many fence markers a block's body contains. */
-function fenceCount(body: string): number {
-  return body.split("\n").filter((l) => /^\s*`{3}/.test(l)).length;
-}
-
-/** The indentation of the last unclosed fence, so its closer can match it. */
-function danglingIndent(body: string): string {
-  const opens: string[] = [];
-  for (const line of body.split("\n")) {
-    const m = /^(\s*)`{3}/.exec(line);
-    if (!m) continue;
-    if (opens.length) opens.pop();
-    else opens.push(m[1]);
-  }
-  return opens.length ? opens[opens.length - 1] : "";
-}
-
-/**
- * Put back a block the renderer split on an inner fence.
- *
- * A block whose body holds an odd number of fences was cut at one: the inner
- * closer was read as the outer block's end, and what followed became a new
- * block — empty, or tagged `text`, since the leftover was the outer closing
- * fence with nothing after it. The repair closes the inner fence at the
- * indentation it was opened with, and drops the fragment.
- *
- * Only an empty or whitespace fragment is absorbed. A following block with
- * real content is a real block, and eating it would be a worse bug than the
- * one being fixed.
- */
-export function repairFences(nodes: ReplyNode[]): ReplyNode[] {
-  const out: ReplyNode[] = [];
-  for (let i = 0; i < nodes.length; i++) {
-    const node = nodes[i];
-    if (node.kind !== "code" || fenceCount(node.body) % 2 === 0) {
-      out.push(node);
-      continue;
-    }
-    const next = nodes[i + 1];
-    const absorb = next && next.kind === "code" && !next.body.trim();
-    out.push({ ...node, body: `${node.body}
-${danglingIndent(node.body)}${FENCE}` });
-    if (absorb) i++;
-  }
-  return out;
-}
-
-/** Assemble the nodes back into markdown. */
-export function toMarkdown(nodes: ReplyNode[]): string {
-  const parts: string[] = [];
-  for (const node of repairFences(nodes)) {
-    if (node.kind === "text") parts.push(node.text);
-    else if (node.kind === "heading") parts.push(`${"#".repeat(node.level)} ${node.text}`);
-    else if (node.kind === "list")
-      parts.push(
-        node.items.map((it, n) => (node.ordered ? `${n + 1}. ${it}` : `- ${it}`)).join("\n")
-      );
-    else parts.push(`${FENCE}${node.lang}
-${node.body}
-${FENCE}`);
-  }
-  return parts.join("\n\n").trim();
-}

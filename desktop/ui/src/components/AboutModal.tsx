@@ -4,7 +4,7 @@ import { Modal } from "./common";
 import { api } from "../api";
 import { useT } from "../i18n";
 import logo from "../assets/logo.svg";
-import { ChatGptMark, DeepSeekMark } from "./icons";
+import { ChatGptMark, DeepSeekMark, QwenMark } from "./icons";
 
 type CheckState =
   | { state: "idle" }
@@ -124,6 +124,13 @@ export function AboutModal({
             <div>
               <div className="service-name">DeepSeek</div>
               <div className="service-text">{t("aboutServiceDeepSeek")}</div>
+            </div>
+          </div>
+          <div className="service-row">
+            <QwenMark size={18} />
+            <div>
+              <div className="service-name">Qwen</div>
+              <div className="service-text">{t("aboutServiceQwen")}</div>
             </div>
           </div>
         </div>

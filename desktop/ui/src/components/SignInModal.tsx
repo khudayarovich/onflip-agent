@@ -134,12 +134,19 @@ export function SignInModal({
 
   const name = browser?.name ?? "your browser";
   const service = provider?.label ?? null;
-  // Importing reads a cookie out of Firefox or Safari, and DeepSeek keeps its
-  // session in localStorage instead — there is nothing there to find, so the
-  // button is not offered rather than offered and useless.
+  // Importing reads a cookie out of Firefox or Safari, and only ChatGPT
+  // keeps a session in one: the browser-driven services keep theirs in
+  // their profile's localStorage, where there is nothing for an import to
+  // find. So the button is not offered rather than offered and useless.
+  //
+  // Named for the service that CAN import rather than for the one that
+  // cannot. The old test was "not DeepSeek", which silently became wrong
+  // the moment a third service existed - Qwen would have been offered a
+  // cookie import that cannot work for it either.
+  //
   // Unknown counts as "not importable": offering a Firefox session that
   // cannot help is worse than showing the button a moment later.
-  const canImport = provider !== null && provider.id !== "deepseek";
+  const canImport = provider?.id === "chatgpt";
   const busy = phase !== "idle";
 
   return (

@@ -1051,8 +1051,15 @@ export function App(): React.ReactElement {
         )}
         {connect === "signed-out" && !engineDown && (
           <div className="banner-error">
+            {/* Named for whichever service is answering. It said "ChatGPT" on
+                a DeepSeek install and would have said it on a Qwen one: the
+                sentence was written when there was only one service to be
+                signed out of, and it is the first thing on screen when the
+                app cannot send — so it is also the worst place to name the
+                wrong account. */}
             <span className="grow">
-              Not signed in to ChatGPT — the agent cannot send anything until you do.
+              Not signed in to {serviceLabel(status?.provider) ?? t("serviceGeneric")} — the agent
+              cannot send anything until you do.
             </span>
             <button
               className="btn"

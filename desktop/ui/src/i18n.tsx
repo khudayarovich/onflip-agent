@@ -320,7 +320,9 @@ const en = {
   aboutServiceChatGpt:
     "Projects, file uploads, image replies and four reasoning levels. Usage follows your plan — the tables below.",
   aboutServiceDeepSeek:
-    "Free, with no plan tiers to work around: Instant, Expert and Vision modes, DeepThink on or off, and image attachments. No projects, and chats it did not start cannot be reopened.",
+    "Free, with no plan tiers to work around: one model for everything, DeepThink on or off, and image attachments. No projects, and chats it did not start cannot be reopened.",
+  aboutServiceQwen:
+    "Free, with two models to choose between, and it decides for itself when to think. No projects, no attachments yet, and chats it did not start cannot be reopened.",
   aboutAuthorTitle: "Author",
   aboutLicense: "Open source under the MIT license.",
   aboutLimitsTitle: "ChatGPT models & usage limits",
@@ -370,6 +372,8 @@ const en = {
   healthUnavailable: "The logs could not be read.",
   menuSwitchProvider: "Switch to {service}",
   menuSwitchProviderHint: "Restart OnFlip on {service}. Each service keeps its own chats and sign-in.",
+  menuService: "Service",
+  menuServiceHint: "Which service OnFlip drives. Each keeps its own chats and its own sign-in.",
   menuSignIn: "Sign in to {service}",
   menuSignOut: "Sign out",
   signOutConfirm:
@@ -701,7 +705,9 @@ const ru: Partial<Record<StringKey, string>> = {
   aboutServiceChatGpt:
     "Проекты, загрузка файлов, картинки в ответах и четыре уровня рассуждения. Расход идёт по вашему плану — таблицы ниже.",
   aboutServiceDeepSeek:
-    "Бесплатно, без тарифов и лимитов: режимы Instant, Expert и Vision, DeepThink вкл/выкл и вложения-картинки. Без проектов; чаты, начатые не в OnFlip, открыть нельзя.",
+    "Бесплатно, без тарифов и лимитов: одна модель на всё, DeepThink вкл/выкл и вложения-картинки. Без проектов; чаты, начатые не в OnFlip, открыть нельзя.",
+  aboutServiceQwen:
+    "Бесплатно, две модели на выбор, а думать ли над вопросом — сервис решает сам. Без проектов и пока без вложений; чаты, начатые не в OnFlip, открыть нельзя.",
   aboutAuthorTitle: "Автор",
   aboutLicense: "Открытый код по лицензии MIT.",
   aboutLimitsTitle: "Модели и лимиты ChatGPT",
@@ -751,6 +757,8 @@ const ru: Partial<Record<StringKey, string>> = {
   healthUnavailable: "Не удалось прочитать журналы.",
   menuSwitchProvider: "Перейти на {service}",
   menuSwitchProviderHint: "Перезапустить OnFlip на {service}. У каждого сервиса свои чаты и вход.",
+  menuService: "Сервис",
+  menuServiceHint: "Какой сервис использует OnFlip. У каждого свои чаты и свой вход.",
   menuSignIn: "Войти в {service}",
   menuSignOut: "Выйти",
   signOutConfirm:
@@ -1080,7 +1088,9 @@ const uz: Partial<Record<StringKey, string>> = {
   aboutServiceChatGpt:
     "Loyihalar, fayl yuklash, javobda rasmlar va to‘rtta fikrlash darajasi. Sarf tarifingizga bog‘liq — quyidagi jadvallar.",
   aboutServiceDeepSeek:
-    "Bepul, tarif va limitlarsiz: Instant, Expert va Vision rejimlari, DeepThink yoqiq yoki o‘chiq, hamda rasm biriktirish. Loyihalar yo‘q; OnFlip boshlamagan chatlarni ocholmaydi.",
+    "Bepul, tarif va limitlarsiz: bitta model hamma narsa uchun, DeepThink yoqiq yoki o‘chiq, hamda rasm biriktirish. Loyihalar yo‘q; OnFlip boshlamagan chatlarni ocholmaydi.",
+  aboutServiceQwen:
+    "Bepul, ikkita model tanlovi bor; o‘ylash kerakmi-yo‘qmi, xizmatning o‘zi hal qiladi. Loyihalar yo‘q, hozircha biriktirish ham yo‘q; OnFlip boshlamagan chatlarni ocholmaydi.",
   aboutAuthorTitle: "Muallif",
   aboutLicense: "MIT litsenziyasi ostidagi ochiq kod.",
   aboutLimitsTitle: "ChatGPT modellari va limitlari",
@@ -1130,6 +1140,8 @@ const uz: Partial<Record<StringKey, string>> = {
   healthUnavailable: "Jurnallarni o'qib bo'lmadi.",
   menuSwitchProvider: "{service}ga o'tish",
   menuSwitchProviderHint: "OnFlip'ni {service}da qayta ishga tushirish. Har bir xizmatning o'z chatlari va kirishi bor.",
+  menuService: "Xizmat",
+  menuServiceHint: "OnFlip qaysi xizmatni boshqaradi. Har birining o'z chatlari va kirishi bor.",
   menuSignIn: "{service} ga kirish",
   menuSignOut: "Chiqish",
   signOutConfirm:

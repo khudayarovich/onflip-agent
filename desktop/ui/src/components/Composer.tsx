@@ -398,6 +398,13 @@ export function Composer({
   // engine enforces this either way; these two only make it visible.
   // Which service is answering decides what the reasoning chip can offer.
   const onDeepSeek = status?.provider === "deepseek";
+  // Qwen thinks on its own. Its page carries no toggle and no effort
+  // setting - the reasoning arrives as a "Thinking completed" card above
+  // the answer, decided per question - so there is nothing here for a chip
+  // to drive. It is hidden rather than shown-and-inert, on the rule this
+  // app already applies to tools nothing can carry out: a control that
+  // cannot do anything is worse than no control.
+  const onQwen = status?.provider === "qwen";
   const planRationed = Boolean(status?.planRationed);
   const planNote = status?.planLimitNote ?? "";
   const planTitle = status?.planLimitTitle ?? "";
@@ -570,7 +577,7 @@ export function Composer({
               <ChevronDown size={12} />
             </span>
           </button>
-          {onDeepSeek ? (
+          {onQwen ? null : onDeepSeek ? (
             /*
              * A switch, drawn as one.
              *

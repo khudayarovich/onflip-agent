@@ -2405,6 +2405,72 @@ a:hover {
   opacity: 1;
 }
 
+/* The service picker in the account menu: one row that opens a short list. */
+.pop-group {
+  display: flex;
+  flex-direction: column;
+}
+/* Pushes the current service and the caret to the right of the row. */
+.pop-item-value {
+  margin-left: auto;
+  font-size: 11.5px;
+  color: var(--text-muted);
+}
+.pop-caret {
+  display: flex;
+  align-items: center;
+  color: var(--text-muted);
+  transition: transform 0.15s ease;
+}
+.pop-caret.open {
+  transform: rotate(180deg);
+}
+.pop-sub {
+  display: flex;
+  flex-direction: column;
+  /* Indented to the width of the parent row's icon, so the service marks
+     line up under the one in the row that opened them. */
+  margin: 2px 0 4px 10px;
+  padding-left: 8px;
+  border-left: 1px solid var(--border);
+}
+.pop-subitem {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text);
+  text-align: left;
+}
+.pop-subitem:hover {
+  background: var(--bg-hover);
+}
+.pop-subitem .pop-icon {
+  display: flex;
+  align-items: center;
+  width: 16px;
+  flex-shrink: 0;
+  opacity: 0.85;
+}
+.pop-subitem:hover .pop-icon {
+  opacity: 1;
+}
+/* The service already running: named, ticked, and not a button that does
+   anything when pressed. */
+.pop-subitem.on {
+  color: var(--text);
+  cursor: default;
+}
+.pop-tick {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  color: var(--accent);
+}
+
 /* lightweight tooltips, shown above the element */
 [data-tip] {
   position: relative;
@@ -3233,7 +3299,7 @@ a:hover {
   gap: 10px;
   padding: 9px 16px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--bg-raised);
   font-size: 12.5px;
 }
 
@@ -3245,16 +3311,19 @@ a:hover {
 .update-bar button {
   border: 1px solid var(--border);
   background: transparent;
-  color: var(--text-dim);
+  color: var(--text-secondary);
   border-radius: 7px;
   padding: 4px 11px;
   font-size: 12px;
   cursor: pointer;
 }
 
+/* A text tone on the border, not --border-strong: the hover has to be
+   visible across a banner, and the two border tokens are seven points
+   apart. Deliberate, so it does not read as a mistake later. */
 .update-bar button:hover {
   color: var(--text);
-  border-color: var(--text-dim);
+  border-color: var(--text-secondary);
 }
 
 .update-bar .update-get {
@@ -3304,8 +3373,9 @@ a:hover {
   cursor: pointer;
 }
 
+/* A text tone, for the reason .update-bar button:hover carries one. */
 .about-btn:hover:not(:disabled) {
-  border-color: var(--text-dim);
+  border-color: var(--text-secondary);
 }
 
 .about-btn:disabled {
@@ -3325,7 +3395,7 @@ a:hover {
   padding: 14px 16px;
   border: 1px solid var(--border);
   border-radius: 10px;
-  background: var(--panel);
+  background: var(--bg-raised);
 }
 
 .connector-title {
@@ -3338,7 +3408,7 @@ a:hover {
   margin: 10px 0 12px;
   padding-left: 18px;
   font-size: 12.5px;
-  color: var(--text-dim);
+  color: var(--text-secondary);
 }
 
 .connector-steps li {
@@ -3385,7 +3455,7 @@ a:hover {
   padding: 26px 26px 22px;
   border: 1px solid var(--border);
   border-radius: 14px;
-  background: var(--panel);
+  background: var(--bg-raised);
   box-shadow: 0 24px 70px rgba(0, 0, 0, 0.45);
   text-align: center;
 }
@@ -3424,10 +3494,12 @@ a:hover {
   100% { margin-left: 100%; }
 }
 
+/* Secondary rather than muted: on a failed update this line carries the
+   error message itself, and that has to be readable. */
 .update-modal-detail {
   margin: 12px 0 0;
   font-size: 12px;
-  color: var(--text-dim);
+  color: var(--text-secondary);
 }
 
 .update-modal-actions {
@@ -3450,7 +3522,7 @@ a:hover {
 .update-modal-actions .update-dismiss {
   background: transparent;
   border-color: var(--border);
-  color: var(--text-dim);
+  color: var(--text-secondary);
 }
 
 /* ==========================================================================
@@ -3993,7 +4065,7 @@ a:hover {
 .service-name {
   font-size: 12.5px;
   font-weight: 600;
-  color: var(--text-primary);
+  color: var(--text);
 }
 .service-text {
   font-size: 12px;
@@ -4044,7 +4116,7 @@ a:hover {
 }
 .queue-actions button:hover {
   background: var(--bg-raised);
-  color: var(--text-primary);
+  color: var(--text);
 }
 .queue-actions button:last-child:hover {
   color: var(--red);

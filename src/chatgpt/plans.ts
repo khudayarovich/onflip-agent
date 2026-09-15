@@ -103,6 +103,21 @@ export const COMPOSER_CEILING_CHARS = 40_000;
 export const DEEPSEEK_CEILING_CHARS = 150_000;
 
 /**
+ * What a Qwen turn may carry before it is compacted.
+ *
+ * Deliberately the composer ceiling rather than DeepSeek's much larger one,
+ * and deliberately the conservative end of the range: nothing has been
+ * measured on Qwen. DeepSeek's 150k is a number chosen after a real session
+ * ran at it; borrowing it here would be borrowing the confidence with it.
+ *
+ * The same signal says when to raise it — `the composer truncated the turn`
+ * in the log is the line that would say this number is wrong in the
+ * dangerous direction, and its absence over a few long sessions is what
+ * would justify raising it.
+ */
+export const QWEN_CEILING_CHARS = 40_000;
+
+/**
  * The ceiling once a turn too large to type is uploaded instead.
  *
  * Typing was the binding constraint, so the plan never got to be. With the

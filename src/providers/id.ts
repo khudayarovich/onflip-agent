@@ -57,7 +57,39 @@ export function providerStateDir(id: ProviderId = activeProvider()): string {
   return id === "chatgpt" ? configDir() : path.join(configDir(), "providers", id);
 }
 
-/** How the provider is spelled for a person. */
+/**
+ * How the provider is spelled for a person.
+ *
+ * A table rather than a chain of conditionals, because the chain had a
+ * default: anything that was not DeepSeek was called ChatGPT, which is fine
+ * with two services and quietly wrong with three. A provider added to
+ * `PROVIDER_IDS` without a name here is a compile error rather than a
+ * silently mislabelled account bar.
+ */
+const LABELS: Record<ProviderId, string> = {
+  chatgpt: "ChatGPT",
+  deepseek: "DeepSeek",
+  qwen: "Qwen",
+};
+
 export function providerLabel(id: ProviderId = activeProvider()): string {
-  return id === "deepseek" ? "DeepSeek" : "ChatGPT";
+  return LABELS[id] ?? "ChatGPT";
+}
+
+/**
+ * Is this service driven entirely through a browser profile?
+ *
+ * The question most of the app is actually asking when it asks whether it is
+ * on DeepSeek. ChatGPT has an API behind it — a bearer token, a cookie jar,
+ * projects, plans, a conversation list, a discovered model list — and the
+ * others have none of that: their session lives in a browser profile and
+ * everything happens on the page.
+ *
+ * Written as "not ChatGPT" rather than as a list, deliberately. A fourth
+ * browser-driven service should need no edit here, and the one thing that
+ * would need editing — a second service with a real API — is the one the
+ * type system will not let anyone add quietly.
+ */
+export function isBrowserProvider(id: ProviderId = activeProvider()): boolean {
+  return id !== "chatgpt";
 }

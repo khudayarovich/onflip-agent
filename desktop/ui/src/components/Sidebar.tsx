@@ -6,7 +6,7 @@ import type {
   SessionSummaryDTO,
 } from "../../../shared/protocol";
 import { Menu, useMenu, relativeTime, baseName } from "./common";
-import { ChatGptMark, ChevronDown, Clock, Close, DeepSeekMark, Folder, Plus } from "./icons";
+import { Check, ChevronDown, Clock, Close, Folder, Plus, providerMark } from "./icons";
 import { useT } from "../i18n";
 import { serviceLabel } from "../../../shared/providers";
 
@@ -346,22 +346,29 @@ const popIconProps = {
 };
 
 /**
- * Switch to the other service, from the menu.
+ * Choosing which service OnFlip drives, from the account menu.
  *
- * Named for where it goes rather than where it is — "Switch to DeepSeek"
- * says what the click does, which a label naming the current service would
- * not. The icon is the destination's, for the same reason.
+ * This used to be a single item — "Switch to DeepSeek" — which is the right
+ * shape for exactly two services and the wrong one for three: with a third
+ * there is no "the other", and naming one of them in the label makes the
+ * third invisible. So it is a list now, marks and all, with the current
+ * service ticked.
  *
- * There are two of these now: this and the picker in Settings. That is not a
- * duplicate so much as an admission — a switch is a thing people reach for
- * often enough that burying it under seven settings sections was the wrong
- * call, and the menu is where the rest of the account lives.
+ * Collapsed by default. The menu it sits in already carries seven items, and
+ * a service list that is always open pushes Settings and Sign out below the
+ * fold on a short window — the switch is reached often, but not as often as
+ * the things under it.
  *
- * Nothing is shown until the provider is known, and nothing at all on a main
- * process too old to answer: a switch that cannot work is worse than a menu
- * with one fewer item.
+ * Each row is named for where it goes rather than where it is, and carries
+ * its destination's own mark: the pairing in the title bar is "OnFlip ×
+ * <service>", and these are the same marks, so the menu and the bar agree
+ * about what each service looks like.
+ *
+ * Nothing is shown at all on a main process too old to answer, or where
+ * there is only one service to choose: a picker that cannot pick is worse
+ * than a menu with one fewer item.
  */
-function ProviderSwitchItem({
+function ProviderPicker({
   provider,
   onDone,
 }: {
@@ -369,27 +376,68 @@ function ProviderSwitchItem({
   onDone: () => void;
 }): React.ReactElement | null {
   const t = useT();
-  const other = provider?.all.find((p) => p.id !== provider.id);
-  if (!provider || !other || !window.onflip.providerSet) return null;
+  const [open, setOpen] = useState(false);
+  if (!provider || provider.all.length < 2 || !window.onflip.providerSet) return null;
 
-  const Mark = other.id === "deepseek" ? DeepSeekMark : ChatGptMark;
+  const Current = providerMark(provider.id);
   return (
-    <button
-      className="pop-item"
-      title={t("menuSwitchProviderHint", { service: other.label })}
-      onClick={() => {
-        onDone();
-        void window.onflip.providerSet?.(other.id).catch(() => {});
-      }}
-    >
-      <span className="pop-icon">
-        <Mark size={15} />
-      </span>{" "}
-      {t("menuSwitchProvider", { service: other.label })}
-    </button>
+    <div className="pop-group">
+      <button
+        className="pop-item"
+        title={t("menuServiceHint")}
+        aria-expanded={open}
+        onClick={() => setOpen(!open)}
+      >
+        <span className="pop-icon">
+          <Current size={15} />
+        </span>{" "}
+        {t("menuService")}
+        <span className="pop-item-value">{provider.label}</span>
+        <span className={`pop-caret${open ? " open" : ""}`}>
+          <ChevronDown size={12} />
+        </span>
+      </button>
+      {open && (
+        <div className="pop-sub" role="listbox" aria-label={t("menuService")}>
+          {provider.all.map((p) => {
+            const Mark = providerMark(p.id);
+            const active = p.id === provider.id;
+            return (
+              <button
+                key={p.id}
+                className={`pop-subitem${active ? " on" : ""}`}
+                role="option"
+                aria-selected={active}
+                title={active ? undefined : t("menuSwitchProviderHint", { service: p.label })}
+                onClick={() => {
+                  // The current one is not a no-op by accident: switching to
+                  // the service already running would restart the app for
+                  // nothing, and the engine refuses it anyway.
+                  if (active) {
+                    setOpen(false);
+                    return;
+                  }
+                  onDone();
+                  void window.onflip.providerSet?.(p.id).catch(() => {});
+                }}
+              >
+                <span className="pop-icon">
+                  <Mark size={15} />
+                </span>{" "}
+                {p.label}
+                {active && (
+                  <span className="pop-tick">
+                    <Check size={13} />
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
   );
 }
-
 /** A pulse line: the shape of something watched over time. */
 function HealthIcon(): React.ReactElement {
   return (
@@ -577,7 +625,7 @@ function AccountBar({
             </button>
               </>
             )}
-            <ProviderSwitchItem provider={provider} onDone={() => setOpen(false)} />
+            <ProviderPicker provider={provider} onDone={() => setOpen(false)} />
             <button
               className="pop-item"
               onClick={() => {

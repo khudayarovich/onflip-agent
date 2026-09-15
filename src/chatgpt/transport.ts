@@ -14,7 +14,7 @@ import {
 } from "./browser-client";
 import { buildTurnPrompt } from "../agent/protocol";
 import { planLimitNote, rationedPlan } from "./plans";
-import { activeProvider } from "../providers/id";
+import { isBrowserProvider } from "../providers/id";
 import { loadConfig, firstPositiveInt } from "../config";
 import { logger } from "../log";
 import {
@@ -236,7 +236,9 @@ export function shouldAttachTurn(state: {
  * to.
  */
 export function uploadsAvailable(): boolean {
-  if (activeProvider() === "deepseek") return false;
+  // No browser-driven service has an upload path here: their transports type
+  // every turn, and there is no attachment code behind them to fall back to.
+  if (isBrowserProvider()) return false;
   if (rationedPlan(loadConfig().planType)) return false;
   // Read live rather than from the module constant, so a test — or a session
   // launched with the override — answers for its own environment.

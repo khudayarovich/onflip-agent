@@ -138,7 +138,39 @@ test("ChatGPT's identity misfiled into another service's room is ignored", () =>
     allModels().map((m) => m.slug),
     ["deepseek-chat"]
   );
-  // The account name is NOT dropped: both services have accounts, so this one
-  // is corrected by re-reading it from the service, not by deleting it here.
-  assert.equal(cfg.accountName, "Someone ChatGPT");
+  // The account name IS dropped now, and this assertion is the record of a
+  // policy that changed.
+  //
+  // It used to be kept, on the reasoning that both services have accounts and
+  // a misfiled one would be corrected by re-reading it from the service. That
+  // held while DeepSeek was the only other service: DeepSeek's page names the
+  // account, so its next turn overwrites the wrong name.
+  //
+  // Qwen broke the reasoning rather than the code. Its page carries no name
+  // and no email anywhere — measured on the live page — so `pageSessionUser`
+  // answers null, the identify step returns early, and a ChatGPT name in
+  // `providers.qwen` would sit on the account bar for good. There is no
+  // re-read to wait for.
+  //
+  // So a name identical to ChatGPT's own is treated as ChatGPT's and not read
+  // back. A name the service really reported differs from it and survives —
+  // which is what the fixture below this one checks.
+  assert.equal(cfg.accountName, undefined, "identical to ChatGPT's, so it is ChatGPT's");
+});
+
+test("a name the service really reported is still read back", () => {
+  // The guard on the rule above: it must be narrow enough to leave a genuine
+  // account alone. Blanking the account bar of someone properly signed in
+  // would be a worse bug than the one being fixed.
+  fs.writeFileSync(
+    path.join(CONFIG_DIR, "config.json"),
+    JSON.stringify({
+      provider: "deepseek",
+      accountName: "Someone ChatGPT",
+      accountEmail: "chatgpt@example.com",
+      providers: { deepseek: { accountName: "fas*****98@gmail.com" } },
+    })
+  );
+  const cfg = loadConfig();
+  assert.equal(cfg.accountName, "fas*****98@gmail.com");
 });

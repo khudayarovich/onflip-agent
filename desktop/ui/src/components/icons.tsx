@@ -475,3 +475,53 @@ export const DeepSeekMark = ({ size = 14, className }: IconProps = {}): React.Re
     />
   </svg>
 );
+
+/**
+ * Qwen's mark, in the same tile the other two sit in.
+ *
+ * The glyph is drawn on a 1024 grid, which is how Qwen ships it, so it is
+ * scaled into the 512 tile the other marks use rather than redrawn — the
+ * three have to read as three logos of equal standing beside the OnFlip
+ * mark, and a hand-copied approximation would be the one that looks wrong.
+ *
+ * `#0a28f0` is Qwen's own brand colour, read from the live page's
+ * `--brandradio-primary-fill-active` rather than remembered. It is a deep
+ * blue, not the purple it is often assumed to be.
+ */
+export const QwenMark = ({ size = 14, className }: IconProps = {}): React.ReactElement => (
+  <svg
+    viewBox="0 0 512 509.639"
+    width={size}
+    height={size}
+    className={className}
+    aria-hidden
+    focusable={false}
+  >
+    <path
+      d="M115.612 0h280.775C459.974 0 512 52.026 512 115.612v278.415c0 63.587-52.026 115.613-115.613 115.613H115.612C52.026 509.64 0 457.614 0 394.027V115.612C0 52.026 52.026 0 115.612 0z"
+      fill="#fff"
+    />
+    <g transform="translate(86 85) scale(0.3320)">
+      <path
+        d="M504 64c29.248 0 56.576 15.616 71.296 41.152l27.328 47.232c1.792 3.008 3.328 6.208 4.672 9.344h179.392c29.632 0 56.64 16.128 71.168 41.408l27.456 47.424c14.656 25.472 14.656 56.96 0 82.368l-27.456 47.488a81.92 81.92 0 0 1-37.376 33.664c15.488 6.976 28.8 18.56 37.504 33.792l83.968 145.408c14.656 25.408 14.656 56.896 0 82.368l-27.52 47.488v-0.064c-14.72 25.472-41.856 41.152-71.232 41.152h-54.912c-3.456 0-6.848-0.32-10.24-0.704l-89.6 155.2c-14.72 25.536-41.92 41.28-71.36 41.28h-54.848c-25.6 0-49.792-12.032-65.28-32.128l-6.016-9.088-27.456-47.36a82.496 82.496 0 0 1-10.496-49.344 82.048 82.048 0 0 1-47.744 15.488H237.376a82.56 82.56 0 0 1-71.36-41.216l-27.392-47.36h-0.064a82.688 82.688 0 0 1 0-82.432l27.52-47.424a83.84 83.84 0 0 1 5.568-8.576l-89.6-155.264-4.224-7.424v-1.344a82.752 82.752 0 0 1 4.224-73.792l27.456-47.424c14.72-25.472 41.856-41.088 71.296-41.152h54.848c17.344 0 33.92 5.568 47.68 15.296a82.56 82.56 0 0 1 10.56-48.896l83.904-145.344c14.72-25.6 41.92-41.216 71.36-41.216h54.848z m227.84 406.656a18.304 18.304 0 0 0-15.936 9.152v0.064l-196.992 341.12c-3.2 5.632-3.2 12.736 0 18.368l27.456 47.424 2.944 3.84a18.496 18.496 0 0 0 12.928 5.376h54.848a18.304 18.304 0 0 0 15.872-9.216l102.464-177.344 10.88-18.816a10.24 10.24 0 0 1 13.952-3.712l18.88 10.88a18.56 18.56 0 0 0 9.152 2.432h54.912a18.304 18.304 0 0 0 15.872-9.088l27.392-47.488a18.56 18.56 0 0 0 0-18.368L802.56 479.872a18.496 18.496 0 0 0-15.872-9.216h-54.912zM180.736 348.16a18.304 18.304 0 0 0-15.872 9.152l-27.456 47.488c-3.2 5.696-3.2 12.8 0 18.432l4.352 7.424v0.064l98.048 169.984 10.88 18.816a10.24 10.24 0 0 1-3.712 14.08l-18.944 10.88a18.496 18.496 0 0 0-6.656 6.72l-0.064-0.064-27.392 47.424a18.624 18.624 0 0 0 0 18.368l27.456 47.424a18.56 18.56 0 0 0 15.936 9.216h167.872a18.304 18.304 0 0 0 15.872-9.152l27.456-47.488a18.624 18.624 0 0 0 0-18.368L251.52 357.376v-0.064a18.432 18.432 0 0 0-15.936-9.152h-54.848z m323.2 318.4c6.08 10.56 9.472 22.208 10.496 33.984l145.92-252.672 6.144-9.152c5.12-6.656 11.328-12.416 18.112-17.152H392.64c-12.16 0-23.872-2.88-34.56-7.808l145.92 252.8zM449.152 128a18.368 18.368 0 0 0-15.936 9.152L349.312 282.56a18.56 18.56 0 0 0 0 18.368l27.456 47.424c3.2 5.632 9.28 9.216 15.872 9.216h393.92a18.24 18.24 0 0 0 15.872-9.152l27.456-47.488a18.56 18.56 0 0 0 0-18.368l-27.392-47.424a18.56 18.56 0 0 0-15.808-9.408h-226.56a10.24 10.24 0 0 1-10.24-10.24v-21.76a17.792 17.792 0 0 0-2.432-8.96l-0.064-0.128-27.52-47.424A18.56 18.56 0 0 0 504.064 128h-54.848z"
+        fill="#0a28f0"
+        fillRule="nonzero"
+      />
+    </g>
+  </svg>
+);
+
+/**
+ * The mark for a provider id.
+ *
+ * One lookup, because two places draw these — the title bar's "OnFlip ×
+ * Qwen" pairing and the account menu's service list — and a second copy of
+ * the mapping is how one of them ends up a service behind. The fallback is
+ * ChatGPT's, which is also the default provider, so an id from a newer main
+ * process than this renderer draws something rather than nothing.
+ */
+export function providerMark(id: string): (props?: IconProps) => React.ReactElement {
+  if (id === "deepseek") return DeepSeekMark;
+  if (id === "qwen") return QwenMark;
+  return ChatGptMark;
+}

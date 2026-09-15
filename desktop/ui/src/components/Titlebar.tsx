@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from "react";
 import type { EngineStatus } from "../../../shared/protocol";
 import logo from "../assets/logo.svg";
-import { ChatGptMark, DeepSeekMark } from "./icons";
+import { providerMark } from "./icons";
 
 /** Panel-left glyph — the standard "toggle sidebar" icon. */
 function SidebarToggleIcon(): React.ReactElement {
@@ -157,7 +157,7 @@ function ProviderBadge(): React.ReactElement | null {
   }, []);
 
   if (!provider) return null;
-  const Mark = provider.id === "deepseek" ? DeepSeekMark : ChatGptMark;
+  const Mark = providerMark(provider.id);
   return (
     <span className="brand-provider" title={`OnFlip is driving ${provider.label}`}>
       <span className="brand-x">×</span>

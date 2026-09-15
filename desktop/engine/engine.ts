@@ -33,12 +33,13 @@ import {
   compactionBudget,
   COMPOSER_CEILING_CHARS,
   DEEPSEEK_CEILING_CHARS,
+  QWEN_CEILING_CHARS,
   describePlan,
   planLimitCard,
   promptCrowdsPlan,
   rationedPlan,
 } from "onflip/dist/chatgpt/plans";
-import { activeProvider, providerLabel } from "onflip/dist/providers/id";
+import { activeProvider, isBrowserProvider, providerLabel } from "onflip/dist/providers/id";
 import { attachmentsBlockedReason, uploadsAvailable } from "onflip/dist/chatgpt/transport";
 import {
   configureBrowser,
@@ -613,19 +614,26 @@ export class Engine {
 
   /** Only the configuration that can be silently signed out needs probing. */
   private async checkSignInState(): Promise<void> {
-    // DeepSeek is always probed. Its transport is also named "browser", and
+    // A browser-driven service is always probed. Its transport is also named "browser", and
     // the cookies in hand are ChatGPT's — so the shortcut below would read a
     // ChatGPT session as proof that DeepSeek is connected, and report a
     // signed-out account as ready. Reported from the field on the first
     // switch: "it says connected, but I have not signed in to DeepSeek".
-    const deepseek = activeProvider() === "deepseek";
-    if (!deepseek && (this.transport.name !== "browser" || this.auth.cookies.length > 0)) {
+    const onBrowserService = isBrowserProvider();
+    if (!onBrowserService && (this.transport.name !== "browser" || this.auth.cookies.length > 0)) {
       this.emitConnect("ready");
       return;
     }
     try {
       const state = await checkSignedIn(this.auth.cookies);
       this.probeSignedIn = state.signedIn;
+      // A cached name over a signed-out session is an identity for an
+      // account nobody is using. The cache exists so the sidebar is not
+      // blank while the probe runs - once the probe has answered, it has
+      // nothing left to say. Seen on the first Qwen launch: a real name
+      // and email in the account bar, directly under a red banner saying
+      // the app was not signed in to Qwen.
+      if (!state.signedIn) this.account = null;
       this.pushStatus();
       if (state.signedIn) {
         this.emitConnect("ready");
@@ -640,7 +648,7 @@ export class Engine {
       this.emitConnect(
         "signed-out",
         state.reachable
-          ? `OnFlip is not signed in to ${service} — open the account menu (bottom left) and choose "Sign in".${why && !deepseek ? ` (${why})` : ""}`
+          ? `OnFlip is not signed in to ${service} — open the account menu (bottom left) and choose "Sign in".${why && !onBrowserService ? ` (${why})` : ""}`
           : `${service} could not be reached (${state.detail}).`
       );
     } catch (e) {
@@ -821,7 +829,7 @@ export class Engine {
    */
   private contextBudgetSource(): string {
     if (this.config.compactAfterChars) return "your own setting";
-    if (activeProvider() === "deepseek") return "DeepSeek's own limit";
+    if (isBrowserProvider()) return `${providerLabel()}'s own limit`;
     // With turns typed rather than uploaded, what one message can carry is
     // usually the binding limit and the plan only matters when it is
     // smaller - which is exactly the case worth naming.
@@ -840,8 +848,8 @@ export class Engine {
     // is how a Free account ended up sending more than its window holds.
     // DeepSeek's ceiling is its own, and it is not the composer's: measured,
     // 80,069 characters arrived in one send and were read to the end.
-    if (!this.config.compactAfterChars && activeProvider() === "deepseek") {
-      return DEEPSEEK_CEILING_CHARS;
+    if (!this.config.compactAfterChars && isBrowserProvider()) {
+      return activeProvider() === "qwen" ? QWEN_CEILING_CHARS : DEEPSEEK_CEILING_CHARS;
     }
     return (
       this.config.compactAfterChars ??
@@ -2322,7 +2330,7 @@ export class Engine {
     // and put 53 stored cookies into a profile. Worse, start() awaits this,
     // so a ChatGPT page that is slow or being challenged holds the whole
     // engine short of ready and every message sits at "sending".
-    if (activeProvider() === "deepseek") return allModels();
+    if (isBrowserProvider()) return allModels();
     const result = await discoverModels(this.auth);
     cacheModels(result.models.map((m) => ({ slug: m.slug, title: m.title, description: m.description })));
     return allModels();

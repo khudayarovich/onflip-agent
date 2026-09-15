@@ -200,7 +200,7 @@ export interface OnFlipConfig {
  * out which provider is active would be a cycle. `providers/id.ts` re-exports
  * these so there is still one list.
  */
-export const PROVIDER_IDS = ["chatgpt", "deepseek"] as const;
+export const PROVIDER_IDS = ["chatgpt", "deepseek", "qwen"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export const DEFAULT_PROVIDER: ProviderId = "chatgpt";
 
@@ -385,6 +385,30 @@ export function loadConfig(): OnFlipConfig {
     // reported symptom itself: DeepSeek announcing a connected account on a
     // service that had never been signed in to.
     for (const key of CHATGPT_ONLY) delete config[key];
+
+    // An account name identical to ChatGPT's is ChatGPT's.
+    //
+    // `resolveAuth` used to record the account from ChatGPT's own session
+    // endpoint whoever was running, and file it — correctly, by the rules
+    // above — in the active service's room. That write is fixed at the
+    // source, but every install that ever ran a browser-driven service still
+    // carries the result: a real ChatGPT name and email sitting in
+    // `providers.deepseek` and `providers.qwen`.
+    //
+    // It cannot be left to correct itself. DeepSeek would, on its next turn,
+    // because its page names the account. Qwen's does not name it at all —
+    // measured: no name element, no email anywhere in the page — so
+    // `pageSessionUser` answers null, the identify step returns early, and
+    // the wrong name would stay on a Qwen account bar for good.
+    //
+    // So it is dropped on read, the way a misfiled session is, rather than
+    // migrated with a file write: nothing has to run once, nothing can half
+    // apply, and a service that really does report a name writes one that
+    // differs from ChatGPT's and is read back normally. The cost of being
+    // wrong — two accounts genuinely sharing a name — is an account bar that
+    // says "DeepSeek account" until the next turn names it properly.
+    if (own.accountName && own.accountName === stored.accountName) delete config.accountName;
+    if (own.accountEmail && own.accountEmail === stored.accountEmail) delete config.accountEmail;
   }
 
   // `sandbox` used to mean "shell allowed". Keep old configs working.

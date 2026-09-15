@@ -2,7 +2,7 @@
  * The name of a service, for a sentence shown to a person.
  *
  * The renderer knows which service is running as an id on the status payload
- * — "chatgpt", "deepseek" — and several labels need it spelled the way the
+ * — "chatgpt", "deepseek", "qwen" — and several labels need it spelled the way the
  * service spells itself. The engine has its own `providerLabel`; this is the
  * same table on the renderer's side of the bridge, which cannot import it.
  *
@@ -22,6 +22,7 @@
 const LABELS: Record<string, string> = {
   chatgpt: "ChatGPT",
   deepseek: "DeepSeek",
+  qwen: "Qwen",
 };
 
 export function serviceLabel(id: string | null | undefined): string | null {

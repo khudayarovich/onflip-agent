@@ -5,6 +5,7 @@ import {
   type TransportChoice,
 } from "../chatgpt/transport";
 import { DeepSeekTransport } from "./deepseek/transport";
+import { QwenTransport } from "./qwen/transport";
 import { activeProvider } from "./id";
 
 /**
@@ -16,19 +17,24 @@ import { activeProvider } from "./id";
  * every decision inside it — the API path, the cookie check, the reasons — is
  * unchanged and unreviewable-by-accident.
  *
- * DeepSeek needs none of those arguments. It carries no bearer token and no
- * cookie jar of OnFlip's; its session lives in the browser profile a real
- * Chrome signed in to, and the driver either finds it there or does not.
+ * The browser-driven services need none of those arguments. They carry no
+ * bearer token and no cookie jar of OnFlip's; their session lives in the
+ * browser profile a real Chrome signed in to, and the driver either finds it
+ * there or does not.
  */
 export function chooseTransport(auth: {
   accessToken: string;
   cookies: SessionCookie[];
   deviceId?: string;
 }): TransportChoice {
-  if (activeProvider() === "deepseek") {
-    return { transport: new DeepSeekTransport(), reason: "DeepSeek browser profile" };
+  switch (activeProvider()) {
+    case "deepseek":
+      return { transport: new DeepSeekTransport(), reason: "DeepSeek browser profile" };
+    case "qwen":
+      return { transport: new QwenTransport(), reason: "Qwen browser profile" };
+    default:
+      return chooseChatGptTransport(auth);
   }
-  return chooseChatGptTransport(auth);
 }
 
 export type { Transport, TransportChoice };

@@ -1,6 +1,6 @@
 import { loadConfig, saveConfig } from "./config";
 import { prefersLunaByDefault, rationedPlan } from "./chatgpt/plans";
-import { activeProvider } from "./providers/id";
+import { activeProvider, isBrowserProvider } from "./providers/id";
 
 /**
  * Model slugs.
@@ -119,8 +119,43 @@ const RETIRED_DEEPSEEK: Record<string, string> = {
   "deepseek-vision": "deepseek-chat",
 };
 
+/**
+ * Qwen's two, as its own picker lists them.
+ *
+ * Read off the live page rather than from a docs page, because the picker is
+ * what OnFlip actually clicks: `.wms-list__item[role="option"]`, labelled
+ * `Qwen3.7-Plus` and `Qwen3.8-Max`. `qwen/browser.ts` holds the mapping from
+ * these slugs to those labels, and the same constraint travels with them as
+ * with DeepSeek's modes — the picker belongs to the thread, so a model is
+ * chosen when a chat starts and fixed for its life.
+ *
+ * There is no reasoning setting to describe here. Qwen thinks on its own,
+ * showing a "Thinking completed" card above the answer, with no toggle for a
+ * person or a driver to set — so unlike DeepSeek, the thinking control has
+ * nothing to drive and the composer hides it.
+ */
+const QWEN_MODELS: ModelInfo[] = [
+  {
+    slug: "qwen3-plus",
+    label: "Qwen3.7-Plus",
+    description: "the everyday model — thinks by itself when a question needs it",
+  },
+  {
+    slug: "qwen3-max",
+    label: "Qwen3.8-Max",
+    description: "the larger model, for harder problems and longer work",
+  },
+];
+
+/** The built-in list each browser-driven service offers, by provider. */
+const FIXED_MODELS: Record<string, ModelInfo[]> = {
+  deepseek: DEEPSEEK_MODELS,
+  qwen: QWEN_MODELS,
+};
+
 export function allModels(): ModelInfo[] {
-  if (activeProvider() === "deepseek") return DEEPSEEK_MODELS;
+  const fixed = FIXED_MODELS[activeProvider()];
+  if (fixed) return fixed;
   const cached = loadConfig().discoveredModels;
   if (!cached || cached.length === 0) return BUILTIN_MODELS;
 
@@ -179,9 +214,10 @@ function withinPlan(models: ModelInfo[]): ModelInfo[] {
  */
 export function effectiveModel(model: string, thinking: string | undefined): string {
   if (!model || model === "auto") return model;
-  // DeepSeek reaches reasoning through a toggle beside its composer, not
-  // through a slug, so there is no variant for a thinking level to open.
-  if (activeProvider() === "deepseek") return model;
+  // The browser-driven services reach reasoning through the page, not
+  // through a slug, so there is no variant for a thinking level to open:
+  // DeepSeek has a toggle beside its composer, and Qwen decides for itself.
+  if (isBrowserProvider()) return model;
   // On a rationed plan the reasoning variants are the metered models wearing
   // a different name: `-thinking` is not "the same model trying harder", it
   // is the allowance that runs out in minutes and locks for hours. The plan
@@ -239,7 +275,8 @@ export const DEFAULT_MODEL = "gpt-5-6-mini";
  * is Luna in the shape the accounts report it.
  */
 export function defaultModel(planId?: string): string {
-  if (activeProvider() === "deepseek") return DEEPSEEK_MODELS[0].slug;
+  const fixed = FIXED_MODELS[activeProvider()];
+  if (fixed) return fixed[0].slug;
   const cfg = loadConfig();
   if (!prefersLunaByDefault(planId ?? cfg.planType)) return DEFAULT_MODEL;
   const luna = cfg.discoveredModels?.find(
@@ -341,9 +378,25 @@ export function isKnownModel(slug: string): boolean {
  * service, because nothing here can serve it.
  */
 export function modelBelongsToProvider(slug: string): boolean {
-  const deepseek = slug.startsWith("deepseek-");
-  return activeProvider() === "deepseek" ? deepseek : !deepseek;
+  const mine = SLUG_PREFIX[activeProvider()];
+  if (mine) return slug.startsWith(mine);
+  // ChatGPT's slugs are whatever an account reports and cannot be listed in
+  // advance, so its test is the other way round: anything that does not
+  // plainly belong to one of the others.
+  return !Object.values(SLUG_PREFIX).some((p) => slug.startsWith(p));
 }
+
+/**
+ * How each browser-driven service's slugs begin.
+ *
+ * Only these can be recognised by shape. ChatGPT's are discovered per
+ * account and change faster than any list here could, which is why it is the
+ * default case above rather than an entry.
+ */
+const SLUG_PREFIX: Record<string, string> = {
+  deepseek: "deepseek-",
+  qwen: "qwen3-",
+};
 
 /** A slug has to at least look like one before it is worth sending. */
 export function looksLikeSlug(value: string): boolean {

@@ -2,6 +2,7 @@ import { loadConfig, saveConfig } from "../config";
 import { isThinkingLevel } from "../models";
 import { spawnExtractToken, takeExtractError } from "./extract";
 import { logger } from "../log";
+import { isBrowserProvider } from "../providers/id";
 
 /**
  * Is this plausibly a session cookie?
@@ -106,9 +107,29 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
       sessionDeviceId: deviceId,
       accessToken: session.accessToken,
       accessTokenExpiry: Number.isFinite(expiry) ? expiry : undefined,
-      // The same response says whose session this is; keep it for display.
-      ...(session.user?.name ? { accountName: session.user.name } : {}),
-      ...(session.user?.email ? { accountEmail: session.user.email } : {}),
+      // The same response says whose session this is; keep it for display —
+      // but only when ChatGPT is the service running.
+      //
+      // The endpoint above is ChatGPT's, so the name it returns is a ChatGPT
+      // account's whoever is asking. `accountName` and `accountEmail` are
+      // filed per service, so writing them here while another service is
+      // running files ChatGPT's identity in that service's room. Found on
+      // the first Qwen run: the sidebar showed a ChatGPT name and email over
+      // a Qwen session that had never been signed in to, and `providers.qwen`
+      // held both — as `providers.deepseek` had been holding them, from the
+      // same line, since DeepSeek shipped.
+      //
+      // The session keys above are not affected: they are ChatGPT's by
+      // declaration and `saveConfig` files them at the top level whoever is
+      // running. It is only these two, which both services legitimately
+      // have, that follow the active provider and so must be sure whose they
+      // are before they are written.
+      ...(isBrowserProvider()
+        ? {}
+        : {
+            ...(session.user?.name ? { accountName: session.user.name } : {}),
+            ...(session.user?.email ? { accountEmail: session.user.email } : {}),
+          }),
     });
   } catch {
     // Access token fetch failed — browser client will handle it
