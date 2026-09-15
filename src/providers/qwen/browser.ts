@@ -12,6 +12,7 @@ import {
   ROLE_KEY,
   conversationIdFrom,
   isGuestChat,
+  isSignInPage,
   isSignedIn,
   qwenProfileDir,
 } from "./session";
@@ -89,6 +90,54 @@ const SEND_BUTTON = "button.send-button";
 const USER_MESSAGE = ".qwen-chat-message-user";
 /** Shown in Send's place while an answer is being written. */
 const STOP_BUTTON = 'button[aria-label="Stop"]';
+/**
+ * The header's Log in / Sign up pair, which only a signed-out visitor sees.
+ *
+ * This is the signal the driver spent six releases without, and the one that
+ * settles what localStorage cannot. Measured on the real profile: a token
+ * 209 characters long, correctly shaped, with its own expiry twenty-nine
+ * days away — and the page rendering these two buttons, structurally
+ * identical to a profile created thirty seconds earlier that had never seen
+ * Qwen. The token was valid by every test that can be made of it offline
+ * and dead as far as the service was concerned.
+ *
+ * That is the whole of the fault people reported. `isSignedIn` read the
+ * token, said yes, the app reported itself connected, and every message went
+ * into a guest conversation that is never answered — which surfaced as "the
+ * message went nowhere", ninety-second waits, and being told to sign in to
+ * an account already signed in.
+ *
+ * Classes, not text: the same page renders "Войти" or "Log in" depending on
+ * the locale cookie, and matching words would make the check work in English
+ * and fail silently everywhere else.
+ *
+ * One class, not a family of them, and deliberately the narrow one. The two
+ * ways this can be wrong are not equally bad. If Qwen renames it the check
+ * stops firing and the driver behaves as it did before this release — a
+ * fault already understood. If it ever matched something a *signed-in* page
+ * draws, everybody would be told to sign in for ever, and signing in would
+ * not clear it. The second is unrecoverable by the person it happens to, so
+ * the selector only claims what was actually observed.
+ *
+ * Stated plainly because it could not be tested from here: this was measured
+ * against a signed-out page and a dead-session page, which rendered it
+ * identically. There was no live session on this machine to confirm a
+ * signed-in page does *not* draw it — the profile's session was already gone,
+ * which is how the fault was found at all.
+ */
+const AUTH_PROMPT = "button.header-right-auth-button";
+
+/**
+ * The same question as a page script, because this module has no DOM types.
+ *
+ * `offsetParent` is the cheap honest test of "a person would see this": the
+ * markup can be in the tree and hidden, and a hidden button is not a page
+ * telling somebody to sign in.
+ */
+const AUTH_PROMPT_SCRIPT = `(() => {
+  const el = document.querySelector(${JSON.stringify(AUTH_PROMPT)});
+  return Boolean(el && el.offsetParent !== null);
+})()`;
 
 /**
  * Qwen talking, rather than the model answering.
@@ -227,10 +276,43 @@ function withTimeout<T>(work: Promise<T>, what: string, ms = PAGE_CALL_MS): Prom
 }
 
 /** The page to work in, on Qwen, created if the context has none. */
+/**
+ * Is this address one a turn can be sent from, and a session read from, as
+ * it stands?
+ *
+ * The rule used to be "anywhere under chat.qwen.ai", and that made the two
+ * addresses OnFlip must escape into fixed points it could never leave:
+ * `/c/guest` and `/auth` both start with the chat URL, so the page was
+ * judged to be already where it belonged and no navigation happened.
+ *
+ * What that cost is in this machine's own log. A turn landed in a guest
+ * conversation; the next turn opened "the page", got the same guest page
+ * back, and sent into it again — and so did the one after that. Sending
+ * from a guest conversation is never answered, so each turn spent its one
+ * recovery climbing out of a hole the previous turn left it in, and a turn
+ * whose re-send landed there too ended on "the session has expired — sign
+ * in again". The session had not expired. The token was valid for another
+ * 716 hours; the page was simply stuck.
+ *
+ * `checkSignedIn` reads the same page, so the banner said signed out for
+ * the same reason, and its retries re-read the same stuck page three times
+ * before agreeing with themselves.
+ *
+ * A real conversation — `/c/<uuid>` — is usable and must be left alone, or
+ * every turn would start a new chat.
+ */
+export function isUsableChatUrl(url: string): boolean {
+  if (!url || !url.startsWith(QWEN_CHAT_URL)) return false;
+  // Qwen's own answer to "your session is not in effect", and the address
+  // it redirects a guest conversation to once a session does exist.
+  if (isGuestChat(url) || isSignInPage(url)) return false;
+  return true;
+}
+
 export async function chatPage(opts: OpenOptions = {}): Promise<Page> {
   const ctx = await openBrowser(opts);
   const page = ctx.pages()[0] ?? (await ctx.newPage());
-  if (!page.url().startsWith(QWEN_CHAT_URL)) {
+  if (!isUsableChatUrl(page.url())) {
     await gotoChat(page);
   }
   return page;
@@ -308,7 +390,8 @@ export function verdictForPrompt(
  */
 export function sessionStateFrom(
   url: string,
-  storage: Record<string, string | null | undefined> | null
+  storage: Record<string, string | null | undefined> | null,
+  authPrompt?: boolean
 ): SessionState {
   if (!url || !url.startsWith(QWEN_ORIGIN)) return "unreadable";
   // A guest conversation is Qwen saying the session is not in effect, and
@@ -316,15 +399,49 @@ export function sessionStateFrom(
   // believing it is how the app reported itself connected while every turn
   // went to a page that could not answer.
   if (isGuestChat(url)) return "absent";
+  // The page's own verdict outranks the token, because the token cannot be
+  // checked offline and the page has already asked. A profile holding a
+  // well-formed, unexpired token that the service no longer honours renders
+  // the Log in / Sign up pair, and that is the case this driver kept
+  // reading as a live session.
+  //
+  // Only a positive sighting counts. `undefined` means nobody looked and
+  // `false` means the header had not rendered yet - neither is evidence of
+  // being signed in, so both fall through to the token, which is the same
+  // answer this function gave before the page was ever consulted.
+  if (authPrompt === true) return "absent";
   if (!storage) return "unreadable";
   return isSignedIn(storage) ? "present" : "absent";
+}
+
+/**
+ * Is the page showing the signed-out header?
+ *
+ * Visibility matters: the markup can be present and hidden behind a
+ * rendered-but-not-displayed header, and an offsetParent check is the
+ * cheapest honest test of "a person would see this".
+ *
+ * Any failure answers `false` — not signed out. A driver that reports
+ * somebody signed out because an evaluate timed out is the failure this
+ * whole file has been correcting, in the other direction.
+ */
+async function pageShowsAuthPrompt(page: Page): Promise<boolean> {
+  try {
+    return await withTimeout(
+      page.evaluate<boolean>(AUTH_PROMPT_SCRIPT),
+      "reading the sign-in header"
+    );
+  } catch {
+    return false;
+  }
 }
 
 async function sessionState(page: Page): Promise<SessionState> {
   let url = "";
   try {
     url = page.url();
-    return sessionStateFrom(url, await readStorage(page));
+    const storage = await readStorage(page);
+    return sessionStateFrom(url, storage, await pageShowsAuthPrompt(page));
   } catch {
     return "unreadable";
   }
@@ -394,7 +511,14 @@ export async function checkSignedIn(
       // that is not on Qwen's origin has empty storage of its own, and
       // reading that as "no session" is what put a signed-out banner over a
       // signed-in account.
-      const state = sessionStateFrom(page.url(), await readStorage(page));
+      const state = sessionStateFrom(
+        page.url(),
+        await readStorage(page),
+        // Asked of the page, not of the token: this is the check that draws
+        // the Sign in button, and it was the one telling people they were
+        // connected while the header in front of them said Log in.
+        await pageShowsAuthPrompt(page)
+      );
       if (state === "present") {
         const profile = await readProfile(page);
         return { signedIn: true, ...profile };

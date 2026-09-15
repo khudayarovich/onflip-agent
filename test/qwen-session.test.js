@@ -289,3 +289,71 @@ test("a token this cannot read is left for the page to judge", () => {
   const noExp = ["eyJhbGciOiJIUzI1NiJ9", Buffer.from(JSON.stringify({ sub: "x" })).toString("base64url"), "sig"].join(".");
   assert.equal(isExpiredToken(noExp), false);
 });
+
+// ---------------------------------------------------------------------------
+// What the page says, versus what the token says
+// ---------------------------------------------------------------------------
+
+const { isUsableChatUrl, sessionStateFrom } = require("../dist/providers/qwen/browser");
+
+test("the page's own sign-in header outranks a token that looks fine", () => {
+  // The fault six releases missed, measured on a real profile rather than
+  // reasoned about: a token 209 characters long, correctly shaped, with its
+  // own expiry twenty-nine days away - and the page rendering the Log in /
+  // Sign up pair, structurally identical to a profile created seconds
+  // earlier that had never seen Qwen. The service had dropped the session;
+  // nothing readable offline could tell.
+  //
+  // So the app reported itself connected, every message went into a guest
+  // conversation that is never answered, and the person was told to sign in
+  // to an account the app insisted was already signed in.
+  const live = { token: jwt, userRole: "user" };
+
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, true), "absent");
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, false), "present");
+});
+
+test("only a sighting counts; nobody looking is not evidence of anything", () => {
+  // `undefined` is "nobody asked" and `false` is "the header had not
+  // rendered yet". Reading either as signed out would refuse a working
+  // session on a slow machine, which is the same fault in the other
+  // direction - and that direction is the one that costs a sign-in.
+  const live = { token: jwt, userRole: "user" };
+
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live, undefined), "present");
+  assert.equal(sessionStateFrom("https://chat.qwen.ai/", live), "present");
+});
+
+test("and it cannot rescue a page that was never readable", () => {
+  // Off-origin stays "unreadable" whatever the header appears to say: a page
+  // mid-navigation has neither Qwen's storage nor Qwen's header, and
+  // answering "signed out" there is the original bug this file guards.
+  assert.equal(sessionStateFrom("about:blank", null, true), "unreadable");
+  assert.equal(sessionStateFrom("https://example.com/", { token: jwt }, true), "unreadable");
+});
+
+test("a guest conversation and the sign-in wall are addresses to leave, not to use", () => {
+  // Both start with the chat URL, which is why the old rule - "anywhere
+  // under chat.qwen.ai is where we belong" - made them fixed points the
+  // driver could never navigate out of. This machine's own log has the
+  // consequence: a turn landed in a guest conversation, the next turn
+  // opened "the page", got the same guest page back, and sent into it
+  // again.
+  assert.equal(isUsableChatUrl("https://chat.qwen.ai/c/guest"), false);
+  assert.equal(isUsableChatUrl("https://chat.qwen.ai/auth"), false);
+  assert.equal(isUsableChatUrl("https://chat.qwen.ai/auth?next=/"), false);
+});
+
+test("but a real conversation is left exactly where it is", () => {
+  // Navigating away from these would start a new chat on every turn, which
+  // is a worse bug than the one being fixed.
+  assert.equal(isUsableChatUrl("https://chat.qwen.ai/"), true);
+  assert.equal(isUsableChatUrl("https://chat.qwen.ai/c/2f1e8a44-0b6d-4c31-9a77-5e0c1d8b2a93"), true);
+  assert.equal(isUsableChatUrl("https://chat.qwen.ai/?model=qwen3-plus"), true);
+});
+
+test("and anywhere off Qwen is somewhere to navigate back from", () => {
+  assert.equal(isUsableChatUrl("about:blank"), false);
+  assert.equal(isUsableChatUrl(""), false);
+  assert.equal(isUsableChatUrl("https://example.com/"), false);
+});
