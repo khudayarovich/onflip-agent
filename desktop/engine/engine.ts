@@ -35,6 +35,7 @@ import {
   COMPOSER_CEILING_CHARS,
   DEEPSEEK_CEILING_CHARS,
   QWEN_CEILING_CHARS,
+  ARENA_CEILING_CHARS,
   describePlan,
   planLimitCard,
   promptCrowdsPlan,
@@ -1007,7 +1008,15 @@ export class Engine {
     // DeepSeek's ceiling is its own, and it is not the composer's: measured,
     // 80,069 characters arrived in one send and were read to the end.
     if (!this.config.compactAfterChars && isBrowserProvider()) {
-      return activeProvider() === "qwen" ? QWEN_CEILING_CHARS : DEEPSEEK_CEILING_CHARS;
+      // A table, not a chain with a fallback. The chain read "qwen, else
+      // DeepSeek", so a fourth provider silently inherited DeepSeek's
+      // 150,000 - a number measured on DeepSeek and on nothing else.
+      const ceilings: Record<string, number> = {
+        qwen: QWEN_CEILING_CHARS,
+        arena: ARENA_CEILING_CHARS,
+        deepseek: DEEPSEEK_CEILING_CHARS,
+      };
+      return ceilings[activeProvider()] ?? COMPOSER_CEILING_CHARS;
     }
     return (
       this.config.compactAfterChars ??

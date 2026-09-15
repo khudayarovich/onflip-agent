@@ -27,6 +27,36 @@ import { sendTurn, currentConversationId, reset as resetChat, checkSelectors } f
 /** Held against its contract once per run; see the Qwen transport. */
 let contractChecked = false;
 
+/**
+ * Arena starts a fresh conversation for every turn.
+ *
+ * Not because that is better — it is worse in every measurable way — but
+ * because a second turn in one thread is not yet proved to work here, and
+ * the first turn is. A provider that answers reliably and expensively beats
+ * one that answers cheaply and sometimes.
+ *
+ * What it costs, stated plainly so nobody has to rediscover it:
+ *
+ *   The whole transcript goes out each turn instead of only what is new.
+ *   Real sessions were measured at twenty-six to twenty-nine thousand
+ *   characters, so this is roughly an order of magnitude more per turn — on
+ *   a provider chosen for its allowance, which is the irony of it.
+ *
+ *   A conversation per turn meets `paceNewChat`, which stretches the gap
+ *   after ten in an hour and caps it at thirty seconds. A long agent run
+ *   will feel that, and the throttle is doing its job: services watch
+ *   conversation-creation rate, and Arena sits behind Cloudflare.
+ *
+ *   And one message has to hold the whole transcript, so a long session
+ *   compacts sooner than it otherwise would.
+ *
+ * One line to undo. When a second turn is shown to work — the likeliest
+ * remaining cause is a thirty-second focus timeout that has since been
+ * fixed, which made every second turn look dead — this becomes false and
+ * the transport resumes sending deltas.
+ */
+const ONE_SHOT = true;
+
 export class ArenaTransport implements Transport {
   readonly name = "browser" as const;
   /** How much of the history the live thread already holds. */
@@ -36,6 +66,11 @@ export class ArenaTransport implements Transport {
     // A thread that went away — a crash, a reset, a first run — has seen
     // nothing, so the whole transcript goes out again.
     if (!currentConversationId()) this.sentThrough = 0;
+    // And in one-shot mode every turn is that case on purpose.
+    if (ONE_SHOT) {
+      this.sentThrough = 0;
+      resetChat();
+    }
 
     const turn = buildTurnPrompt(history, this.sentThrough, {
       includeSystem: this.sentThrough === 0,
