@@ -897,8 +897,11 @@ export class Engine {
   private buildTools() {
     return createToolRegistry({
       // Absent rather than refusing when it is off: a tool the model can
-      // call and nothing can carry out is worse than no tool.
-      runSubAgent: loadConfig().subAgents === false ? undefined : (req) => this.runSubAgent(req),
+      // call and nothing can carry out is worse than no tool. Off unless
+      // switched on — a sub-agent abandons the live thread and burns the
+      // provider's allowance on a second conversation, which is a cost
+      // somebody should choose, not inherit.
+      runSubAgent: loadConfig().subAgents === true ? (req) => this.runSubAgent(req) : undefined,
       cwd: this.cwd,
       session: this.toolState,
       signal: this.abort.signal,
@@ -2703,7 +2706,8 @@ export class Engine {
       // On unless it was turned off. The pane is a feature people use;
       // the port it needs is the thing worth being able to close.
       embeddedBrowser: cfg.embeddedBrowser !== false,
-      subAgents: cfg.subAgents !== false,
+      // Off by default, unlike the browser above: see buildTools.
+      subAgents: cfg.subAgents === true,
       maxIterations: firstPositiveInt([cfg.maxIterations], DEFAULT_STEP_BUDGET),
       replyTimeout: firstPositiveInt([cfg.replyTimeout], 600),
       // The effective value, not a hardcoded default: with nothing set, the

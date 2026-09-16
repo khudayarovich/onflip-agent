@@ -315,7 +315,7 @@ const en = {
   setEmbeddedBrowser: "Browser pane",
   setSubAgents: "Sub-tasks",
   setSubAgentsDesc:
-    "Let the agent hand a self-contained job to a second agent with its own conversation, so work that reads a lot and concludes a little does not fill this chat. What it does is visible under Sub-tasks. Turn off to keep every step in one conversation.",
+    "Let the agent hand a self-contained job to a second agent with its own conversation, so work that reads a lot and concludes a little does not fill this chat. What it does is visible under Sub-tasks. Off by default: a sub-task runs in a conversation of its own, which spends more of your account's allowance.",
   setEmbeddedBrowserDesc:
     "The docked browser and the browser_* tools. It works over a local debugging port that anything else on this machine can also reach, so turn it off on a computer other people have accounts on. Takes effect after a restart.",
   setModels: "Models",
@@ -722,7 +722,7 @@ const ru: Partial<Record<StringKey, string>> = {
   setEmbeddedBrowser: "Панель браузера",
   setSubAgents: "Подзадачи",
   setSubAgentsDesc:
-    "Разрешить агенту передавать отдельную задачу второму агенту с собственным диалогом, чтобы работа, где много чтения и короткий вывод, не забивала этот чат. Что он делает — видно в разделе «Подзадачи». Выключите, чтобы все шаги шли в одном диалоге.",
+    "Разрешить агенту передавать отдельную задачу второму агенту с собственным диалогом, чтобы работа, где много чтения и короткий вывод, не забивала этот чат. Что он делает — видно в разделе «Подзадачи». По умолчанию выключено: подзадача идёт в отдельном диалоге и расходует больше лимита аккаунта.",
   setEmbeddedBrowserDesc:
     "Встроенный браузер и инструменты browser_*. Работает через локальный порт отладки, к которому может обратиться и любая другая программа на этом компьютере — выключите на машине с чужими учётными записями. Вступает в силу после перезапуска.",
   setModels: "Модели",
@@ -1127,7 +1127,7 @@ const uz: Partial<Record<StringKey, string>> = {
   setEmbeddedBrowser: "Brauzer paneli",
   setSubAgents: "Quyi vazifalar",
   setSubAgentsDesc:
-    "Agent alohida ishni o'z suhbatiga ega ikkinchi agentga topshira olsin — ko'p o'qib, qisqa xulosa beradigan ish shu chatni to'ldirmasin. U nima qilgani «Quyi vazifalar» bo'limida ko'rinadi. Hamma qadam bitta suhbatda bo'lishi uchun o'chiring.",
+    "Agent alohida ishni o'z suhbatiga ega ikkinchi agentga topshira olsin — ko'p o'qib, qisqa xulosa beradigan ish shu chatni to'ldirmasin. U nima qilgani «Quyi vazifalar» bo'limida ko'rinadi. Odatiy holda o'chiq: quyi vazifa alohida suhbatda ishlaydi va akkaunt limitidan ko'proq sarflaydi.",
   setEmbeddedBrowserDesc:
     "Ichki brauzer va browser_* vositalari. U mahalliy nosozliklarni tuzatish porti orqali ishlaydi, unga shu kompyuterdagi boshqa dasturlar ham ulana oladi — begona hisoblar bor mashinada o'chiring. Qayta ishga tushirilgandan keyin kuchga kiradi.",
   setModels: "Modellar",

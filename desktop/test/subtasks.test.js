@@ -96,20 +96,28 @@ test("and there is a way in to it", () => {
   assert.match(SIDEBAR, /menuSubTasks/);
 });
 
-test("sub-agents can be turned off, and then the tool is absent", () => {
+test("sub-agents are absent until the setting turns them on", () => {
   // Not refused — absent. A tool the model can call and nothing can carry
   // out is worse than no tool: it will try, be told no, and try again.
   // `taskTools` already builds nothing when there is no runner, so the
   // setting works by withholding the runner rather than by adding a refusal.
-  assert.match(ENGINE, /loadConfig\(\)\.subAgents === false \? undefined : \(req\) => this\.runSubAgent\(req\)/);
+  //
+  // And absent is now the default. This test used to pin the opposite —
+  // on unless turned off — and flipped on request: a sub-agent abandons
+  // the live thread and spends the provider's allowance on a second
+  // conversation, a cost somebody should choose rather than inherit.
+  assert.match(ENGINE, /loadConfig\(\)\.subAgents === true \? \(req\) => this\.runSubAgent\(req\) : undefined/);
 });
 
-test("and the setting reaches the window, defaulting to on", () => {
+test("and the setting reaches the window, defaulting to off with the engine", () => {
+  // The toggle must show the same default the engine applies — a switch
+  // drawn ON above a tool that is actually absent is the settings screen
+  // lying about what the model can do.
   const settings = fs.readFileSync(
     path.join(__dirname, "..", "ui", "src", "components", "SettingsModal.tsx"),
     "utf8"
   );
-  assert.match(ENGINE, /subAgents: cfg\.subAgents !== false/);
+  assert.match(ENGINE, /subAgents: cfg\.subAgents === true/);
   assert.match(ENGINE, /subAgents: \(v\) => \(\{ subAgents: Boolean\(v\) \}\)/);
-  assert.match(settings, /config\?\.subAgents \?\? true/);
+  assert.match(settings, /config\?\.subAgents \?\? false/);
 });

@@ -122,3 +122,41 @@ test("after a sub-agent, the next send re-anchors the protocol", () => {
   assert.equal(needsAnchor(false, ["ok"]), true);
   assert.equal(needsAnchor(true, ["ok"]), false, "and without clearing it, the short form");
 });
+
+test("sub-agents are off until somebody turns them on", () => {
+  // The default changed on request: a sub-agent abandons the live thread
+  // and spends the provider's allowance on a second conversation, which is
+  // a cost somebody should choose, not inherit. "Absent from the config"
+  // must therefore read as OFF at every seam — the engine offering the
+  // tool, the status it reports, and the toggle the settings screen shows.
+  //
+  // Held against the source, because each seam is a one-line default in a
+  // different process and a regression at any one of them quietly re-enables
+  // the feature for everyone who never touched the setting.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const engine = fs.readFileSync(
+    path.join(__dirname, "..", "desktop", "engine", "engine.ts"),
+    "utf8"
+  );
+  assert.ok(
+    engine.includes("loadConfig().subAgents === true"),
+    "the engine must offer the runner only on an explicit true"
+  );
+  assert.ok(
+    engine.includes("cfg.subAgents === true"),
+    "the reported status must default off with the engine"
+  );
+  assert.ok(
+    !/subAgents !== false/.test(engine),
+    "no seam may read absence as on"
+  );
+  const settings = fs.readFileSync(
+    path.join(__dirname, "..", "desktop", "ui", "src", "components", "SettingsModal.tsx"),
+    "utf8"
+  );
+  assert.ok(
+    settings.includes("config?.subAgents ?? false"),
+    "the toggle must show the same default the engine applies"
+  );
+});

@@ -110,11 +110,13 @@ export interface OnFlipConfig {
   /**
    * Offer the agent the `task` tool, which hands work to a sub-agent.
    *
-   * On by default. Worth turning off when you would rather watch every step
-   * in one conversation: a sub-agent does its reading somewhere else and
-   * brings back a paragraph, which is the point of it and also the cost -
-   * and it needs a chat of its own, so the parent's thread is abandoned and
-   * rebuilt on its next message, roughly what one compaction costs.
+   * Off by default. A sub-agent does its reading somewhere else and brings
+   * back a paragraph, which is the point of it and also the cost — it needs
+   * a chat of its own, so the parent's thread is abandoned and rebuilt on
+   * its next message, roughly what one compaction costs, and the second
+   * conversation spends the provider's allowance. Turn it on when the work
+   * is big enough to be worth that; every default here reads absence as
+   * off, so only an explicit true enables it.
    *
    * A tool the model cannot be offered is simply absent from its roster, so
    * turning this off does not leave it calling something that will refuse.

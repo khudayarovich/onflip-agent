@@ -223,7 +223,7 @@ export function SettingsModal({
             <div className="name">{t("setSubAgents")}</div>
             <div className="desc">{t("setSubAgentsDesc")}</div>
           </div>
-          <Toggle on={config?.subAgents ?? true} onChange={(on) => setValue("subAgents", on)} />
+          <Toggle on={config?.subAgents ?? false} onChange={(on) => setValue("subAgents", on)} />
         </div>
       </div>
 
