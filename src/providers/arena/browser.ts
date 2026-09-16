@@ -164,6 +164,38 @@ export interface OpenOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * How Arena's browser must be shaped, which stopped being a preference.
+ *
+ * Measured on one signed-in profile, minutes apart, same account and same
+ * message: headless, every generation dies server-side with Arena's own
+ * "Something went wrong while generating the response"; headed, it answers
+ * in twenty seconds. The send is accepted either way and "Generating..."
+ * shows either way - the kill is silent sabotage at the end, which is what
+ * made it read as the app hanging rather than the service refusing.
+ *
+ * So the driver runs headed, with the window parked far off the desktop.
+ * Verified: at -32000,-32000 nothing is visible, the page still reports
+ * itself visible, and the same turn that died headless answered in
+ * fourteen seconds. macOS may clamp the position differently - the worst
+ * case there is a window somebody can see, which still answers, and that
+ * beats invisible and dead.
+ *
+ * Linux keeps headless: a headed window needs a display server that a box
+ * running an agent may not have, and no Arena build ships for it anyway.
+ */
+export function arenaWindow(
+  headed: boolean,
+  platform: NodeJS.Platform = process.platform
+): { headless: boolean; args: string[] } {
+  if (headed) return { headless: false, args: [...ARENA_LAUNCH_ARGS] };
+  if (platform === "linux") return { headless: true, args: [...ARENA_LAUNCH_ARGS] };
+  return {
+    headless: false,
+    args: [...ARENA_LAUNCH_ARGS, "--window-position=-32000,-32000", "--window-size=1280,900"],
+  };
+}
+
 export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContext> {
   if (context) return context;
   const dir = arenaProfileDir();
@@ -173,11 +205,12 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
   // closes. Shared with the other drivers because the fault is the same.
   await releaseProfileLock(dir, (message, data) => logger.info("arena", message, data));
   logger.info("arena", "opening the browser", { profile: dir, headed: Boolean(opts.headed) });
+  const window = arenaWindow(Boolean(opts.headed));
   context = await chromium.launchPersistentContext(dir, {
     executablePath: executable(),
-    headless: !opts.headed,
+    headless: window.headless,
     viewport: null,
-    args: ARENA_LAUNCH_ARGS,
+    args: window.args,
     timeout: 30_000,
   });
   context.on("close", () => {
@@ -727,6 +760,8 @@ export async function sendTurn(
   let lastChange = Date.now();
   let lastBeat = Date.now();
   let sawGenerating = false;
+  /** Polls since a generation finished with an empty reply. */
+  let emptyEnds = 0;
   let sent = "";
 
   while (Date.now() < deadline) {
@@ -762,6 +797,21 @@ export async function sendTurn(
         replyChars: now.text.length,
       });
       return { reply: now.text, ms: Date.now() - started };
+    }
+
+    // A generation that ENDED with nothing written is not silence - it is
+    // Arena's error card, which renders outside the reply container. This
+    // used to sit out the whole silence window before looking, so every
+    // killed generation cost three minutes instead of five seconds, and
+    // three of those in a row read as the app hanging for ten.
+    if (sawGenerating && !now.generating && now.text.trim().length === 0) {
+      emptyEnds += 1;
+      if (emptyEnds === 5) {
+        const said = await serviceMessage(page);
+        if (said) throw new ArenaError(`Arena says: ${said.text}`, said.code);
+      }
+    } else {
+      emptyEnds = 0;
     }
 
     if (Date.now() - lastChange > SILENCE_MS) {

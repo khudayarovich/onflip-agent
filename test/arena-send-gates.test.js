@@ -97,3 +97,42 @@ test("the login wall is named as policy, not reported as a bug", () => {
   assert.match(after, /"anonymous"/);
   assert.match(after, /sign in to Arena/i);
 });
+
+test("Arena's browser is headed everywhere a window can exist", () => {
+  // Measured on one signed-in profile, same account, minutes apart:
+  // headless, every generation dies server-side with Arena's own
+  // "Something went wrong"; headed, the same turn answers in twenty
+  // seconds. The send is accepted either way - the kill is silent, at the
+  // end, which is what made it read as the app hanging.
+  const { arenaWindow } = require("../dist/providers/arena/browser");
+  for (const platform of ["win32", "darwin"]) {
+    const w = arenaWindow(false, platform);
+    assert.equal(w.headless, false, `${platform} must not drive Arena headless`);
+    assert.ok(
+      w.args.some((a) => a.startsWith("--window-position=-")),
+      `${platform}'s window is parked off the desktop`
+    );
+    assert.ok(
+      w.args.includes("--disable-blink-features=AutomationControlled"),
+      "the automation flag still rides along"
+    );
+  }
+  // A deliberately headed window is a window someone wants to see.
+  const headed = arenaWindow(true, "win32");
+  assert.equal(headed.headless, false);
+  assert.ok(!headed.args.some((a) => a.startsWith("--window-position=-")));
+  // And a box with no display server cannot open a window at all.
+  assert.equal(arenaWindow(false, "linux").headless, true);
+});
+
+test("a generation that dies is reported in seconds, not minutes", () => {
+  // The error card renders outside the reply container, so a killed
+  // generation used to sit out the whole silence window - three minutes
+  // per attempt, three attempts, ten minutes of "still working". The poll
+  // loop now asks the page why the moment a generation ends with nothing
+  // written.
+  const loop = SRC.slice(SRC.indexOf("let emptyEnds"), SRC.indexOf("if (Date.now() - lastChange > SILENCE_MS)"));
+  assert.ok(loop.length > 0, "the empty-end counter exists in the poll loop");
+  assert.match(loop, /sawGenerating && !now\.generating && now\.text\.trim\(\)\.length === 0/);
+  assert.match(loop, /serviceMessage\(page\)/);
+});
