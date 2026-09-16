@@ -23,6 +23,7 @@ const {
   conversationIdFrom,
   ARENA_LAUNCH_ARGS,
   ARENA_SIGN_IN_ARGS,
+  arenaSignInArgs,
 } = require("../dist/providers/arena/session");
 
 const ACCOUNT = [{ name: "arena-auth-prod-v1.0" }, { name: "arena-auth-prod-v1.1" }, { name: "_ga" }];
@@ -144,4 +145,59 @@ test("no provider's sign-in borrows its driver's flags", () => {
       `${provider}'s sign-in passes an automation flag to a window a person signs in through`
     );
   }
+});
+
+test("the sign-in browser encrypts the profile the way the driver reads it", () => {
+  // Arena's session lives in cookies, and cookie values are encrypted with
+  // a key that depends on how the browser was started. Playwright launches
+  // the driver with --use-mock-keychain (macOS) and --password-store=basic
+  // (Linux); a sign-in browser started without them writes a session the
+  // driver cannot decrypt one cookie of — and Chromium DROPS what it cannot
+  // decrypt, so the account reads as absent and the profile is purged back
+  // and forth between the two keys. Reported as a fresh browser on every
+  // attempt, and only on macOS, because Windows keys cookies through DPAPI
+  // the same way for both launches.
+  assert.ok(
+    arenaSignInArgs("darwin").includes("--use-mock-keychain"),
+    "a Mac sign-in must share the driver's mock keychain"
+  );
+  assert.ok(
+    arenaSignInArgs("linux").includes("--password-store=basic"),
+    "a Linux sign-in must share the driver's basic password store"
+  );
+  // Windows needs neither: the key rides inside the profile.
+  const win = arenaSignInArgs("win32");
+  assert.ok(!win.includes("--use-mock-keychain"));
+  assert.ok(!win.includes("--password-store=basic"));
+  // And on every platform the base flags stay and nothing automation-shaped
+  // sneaks back in.
+  for (const platform of ["darwin", "linux", "win32"]) {
+    const args = arenaSignInArgs(platform);
+    assert.ok(args.includes("--no-first-run"), platform);
+    assert.ok(args.includes("--no-default-browser-check"), platform);
+    for (const a of args) {
+      assert.ok(!/automation|webdriver|blink-features|remote-debugging|headless/i.test(a), a);
+    }
+  }
+});
+
+test("Playwright still forces the keystore flags this mirrors", () => {
+  // The rule above mirrors two of Playwright's own default switches. If a
+  // Playwright upgrade renames or drops either, the mirror goes stale and
+  // the macOS sign-in silently breaks again — so the assumption is held
+  // against the installed package, not against memory.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const root = path.join(__dirname, "..", "node_modules", "playwright-core");
+  let src = "";
+  for (const f of ["lib/coreBundle.js", "lib/server/chromium/chromiumSwitches.js"]) {
+    try {
+      src += fs.readFileSync(path.join(root, f), "utf8");
+    } catch {
+      /* bundled differently in this version; the other file carries it */
+    }
+  }
+  assert.ok(src.length > 0, "playwright-core not found where expected");
+  assert.ok(src.includes("--use-mock-keychain"), "Playwright no longer mocks the macOS keychain");
+  assert.ok(src.includes("--password-store=basic"), "Playwright no longer forces the basic store");
 });

@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { checkSignedIn, closeBrowser } from "./browser";
-import { ARENA_CHAT_URL, arenaProfileDir, ARENA_SIGN_IN_ARGS } from "./session";
+import { ARENA_CHAT_URL, arenaProfileDir, arenaSignInArgs } from "./session";
 import { mkdirPrivate } from "../../config";
 
 /**
@@ -281,9 +281,12 @@ export async function signInWithRealBrowser(
       pick.executable,
       [
         `--user-data-dir=${dir}`,
-        ...ARENA_SIGN_IN_ARGS,
+        // Including the keystore flags that make this browser encrypt the
+        // profile the way the Playwright-launched driver will read it —
+        // without them a Mac's sign-in was written with the real Keychain
+        // key and the driver could not decrypt one cookie of it.
+        ...arenaSignInArgs(),
         "--new-window",
-        ...(process.platform === "linux" ? ["--password-store=basic"] : []),
         ARENA_CHAT_URL,
       ],
       { stdio: "ignore", windowsHide: false }

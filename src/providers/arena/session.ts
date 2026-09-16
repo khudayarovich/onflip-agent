@@ -77,6 +77,39 @@ export const ARENA_LAUNCH_ARGS = [
  */
 export const ARENA_SIGN_IN_ARGS = [...ARENA_BASE_ARGS];
 
+/**
+ * The sign-in browser must encrypt the profile the way the driver will.
+ *
+ * Arena is the first provider whose session lives in cookies, and cookie
+ * values are encrypted at rest with a key that depends on how the browser
+ * was started. Playwright launches every browser with `--use-mock-keychain`
+ * (macOS) and `--password-store=basic` (Linux) so automation never touches
+ * the real keystore — but the sign-in browser is spawned plain, so on a Mac
+ * it encrypted the session with the real Keychain key and the driver, keyed
+ * to the mock, could not decrypt a single cookie. Chromium DROPS cookies it
+ * cannot decrypt, so the account read as absent, and the driver's own
+ * writes were unreadable to the next sign-in window in turn — which purged
+ * them, and is why every attempt opened what looked like a brand-new
+ * browser.
+ *
+ * Windows never showed it: cookie keys there ride inside the profile via
+ * DPAPI, the same for both launches. And Qwen and DeepSeek never showed it
+ * anywhere, because their sessions are localStorage tokens and localStorage
+ * is not encrypted — which is exactly why this stayed invisible until the
+ * first cookie-session provider arrived.
+ *
+ * So: the two flags Playwright forces, mirrored onto the sign-in spawn, so
+ * both worlds share one key. A function of the platform rather than a
+ * constant, so the rule is testable on any OS.
+ */
+export function arenaSignInArgs(platform: NodeJS.Platform = process.platform): string[] {
+  return [
+    ...ARENA_SIGN_IN_ARGS,
+    ...(platform === "darwin" ? ["--use-mock-keychain"] : []),
+    ...(platform === "linux" ? ["--password-store=basic"] : []),
+  ];
+}
+
 /** The cookies an account has; either of them is a session. */
 const AUTH_COOKIE = /^arena-auth-prod-v/;
 /**
