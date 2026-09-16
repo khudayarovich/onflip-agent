@@ -320,34 +320,97 @@ export async function checkSignedIn(opts: OpenOptions & { tries?: number } = {})
  * mode that could not be switched is a turn answered oddly, which is worth a
  * log line and not worth failing a send over.
  */
+/**
+ * Choose a row of an open Arena menu by the text on it.
+ *
+ * The menus carried `role=option` when this driver was written, and that
+ * is still tried first. Arena has since rebuilt them: the rows are plain
+ * paragraphs inside a `[data-state=open]` portal, with no option role
+ * anywhere - measured on a live page, where the old scan found nothing and
+ * every fresh session stayed in Battle Mode because of it. The fallback
+ * finds the visible leaf whose text is the wanted line and clicks it with
+ * the mouse at its coordinates, because this menu selects on real pointer
+ * events rather than on a synthetic element.click().
+ */
+async function clickMenuRow(page: Page, wanted: string): Promise<boolean> {
+  for (const option of await page.$$("[role=option]")) {
+    const text = (await option.innerText().catch(() => "")).trim();
+    if (!text.split(String.fromCharCode(10)).some((line) => line.trim() === wanted)) continue;
+    await option.click({ timeout: 6_000 }).catch(() => {});
+    await page.waitForTimeout(800);
+    return true;
+  }
+  const spot = (await withTimeout(
+    page.evaluate(
+      `(() => {
+        for (const root of document.querySelectorAll('[data-state=open]')) {
+          for (const leaf of root.querySelectorAll('*')) {
+            if (leaf.children.length !== 0) continue;
+            if ((leaf.textContent || '').trim() !== ${JSON.stringify(wanted)}) continue;
+            if (!leaf.offsetWidth && !leaf.offsetHeight) continue;
+            const r = leaf.getBoundingClientRect();
+            return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+          }
+        }
+        return null;
+      })()`
+    ),
+    "finding the menu row"
+  ).catch(() => null)) as { x: number; y: number } | null;
+  if (!spot) return false;
+  await page.mouse.click(spot.x, spot.y);
+  await page.waitForTimeout(1_000);
+  return true;
+}
+
 export async function setDirectMode(page: Page): Promise<boolean> {
   try {
-    const already = await withTimeout(
-      page.evaluate(
-        `(() => [...document.querySelectorAll('[role=combobox]')].some(e => /^Direct/i.test((e.innerText||"").trim())))()`
-      ),
-      "reading the mode"
-    );
-    if (already) return true;
+    // A cold first load — fresh profile, no cache, Cloudflare handshake —
+    // paints the combobox seconds before it works. Clicking it then is a
+    // silent no-op, and one silent no-op here left every fresh session in
+    // Battle Mode: two anonymous answers the extractor cannot read, which
+    // surfaced as a turn stuck at "sending" forever. So the switch is
+    // retried on a page that has had another moment, rather than trusted
+    // to a single pass timed for a warm one.
+    await page.waitForSelector("[role=combobox]", { timeout: 12_000 }).catch(() => {});
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) await page.waitForTimeout(2_000);
+      const already = await withTimeout(
+        page.evaluate(
+          `(() => [...document.querySelectorAll('[role=combobox]')].some(e => /^Direct/i.test((e.innerText||"").trim())))()`
+        ),
+        "reading the mode"
+      );
+      if (already) return true;
 
-    // The control is rendered once per breakpoint and only one is clickable.
-    for (const combo of await page.$$("[role=combobox], button[aria-haspopup]")) {
-      const text = (await combo.innerText().catch(() => "")).trim();
-      if (!/Battle|Direct|Side by Side|Agent/i.test(text)) continue;
-      if (!(await combo.isVisible().catch(() => false))) continue;
-      await combo.click({ timeout: 8_000 }).catch(() => {});
-      break;
+      // The control is rendered once per breakpoint and only one is clickable.
+      for (const combo of await page.$$("[role=combobox], button[aria-haspopup]")) {
+        const text = (await combo.innerText().catch(() => "")).trim();
+        if (!/Battle|Direct|Side by Side|Agent/i.test(text)) continue;
+        if (!(await combo.isVisible().catch(() => false))) continue;
+        await combo.click({ timeout: 8_000 }).catch(() => {});
+        break;
+      }
+      await page.waitForTimeout(1_000);
+      if (!(await clickMenuRow(page, "Direct"))) {
+        logger.warn("arena", "could not find Direct in the mode menu", { attempt });
+        continue;
+      }
+      // Believe the control, not the click: the row was chosen by its
+      // coordinates, and a menu that moved would make this a silent no-op.
+      const now = (await withTimeout(
+        page.evaluate(
+          `(() => [...document.querySelectorAll('[role=combobox]')].some(e => /^Direct/i.test((e.innerText||"").trim())))()`
+        ),
+        "re-reading the mode"
+      ).catch(() => false)) as boolean;
+      if (now) {
+        logger.info("arena", "switched to Direct mode", { attempt });
+        return true;
+      }
+      logger.warn("arena", "clicked Direct but the mode did not change", { attempt });
     }
-    await page.waitForTimeout(1_000);
-    for (const option of await page.$$("[role=option]")) {
-      const text = (await option.innerText().catch(() => "")).trim();
-      if (!/^Direct/i.test(text)) continue;
-      await option.click({ timeout: 6_000 }).catch(() => {});
-      await page.waitForTimeout(1_200);
-      logger.info("arena", "switched to Direct mode");
-      return true;
-    }
-    logger.warn("arena", "could not find Direct in the mode menu");
+    logger.warn("arena", "the page never took the Direct switch; sending anyway");
     return false;
   } catch (e) {
     logger.warn("arena", "could not set the mode", {
@@ -416,13 +479,7 @@ export async function setModel(label: string): Promise<boolean> {
     }
     await page.waitForTimeout(1_000);
 
-    for (const option of await page.$$("[role=option]")) {
-      const text = (await option.innerText().catch(() => "")).trim();
-      // The option carries the vendor above the slug on some rows, so the
-      // slug is matched anywhere in it rather than as the whole string.
-      if (!text.split(String.fromCharCode(10)).some((line) => line.trim() === label)) continue;
-      await option.click({ timeout: 6_000 }).catch(() => {});
-      await page.waitForTimeout(800);
+    if (await clickMenuRow(page, label)) {
       logger.info("arena", "model chosen", { label });
       return true;
     }
@@ -478,6 +535,43 @@ export interface SendResult {
  * getting it wrong by one condition hands back an empty reply — which reads
  * downstream as a model that answered with nothing.
  */
+/**
+ * The dialog that eats a session's first message.
+ *
+ * Reported from a Mac as a turn stuck at "sending" forever, and reproduced
+ * on a fresh profile: pressing Send does not send. It opens Arena's Terms
+ * of Use dialog - "Agree" and "Close" - and holds the message, with the
+ * composer still full and no request made. A person sees the dialog and
+ * clicks; a headless driver sees nothing and waits for a reply that will
+ * never come. Profiles that agreed long ago never show it, which is why
+ * every turn on the machine this was built on kept working while every
+ * turn on a fresh sign-in hung.
+ *
+ * Clicking Agree posts the consent and the held send then proceeds by
+ * itself - measured: update-tou-consent, then the chat request, with no
+ * second press needed. Matched on the dialog's own words and the button's,
+ * scoped to the dialog so nothing else on the page can be clicked by it.
+ */
+export const ACCEPT_TERMS = `(() => {
+  for (const d of document.querySelectorAll('[role=dialog], [role=alertdialog], dialog')) {
+    if (!(d.innerText || "").includes("Terms of Use")) continue;
+    const agree = [...d.querySelectorAll("button")].find((b) => /agree/i.test(b.innerText || ""));
+    if (agree) { agree.click(); return true; }
+  }
+  return false;
+})()`;
+
+async function acceptTerms(page: Page): Promise<boolean> {
+  const clicked = (await withTimeout(page.evaluate(ACCEPT_TERMS), "answering the Terms dialog").catch(
+    () => false
+  )) as boolean;
+  if (!clicked) return false;
+  logger.info("arena", "accepted the Terms of Use dialog that held the send");
+  // The consent posts and the held message goes; give both a moment.
+  await page.waitForTimeout(1_500);
+  return true;
+}
+
 export async function sendTurn(
   text: string,
   opts: OpenOptions & {
@@ -566,11 +660,59 @@ export async function sendTurn(
       .catch((e: Error) => e.message.split(String.fromCharCode(10))[0].slice(0, 120));
     if (await landed()) return;
 
+    // A session's first send does not send: it opens the Terms of Use
+    // dialog and holds the message, and answering it is what lets go. The
+    // held send resumes on its own schedule, not the click's — measured a
+    // couple of seconds — so the check is a patient poll, not one look.
+    if (await acceptTerms(page)) {
+      for (let i = 0; i < 3; i++) {
+        if (await landed()) return;
+        await page.waitForTimeout(1_000);
+      }
+      // And when it does not resume — seen both ways on a live page — the
+      // message is still sitting in the composer, so press Send again.
+      await page.click(SEND_BUTTON, { timeout: 8_000 }).catch(() => {});
+      for (let i = 0; i < 3; i++) {
+        if (await landed()) return;
+        await page.waitForTimeout(1_000);
+      }
+    }
+
     // Enter, which is what a person presses.
     await page.keyboard.press("Enter").catch(() => {});
     if (await landed()) {
       logger.warn("arena", "the send button did not take; Enter did", { why });
       return;
+    }
+    // Once more before giving up: the dialog can arrive late, and throwing
+    // with it on screen turns a one-click formality into a failed turn.
+    if (await acceptTerms(page)) {
+      for (let i = 0; i < 6; i++) {
+        if (await landed()) return;
+        await page.waitForTimeout(1_000);
+      }
+    }
+    // A send that will not land has one more honest explanation: Arena has
+    // put Direct mode behind an account, and a signed-out session gets a
+    // "Log In or Create Account" dialog where its answer would be. Seen
+    // live the day this shipped. Named as what it is, because the generic
+    // failure below reads as a bug in the app and this one is a policy.
+    const wall = (await withTimeout(
+      page.evaluate(
+        `(() => {
+          for (const d of document.querySelectorAll('[role=dialog], dialog')) {
+            if (/log in or create account/i.test(d.innerText || '')) return true;
+          }
+          return false;
+        })()`
+      ),
+      "checking for a login wall"
+    ).catch(() => false)) as boolean;
+    if (wall) {
+      throw new ArenaError(
+        "Arena now asks for an account before it will answer here. Open Settings and sign in to Arena — a signed-out session has stopped being enough for it.",
+        "anonymous"
+      );
     }
     throw new ArenaError(
       `Arena would not accept the message${why ? ` (${why})` : ""}.`,
