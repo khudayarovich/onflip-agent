@@ -6,7 +6,7 @@ import { createHash } from "node:crypto";
 import { logger } from "../../log";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { checkSignedIn, closeBrowser } from "./browser";
-import { ARENA_CHAT_URL, arenaProfileDir, ARENA_LAUNCH_ARGS } from "./session";
+import { ARENA_CHAT_URL, arenaProfileDir, ARENA_SIGN_IN_ARGS } from "./session";
 import { mkdirPrivate } from "../../config";
 
 /**
@@ -281,7 +281,7 @@ export async function signInWithRealBrowser(
       pick.executable,
       [
         `--user-data-dir=${dir}`,
-        ...ARENA_LAUNCH_ARGS,
+        ...ARENA_SIGN_IN_ARGS,
         "--new-window",
         ...(process.platform === "linux" ? ["--password-store=basic"] : []),
         ARENA_CHAT_URL,

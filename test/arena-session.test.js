@@ -22,6 +22,7 @@ const {
   isUsableChatUrl,
   conversationIdFrom,
   ARENA_LAUNCH_ARGS,
+  ARENA_SIGN_IN_ARGS,
 } = require("../dist/providers/arena/session");
 
 const ACCOUNT = [{ name: "arena-auth-prod-v1.0" }, { name: "arena-auth-prod-v1.1" }, { name: "_ga" }];
@@ -88,7 +89,7 @@ test("a conversation id is read from the address", () => {
   assert.equal(conversationIdFrom("https://arena.ai/"), null);
 });
 
-test("the automation flag is not optional", () => {
+test("the automation flag is not optional for the driver", () => {
   // Without it Arena accepts the text, enables the send button, and then
   // posts nothing at all — no error, no request, nothing in the log.
   // Measured both ways: headless refused, headless with this landed in 1.5s.
@@ -96,4 +97,51 @@ test("the automation flag is not optional", () => {
     ARENA_LAUNCH_ARGS.includes("--disable-blink-features=AutomationControlled"),
     "the driver will hang on every turn without this"
   );
+});
+
+test("and it is forbidden in the window a person signs in through", () => {
+  // The exact opposite requirement, on the same profile, which is why these
+  // are two lists rather than one with a spread.
+  //
+  // Google refuses OAuth from a browser it can tell is automated, so the
+  // sign-in is a plain Chrome started the way a person starts one. Arena's
+  // spread the driver's args because they were there, and Chrome said so in
+  // a yellow bar: "You are using an unsupported command-line flag". Reported
+  // as a sign-in that never took and a fresh browser every time.
+  for (const arg of ARENA_SIGN_IN_ARGS) {
+    assert.ok(
+      !/automation|webdriver|blink-features|remote-debugging|headless/i.test(arg),
+      `the sign-in window must not be told it is automated, but got ${arg}`
+    );
+  }
+});
+
+test("the sign-in window is still an ordinary Chrome in the ways that matter", () => {
+  // The flags a person's browser wants, kept: no first-run wizard and no
+  // fight about the default browser. Dropping the automation flag must not
+  // quietly drop these too.
+  assert.ok(ARENA_SIGN_IN_ARGS.includes("--no-first-run"));
+  assert.ok(ARENA_SIGN_IN_ARGS.includes("--no-default-browser-check"));
+});
+
+test("no provider's sign-in borrows its driver's flags", () => {
+  // The general form of the bug, held across all three browser providers so
+  // the next one added cannot repeat it. DeepSeek's and Qwen's spell their
+  // flags out inline; this reads the source rather than the values, because
+  // what went wrong was a spread, not a string.
+  const fs = require("node:fs");
+  const path = require("node:path");
+  for (const provider of ["arena", "deepseek", "qwen"]) {
+    const file = path.join(__dirname, "..", "src", "providers", provider, "signin.ts");
+    if (!fs.existsSync(file)) continue;
+    const src = fs.readFileSync(file, "utf8");
+    assert.ok(
+      !/LAUNCH_ARGS/.test(src),
+      `${provider}'s sign-in spreads its driver's launch args; those carry automation flags`
+    );
+    assert.ok(
+      !/blink-features|--headless|remote-debugging/.test(src),
+      `${provider}'s sign-in passes an automation flag to a window a person signs in through`
+    );
+  }
 });

@@ -41,7 +41,15 @@ export const ARENA_ORIGIN = "https://arena.ai";
 export const ARENA_CHAT_URL = `${ARENA_ORIGIN}/`;
 
 /**
- * The flag without which nothing sends.
+ * What any Chrome OnFlip starts on this profile gets: nothing opinionated.
+ *
+ * Kept separate from the driver's flags below, and the separation is the
+ * point — see `ARENA_SIGN_IN_ARGS`.
+ */
+const ARENA_BASE_ARGS = ["--no-first-run", "--no-default-browser-check"];
+
+/**
+ * The driver's flags, including the one without which nothing sends.
  *
  * Arena reads `navigator.webdriver`. With it set, the composer accepts text
  * and the send button enables and then does nothing at all: no chat request
@@ -49,10 +57,25 @@ export const ARENA_CHAT_URL = `${ARENA_ORIGIN}/`;
  * both ways — headless refused, headless with this flag landed in 1.5s.
  */
 export const ARENA_LAUNCH_ARGS = [
-  "--no-first-run",
-  "--no-default-browser-check",
+  ...ARENA_BASE_ARGS,
   "--disable-blink-features=AutomationControlled",
 ];
+
+/**
+ * What the sign-in window gets, which is emphatically NOT the above.
+ *
+ * The sign-in is an ordinary Chrome, started the way a person starts one,
+ * because Google refuses OAuth from a browser it can tell is automated. So
+ * handing that window the driver's automation flag defeats the entire reason
+ * the sign-in is a separate browser in the first place — and Chrome says so
+ * out loud, in a yellow bar reading *"You are using an unsupported
+ * command-line flag"*, which is how this was found.
+ *
+ * Arena was the only provider that did this. DeepSeek's and Qwen's sign-ins
+ * spell their flags out and never borrowed the driver's; Arena's spread
+ * `ARENA_LAUNCH_ARGS` because it was there.
+ */
+export const ARENA_SIGN_IN_ARGS = [...ARENA_BASE_ARGS];
 
 /** The cookies an account has; either of them is a session. */
 const AUTH_COOKIE = /^arena-auth-prod-v/;
