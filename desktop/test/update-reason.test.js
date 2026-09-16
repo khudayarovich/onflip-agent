@@ -104,3 +104,14 @@ test("an error outranks the other two", { skip: needsBuild }, () => {
   const why = whyNotInstallable({ error: "socket hang up", available: false, installable: undefined });
   assert.match(why, /socket hang up/);
 });
+
+test("a release still being published is named as that, not as anything else", { skip: needsBuild }, () => {
+  // During the upload window the older answers were both lies: "no newer
+  // release" stops somebody looking, and "no build for this platform" sends
+  // them hunting for an artifact that is minutes from existing.
+  const whyNotInstallable = load();
+  const why = whyNotInstallable({ available: false, pending: "9.9.9" });
+  assert.match(why, /9\.9\.9/);
+  assert.match(why, /still being published/);
+  assert.match(why, /try again/);
+});

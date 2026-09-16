@@ -27,6 +27,15 @@ export interface UpdateInfo {
   url: string;
   /** True only when `latest` is genuinely newer than what is running. */
   available: boolean;
+  /**
+   * A newer version exists but its build for this machine is not uploaded
+   * yet, so nothing can be offered. The release appears on GitHub minutes
+   * before its artifacts do — each platform's build uploads when it
+   * finishes — and during that window the app used to show an update button
+   * whose click could only open the release page, where the file was
+   * missing too. The next check finds the finished release.
+   */
+  pending?: string;
   /** Set when the check could not be made at all, e.g. no network. */
   error?: string;
   /**
@@ -55,11 +64,15 @@ export interface UpdateInfo {
  * missing artifact that is sitting right there in the release.
  */
 export function whyNotInstallable(
-  info: Pick<UpdateInfo, "error" | "available" | "installable">,
+  info: Pick<UpdateInfo, "error" | "available" | "installable" | "pending">,
   platform: string = process.platform,
   arch: string = process.arch
 ): string | null {
   if (info.error) return `the update check failed: ${info.error}`;
+  // Distinct from "no newer release", which it is the opposite of: the
+  // release exists and its files are still uploading. Told "you are
+  // current", somebody stops looking; told this, they know to come back.
+  if (info.pending) return `version ${info.pending} is still being published; try again in a few minutes`;
   if (!info.available) return "no newer release was found";
   if (!info.installable) return `this release has no build for ${platform}/${arch}`;
   return null;
@@ -150,6 +163,30 @@ export function installableAssetFor(
 }
 
 /**
+ * Is this release finished being published, as far as this machine cares?
+ *
+ * A release and its artifacts do not appear together: the release exists on
+ * GitHub the moment the first platform's build finishes, and the other
+ * platform's files land minutes later. Reported exactly as that reads from
+ * the outside — the app announced an update whose button could only open a
+ * release page with the file still missing from it.
+ *
+ * On the platforms with automatic installs, done means this machine's
+ * artifact is uploaded AND the checksum list beside it. Every release ships
+ * that list, and the verifier only waves a download through unchecked when
+ * a release has none — a tolerance meant for old releases, which a
+ * half-uploaded new one should not slip through on. Anywhere else there is
+ * never an artifact to wait for, and the old rule stands.
+ */
+export function releaseReadyFor(
+  installable: { sumsUrl?: string } | undefined,
+  platform: string = process.platform
+): boolean {
+  if (platform !== "win32" && platform !== "darwin") return true;
+  return Boolean(installable?.sumsUrl);
+}
+
+/**
  * Ask GitHub what the latest release is.
  *
  * Uses Electron's own network stack rather than `fetch` so it follows the
@@ -198,12 +235,16 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
 
     const release = JSON.parse(body) as GitHubRelease;
     const latest = release.tag_name ? versionOf(release.tag_name) : undefined;
+    const newer = Boolean(latest && !release.draft && !release.prerelease && isNewer(latest, current));
+    const installable = installableAssetFor(release);
+    const complete = releaseReadyFor(installable);
     return {
       current,
       latest,
       url: assetFor(release) ?? release.html_url ?? RELEASES_PAGE,
-      available: Boolean(latest && !release.draft && !release.prerelease && isNewer(latest, current)),
-      installable: installableAssetFor(release),
+      available: newer && complete,
+      pending: newer && !complete ? latest : undefined,
+      installable,
     };
   } catch (e) {
     // A failed check is not worth a dialog. It is worth saying so in About,

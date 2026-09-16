@@ -30,6 +30,8 @@ export interface OnFlipBridge {
     latest?: string;
     url: string;
     available: boolean;
+    /** A newer release whose build for this machine is still uploading. */
+    pending?: string;
     error?: string;
   }>;
   openRelease(url: string): Promise<boolean>;

@@ -9,7 +9,15 @@ import { ChatGptMark, DeepSeekMark, QwenMark } from "./icons";
 type CheckState =
   | { state: "idle" }
   | { state: "checking" }
-  | { state: "done"; latest?: string; url: string; available: boolean; error?: string };
+  | {
+      state: "done";
+      latest?: string;
+      url: string;
+      available: boolean;
+      /** A newer release whose build for this machine is still uploading. */
+      pending?: string;
+      error?: string;
+    };
 
 /**
  * The About page: what OnFlip is, why it costs nothing beyond the chat
@@ -76,6 +84,7 @@ export function AboutModal({
                     latest: info.latest,
                     url: info.url,
                     available: info.available,
+                    pending: info.pending,
                     error: info.error,
                   })
                 )
@@ -87,7 +96,26 @@ export function AboutModal({
             {check.state === "checking" ? t("updateChecking") : t("updateCheck")}
           </button>
           {check.state === "done" && check.available && (
-            <button className="about-btn primary" onClick={() => void window.onflip.openRelease(check.url)}>
+            <button
+              className="about-btn primary"
+              onClick={() => {
+                // The same path as the banner: download and install in
+                // place, with the release page only as the fallback. This
+                // button used to open GitHub every time, which read as the
+                // updater being broken from the one page people check it on.
+                const fallBack = () => void window.onflip.openRelease(check.url);
+                if (typeof window.onflip.startUpdate !== "function") {
+                  fallBack();
+                  return;
+                }
+                void window.onflip
+                  .startUpdate()
+                  .then((r) => {
+                    if (!r.started) fallBack();
+                  })
+                  .catch(() => fallBack());
+              }}
+            >
               {t("updateGet")}
             </button>
           )}
@@ -96,9 +124,11 @@ export function AboutModal({
           <p className="about-limits-note">
             {check.error
               ? t("updateFailed")
-              : check.available
-                ? t("updateAvailable", { version: check.latest ?? "", current: version })
-                : t("updateCurrent")}
+              : check.pending
+                ? t("updatePending", { version: check.pending })
+                : check.available
+                  ? t("updateAvailable", { version: check.latest ?? "", current: version })
+                  : t("updateCurrent")}
           </p>
         )}
       </div>

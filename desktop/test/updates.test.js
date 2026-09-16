@@ -165,3 +165,82 @@ test("double-digit patches sort numerically, not as text", { skip: needsBuild },
   assert.equal(isNewer("0.8.9", "0.8.10"), false);
   assert.equal(isNewer("0.10.0", "0.9.0"), true);
 });
+
+// ---------------------------------------------------------------------------
+// when a release is finished enough to offer
+// ---------------------------------------------------------------------------
+
+/**
+ * The release as it looks DURING publishing: it exists, one platform's
+ * files are up, this platform's are not. Reported from a Mac in exactly
+ * that window — the app announced an update whose button could only open a
+ * release page the .dmg was missing from.
+ */
+const HALF_PUBLISHED = {
+  tag_name: "desktop-v9.9.9",
+  assets: [
+    { name: "OnFlip-Setup-9.9.9.exe", browser_download_url: "https://x/setup.exe" },
+    { name: "SHA256SUMS-windows.txt", browser_download_url: "https://x/sums-win" },
+  ],
+};
+
+test("a release whose build for this machine is missing is not ready", { skip: needsBuild }, () => {
+  onPlatform("darwin", "arm64", (u) => {
+    const installable = u.installableAssetFor(HALF_PUBLISHED);
+    assert.equal(installable, undefined);
+    assert.equal(u.releaseReadyFor(installable), false, "nothing to install means nothing to offer");
+  });
+});
+
+test("an artifact without its checksum list is still uploading", { skip: needsBuild }, () => {
+  // The files land one by one, and the verifier only skips checking when a
+  // release has no list at all — a tolerance for old releases that a
+  // half-published new one must not ride through on.
+  const zipOnly = {
+    tag_name: "desktop-v9.9.9",
+    assets: [{ name: "OnFlip-9.9.9-mac-arm64.zip", browser_download_url: "https://x/arm64.zip" }],
+  };
+  onPlatform("darwin", "arm64", (u) => {
+    assert.equal(u.releaseReadyFor(u.installableAssetFor(zipOnly)), false);
+  });
+});
+
+test("artifact plus checksums is ready, on both installing platforms", { skip: needsBuild }, () => {
+  const full = {
+    tag_name: "desktop-v9.9.9",
+    assets: [
+      { name: "OnFlip-Setup-9.9.9.exe", browser_download_url: "https://x/setup.exe" },
+      { name: "SHA256SUMS-windows.txt", browser_download_url: "https://x/sums-win" },
+      { name: "OnFlip-9.9.9-mac-arm64.zip", browser_download_url: "https://x/arm64.zip" },
+      { name: "SHA256SUMS-macos.txt", browser_download_url: "https://x/sums-mac" },
+    ],
+  };
+  onPlatform("win32", "x64", (u) => {
+    assert.equal(u.releaseReadyFor(u.installableAssetFor(full)), true);
+  });
+  onPlatform("darwin", "arm64", (u) => {
+    assert.equal(u.releaseReadyFor(u.installableAssetFor(full)), true);
+  });
+});
+
+test("a platform that never gets an artifact is not held hostage by the rule", { skip: needsBuild }, () => {
+  // Linux has no build in any release; requiring one would mean updates are
+  // never offered there at all.
+  onPlatform("linux", "x64", (u) => {
+    assert.equal(u.releaseReadyFor(undefined), true);
+  });
+});
+
+test("the About page installs in place rather than opening GitHub", { skip: needsBuild }, () => {
+  // The second half of the same report: the About page's update button
+  // opened the release page every time, which read as the updater being
+  // broken from the one page people check it on. Held against the source —
+  // the button must go through start-update and keep the page as fallback.
+  const about = fs.readFileSync(
+    path.join(__dirname, "..", "ui", "src", "components", "AboutModal.tsx"),
+    "utf8"
+  );
+  assert.ok(about.includes("startUpdate()"), "the About button must use the installer path");
+  assert.ok(about.includes("openRelease(check.url)"), "with the release page kept as the fallback");
+  assert.ok(about.includes("updatePending"), "and the still-publishing window named honestly");
+});
