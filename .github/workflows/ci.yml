@@ -59,7 +59,10 @@ jobs:
 
       # The desktop package depends on the engine through `file:..`, so the
       # engine has to be installed and built before it can be typechecked.
-      - run: npm ci --ignore-scripts
+      # Desktop usage tests exercise the native SQLite store, so this job
+      # must install better-sqlite3's platform binding. The engine matrix
+      # above still skips scripts because it never loads that binding.
+      - run: npm ci
       - run: npm run build
 
       - name: install desktop dependencies
