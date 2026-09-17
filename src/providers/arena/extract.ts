@@ -51,7 +51,20 @@ export const EXTRACT_REPLY = `(() => {
   // parroted the user.
   const replies = [...area.querySelectorAll(${JSON.stringify(ASSISTANT_SELECTOR)})]
     .filter((p) => !p.closest(${JSON.stringify(USER_SELECTOR)}));
-  const last = replies[replies.length - 1];
+  // "The last reply" is a visual fact, not a DOM one. The conversation page
+  // lays the thread out column-reverse, so DOM order is newest-FIRST there
+  // - measured mid-thread: dos, dos, user, uno, uno, user - while other
+  // layouts run oldest-first. What holds everywhere is geometry: the newest
+  // message sits at the bottom of the screen. So the reply with the
+  // greatest top edge wins, skipping the zero-sized duplicate copies the
+  // page keeps for measurement.
+  let last = null, lastTop = -Infinity;
+  for (const p of replies) {
+    const r = p.getBoundingClientRect();
+    if (r.width === 0 && r.height === 0) continue;
+    if (r.top >= lastTop) { lastTop = r.top; last = p; }
+  }
+  if (!last) last = replies[replies.length - 1];
   return {
     text: last ? (last.innerText || "") : "",
     count: replies.length,

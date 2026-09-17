@@ -55,14 +55,29 @@ test("every browser provider is named in the ceiling table", () => {
   }
 });
 
-test("one-shot is a single switch, with its cost written down", () => {
-  // It is meant to be undone once a second turn is shown to work, so it has
-  // to be one line and it has to say what it is for.
-  assert.match(TRANSPORT, /const ONE_SHOT = true;/);
+test("multi-turn is on, and the one-shot crutch stayed a single switch", () => {
+  // This test used to pin ONE_SHOT = true, and failed the moment the flip
+  // happened - exactly its job. The flip is now deliberate and measured:
+  // two turns into one conversation, the second carrying only its delta
+  // and answering in under four seconds. One-shot had grown expensive in
+  // ways nobody priced in - the whole transcript per turn, and a
+  // conversation-creation rate that pulled Cloudflare's captcha onto every
+  // message on watched networks.
+  assert.match(TRANSPORT, /const ONE_SHOT = false;/);
+  // The switch and its machinery stay, because Arena has changed its rules
+  // four times in one week and the way back must remain one line.
   assert.match(TRANSPORT, /if \(ONE_SHOT\) \{/);
-  // And the reasoning, because the next person will want to know why a
-  // provider throws away its own thread every turn.
   const doc = TRANSPORT.slice(0, TRANSPORT.indexOf("const ONE_SHOT"));
-  assert.match(doc, /fresh conversation for every turn/i);
-  assert.match(doc, /paceNewChat|conversation per turn/i);
+  assert.match(doc, /measured working/i);
+  assert.match(doc, /captcha/i);
+});
+
+test("a thread start takes the full new-chat opening", () => {
+  // The first multi-turn send raced a page that was still hydrating and
+  // died; one-shot never saw it because resetChat gave every turn the
+  // settled opening. A thread START still needs exactly that.
+  const at = TRANSPORT.indexOf("if (!currentConversationId())");
+  assert.ok(at > 0, "the thread-start check has moved");
+  const block = TRANSPORT.slice(at, at + 220);
+  assert.match(block, /resetChat\(\)/, "a new thread must open like a new chat");
 });

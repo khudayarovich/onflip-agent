@@ -36,34 +36,22 @@ import {
 let contractChecked = false;
 
 /**
- * Arena starts a fresh conversation for every turn.
+ * Whether every turn opens a fresh conversation.
  *
- * Not because that is better — it is worse in every measurable way — but
- * because a second turn in one thread is not yet proved to work here, and
- * the first turn is. A provider that answers reliably and expensively beats
- * one that answers cheaply and sometimes.
+ * False at last. One-shot was a crutch from the day a second turn was
+ * unverified, and it grew expensive in ways nobody priced in at the time:
+ * the whole transcript re-sent per turn, a conversation-creation rate that
+ * pulled Cloudflare's captcha onto EVERY message on watched networks, and
+ * a fresh model roll from Arena's router each time.
  *
- * What it costs, stated plainly so nobody has to rediscover it:
- *
- *   The whole transcript goes out each turn instead of only what is new.
- *   Real sessions were measured at twenty-six to twenty-nine thousand
- *   characters, so this is roughly an order of magnitude more per turn — on
- *   a provider chosen for its allowance, which is the irony of it.
- *
- *   A conversation per turn meets `paceNewChat`, which stretches the gap
- *   after ten in an hour and caps it at thirty seconds. A long agent run
- *   will feel that, and the throttle is doing its job: services watch
- *   conversation-creation rate, and Arena sits behind Cloudflare.
- *
- *   And one message has to hold the whole transcript, so a long session
- *   compacts sooner than it otherwise would.
- *
- * One line to undo. When a second turn is shown to work — the likeliest
- * remaining cause is a thirty-second focus timeout that has since been
- * fixed, which made every second turn look dead — this becomes false and
- * the transport resumes sending deltas.
+ * Multi-turn is now measured working: two turns into one conversation,
+ * the second carrying only its delta and answering in under four seconds.
+ * What made it possible is in the driver - the newest reply found by
+ * geometry rather than DOM order (the thread renders column-reverse), the
+ * Direct-mode switch retired from the send path, and thread starts taking
+ * the full new-chat settle below.
  */
-const ONE_SHOT = true;
+const ONE_SHOT = false;
 
 export class ArenaTransport implements Transport {
   readonly name = "browser" as const;
@@ -72,8 +60,15 @@ export class ArenaTransport implements Transport {
 
   async send(history: ChatMessage[], opts: SendOptions): Promise<TransportReply> {
     // A thread that went away — a crash, a reset, a first run — has seen
-    // nothing, so the whole transcript goes out again.
-    if (!currentConversationId()) this.sentThrough = 0;
+    // nothing, so the whole transcript goes out again. And the page gets
+    // the full new-chat opening: navigate to the root, wait out the
+    // composer, breathe. One-shot mode ran that path on every turn, which
+    // is why every turn worked; the first multi-turn send skipped it and
+    // raced a page that was still hydrating.
+    if (!currentConversationId()) {
+      this.sentThrough = 0;
+      resetChat();
+    }
     // And in one-shot mode every turn is that case on purpose.
     if (ONE_SHOT) {
       this.sentThrough = 0;

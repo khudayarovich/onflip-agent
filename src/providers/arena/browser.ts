@@ -519,6 +519,15 @@ export async function setDirectMode(page: Page): Promise<boolean> {
         "re-reading the mode"
       ).catch(() => false)) as boolean;
       if (now) {
+        // Choosing Direct navigates - /text/direct on a fresh session - and
+        // a send raced against that navigation lands on a page being torn
+        // down. Measured: the composer fill three seconds after the switch
+        // failed the whole turn. So the new page is waited out here, where
+        // the navigation belongs, not in every caller.
+        await page.waitForTimeout(1_500);
+        await page
+          .waitForSelector(COMPOSER, { timeout: 15_000 })
+          .catch(() => logger.warn("arena", "no composer after the Direct switch"));
         logger.info("arena", "switched to Direct mode", { attempt });
         return true;
       }
@@ -567,6 +576,10 @@ export async function setModel(label: string): Promise<boolean> {
   if (!label) return false;
   try {
     const page = await chatPage();
+    // The same patience the mode switch needed: a cold page paints its
+    // comboboxes seconds before they answer, and asking at one second old
+    // read as "the picker would not open" on every first turn.
+    await page.waitForSelector("[role=combobox]", { timeout: 12_000 }).catch(() => {});
     const already = await withTimeout(
       page.evaluate(
         `(() => [...document.querySelectorAll('[role=combobox]')].some(e => (e.innerText||"").trim().split(String.fromCharCode(10))[0] === ${JSON.stringify(label)}))()`
@@ -711,9 +724,14 @@ export async function sendTurn(
     await page.waitForTimeout(1_200);
   }
 
-  // Battle Mode answers twice, anonymously. One answer from a named model is
-  // the only thing an agent can use.
-  await setDirectMode(page);
+  // The Direct-mode switch is deliberately NOT made here any more. Three
+  // facts, all measured on live pages the same evening: a signed-in root
+  // whose picker reads "Battle Mode" still answers sends with one
+  // extractable reply; choosing Direct navigates the page and a send raced
+  // against that navigation dies; and a signed-out session is login-walled
+  // out of Direct regardless. So the switch had become all cost - it was
+  // killing exactly the turns it was meant to protect. `setDirectMode`
+  // stays for the day the label starts meaning what it says again.
   // Never begin behind the previous answer.
   await settlePage(page);
 
