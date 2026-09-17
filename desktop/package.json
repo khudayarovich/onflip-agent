@@ -1,6 +1,6 @@
 {
   "name": "onflip-desktop",
-  "version": "0.10.49",
+  "version": "0.10.50",
   "private": true,
   "description": "OnFlip Desktop — your agent for coding and daily tasks, in a native window",
   "author": "Farrukh Khudayarovich Yuldashev",
@@ -80,15 +80,14 @@
     }
   },
   "dependencies": {
-    "diff": "^7.0.0",
+    "diff": "^9.0.0",
     "onflip": "file:.."
   },
   "devDependencies": {
-    "@types/diff": "^6.0.0",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@vitejs/plugin-react": "^4.3.4",
-    "electron": "^33.2.0",
+    "electron": "^42.11.4",
     "electron-builder": "^26.15.3",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",

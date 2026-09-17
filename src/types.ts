@@ -61,12 +61,27 @@ export interface ToolResult {
   timedOut?: boolean;
 }
 
+/** Filesystem identity captured around a write, including symlink targets. */
+export interface FileRevision {
+  exists: boolean;
+  contents: string | null;
+  pathIdentity: string | null;
+  targetIdentity: string | null;
+  ancestorIdentity: string | null;
+}
+
+export type FileIdentity = Omit<FileRevision, "contents">;
+
 /** Snapshot of a file taken before a tool mutated it, enabling /undo. */
 export interface FileSnapshot {
   path: string;
   /** Null when the file did not exist before the change. */
   before: string | null;
   after: string | null;
+  /** Identity immediately after the write, so Undo cannot clobber a later edit. */
+  afterRevision?: FileIdentity;
+  /** Capturing the post-write identity failed; Undo must refuse this snapshot. */
+  revisionUnavailable?: boolean;
   /** The contents were deliberately omitted from persisted session data. */
   contentsOmitted?: boolean;
   tool: string;

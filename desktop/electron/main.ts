@@ -78,6 +78,7 @@ import {
 } from "onflip/dist/providers/id";
 import { saveConfig } from "onflip/dist/config";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
+import { writeJsonFile } from "./persistence";
 
 /**
  * The Electron main process is deliberately thin: it owns windows and their
@@ -556,8 +557,7 @@ function loadState(): DesktopState {
 
 function saveState(patch: Partial<DesktopState>): void {
   try {
-    fs.mkdirSync(app.getPath("userData"), { recursive: true });
-    fs.writeFileSync(stateFile(), JSON.stringify({ ...loadState(), ...patch }, null, 2));
+    writeJsonFile(stateFile(), { ...loadState(), ...patch });
   } catch {
     /* best-effort */
   }

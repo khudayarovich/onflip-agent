@@ -327,7 +327,11 @@ function scopeOf(raw: { provider?: unknown }): ProviderId {
   return isProviderId(raw?.provider) ? raw.provider : DEFAULT_PROVIDER;
 }
 
-const CONFIG_DIR = path.join(os.homedir(), ".onflip");
+// An explicit location makes isolated integration tests and portable installs
+// possible without impersonating a user's HOME/USERPROFILE.
+const CONFIG_DIR = process.env.ONFLIP_CONFIG_DIR
+  ? path.resolve(process.env.ONFLIP_CONFIG_DIR)
+  : path.join(os.homedir(), ".onflip");
 const CONFIG_PATH = path.join(CONFIG_DIR, "config.json");
 
 export function configDir(): string {

@@ -1,8 +1,9 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ToolDefinition, ToolContext, FileSnapshot } from "../types";
+import { ToolDefinition, ToolContext, FileSnapshot, FileRevision } from "../types";
 import { err, ok, denied, asNumber, asBool, asArray, resolveIn, relative, isProbablyBinary, IGNORED_DIRS } from "./util";
 import { applyPatch } from "./patch-apply";
+import { captureFileRevision, sameFileRevision } from "./revision";
 
 const MAX_READ_BYTES = 400_000;
 const MAX_READ_LINES = 2_000;
@@ -136,90 +137,32 @@ function snapshot(
   after: string | null,
   tool: string
 ): void {
-  const entry: FileSnapshot = { path: file, before, after, tool, at: Date.now() };
-  ctx.session.snapshots.push(entry);
-}
-
-interface FileRevision {
-  exists: boolean;
-  contents: string | null;
-  pathIdentity: string | null;
-  targetIdentity: string | null;
-  ancestorIdentity: string | null;
-}
-
-function statIdentity(stat: fs.Stats): string {
-  return [stat.dev, stat.ino, stat.mode, stat.size, stat.mtimeMs, stat.ctimeMs].join(":");
-}
-
-function objectIdentity(stat: fs.Stats): string {
-  return [stat.dev, stat.ino, stat.mode, stat.birthtimeMs].join(":");
-}
-
-function nearestExistingAncestorIdentity(file: string): string {
-  let candidate = path.dirname(file);
-  for (;;) {
-    let entry: fs.Stats;
-    try {
-      entry = fs.lstatSync(candidate);
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
-      const parent = path.dirname(candidate);
-      if (parent === candidate) throw new Error(`no existing ancestor for ${file}`);
-      candidate = parent;
-      continue;
-    }
-    try {
-      const target = fs.statSync(candidate);
-      return `${candidate}|${objectIdentity(entry)}|${objectIdentity(target)}`;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-        // A dangling symlink is still a path component whose identity matters.
-        return `${candidate}|${objectIdentity(entry)}|dangling`;
-      }
-      throw e;
-    }
-  }
-}
-
-/** Capture both the directory entry and followed target, plus its contents. */
-function captureFileRevision(file: string): FileRevision {
-  let entry: fs.Stats;
+  let afterRevision;
+  let revisionUnavailable: true | undefined;
   try {
-    entry = fs.lstatSync(file);
-  } catch (e) {
-    if ((e as NodeJS.ErrnoException).code === "ENOENT") {
-      return {
-        exists: false,
-        contents: null,
-        pathIdentity: null,
-        targetIdentity: null,
-        ancestorIdentity: nearestExistingAncestorIdentity(file),
-      };
-    }
-    throw e;
+    const { contents: _contents, ...identity } = captureFileRevision(file);
+    afterRevision = identity;
+  } catch {
+    // The write already succeeded. A concurrent replacement should not turn
+    // that success into a tool failure; Undo will conservatively refuse it.
+    revisionUnavailable = true;
   }
-  const target = fs.statSync(file);
-  if (!target.isFile()) throw new Error("path is not a regular file");
-  return {
-    exists: true,
-    contents: fs.readFileSync(file, "utf8"),
-    pathIdentity: statIdentity(entry),
-    targetIdentity: statIdentity(target),
-    ancestorIdentity: null,
+  const entry: FileSnapshot = {
+    path: file,
+    before,
+    after,
+    afterRevision,
+    revisionUnavailable,
+    tool,
+    at: Date.now(),
   };
+  ctx.session.snapshots.push(entry);
 }
 
 function changedDuringApproval(file: string, before: FileRevision): boolean {
   try {
     const current = captureFileRevision(file);
-    return (
-      current.exists !== before.exists ||
-      current.contents !== before.contents ||
-      current.pathIdentity !== before.pathIdentity ||
-      current.targetIdentity !== before.targetIdentity ||
-      current.ancestorIdentity !== before.ancestorIdentity
-    );
+    return !sameFileRevision(current, before);
   } catch {
     // Becoming unreadable, a dangling symlink, or another non-file state is a
     // change too. Never turn a failed revalidation into permission to write.

@@ -27,6 +27,7 @@ import { arrivalPrompt, inboxTarget, TELEGRAM_DOWNLOAD_MAX } from "../shared/inb
 import { serviceLabel } from "../shared/providers";
 import type { ApprovalMode } from "../shared/protocol";
 import { isOffered } from "../shared/approval";
+import { writeJsonFile } from "./persistence";
 
 /**
  * Driving OnFlip from a phone.
@@ -219,26 +220,15 @@ export function loadTelegram(): void {
 
 function persist(): void {
   try {
-    fs.mkdirSync(app.getPath("userData"), { recursive: true });
-    fs.writeFileSync(
-      file(),
-      JSON.stringify(
-        {
-          enabled: settings.enabled,
-          allowedIds: settings.allowedIds,
-          chats: [...chats],
-          ...encode(settings.token),
-        },
-        null,
-        2
-      ),
-      // 0600, because this file can hold a Telegram bot token in the clear
-      // when the system has no encrypted storage - and a bot token is full
-      // control of that bot, including every message routed through it.
-      // Without a mode this landed at 0644: world-readable, which is exactly
-      // what the plaintext fallback assumed was not the case.
-      { mode: 0o600 }
-    );
+    writeJsonFile(file(), {
+      enabled: settings.enabled,
+      allowedIds: settings.allowedIds,
+      chats: [...chats],
+      ...encode(settings.token),
+    });
+    // This file can hold a Telegram bot token in clear text when encrypted
+    // storage is unavailable. Atomic writes already create it as 0600; chmod
+    // also repairs permissions left by older releases.
     // writeFileSync only applies its mode when it creates the file, so an
     // install that already has a 0644 one from an earlier build keeps it
     // until this runs.

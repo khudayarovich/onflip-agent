@@ -1,9 +1,9 @@
 import { app } from "electron";
-import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
 import { cronError, describeCron, nextRunOf } from "../shared/cron";
 import type { ScheduleDTO } from "../shared/protocol";
+import { isMissingFile, preserveCorruptFile, readJsonFile, writeJsonFile } from "./persistence";
 
 /**
  * Prompts that send themselves, on a schedule.
@@ -51,8 +51,11 @@ export interface StoredSchedule {
 let schedules: StoredSchedule[] = [];
 let timer: ReturnType<typeof setInterval> | null = null;
 let loaded = false;
+let persistenceError: string | null = null;
+let persistenceBlocked = false;
 /** Minutes already fired, so a tick landing twice in one minute cannot double-send. */
 const firedAt = new Map<string, number>();
+let tickInFlight: Promise<void> | null = null;
 
 function file(): string {
   return path.join(app.getPath("userData"), "schedules.json");
@@ -62,13 +65,18 @@ function load(): void {
   if (loaded) return;
   loaded = true;
   try {
-    // A byte-order mark is not JSON, and every Windows tool that has ever
-    // rewritten a file by hand leaves one.
-    const raw = fs.readFileSync(file(), "utf8").replace(/^﻿/, "");
-    const parsed = JSON.parse(raw) as unknown;
+    const parsed = readJsonFile(file());
     schedules = Array.isArray(parsed) ? (parsed as StoredSchedule[]).filter(valid) : [];
-  } catch {
+    if (!Array.isArray(parsed)) throw new Error("the schedules file is not an array");
+    persistenceError = null;
+    persistenceBlocked = false;
+  } catch (e) {
     schedules = [];
+    if (!isMissingFile(e)) {
+      persistenceError = "The schedules file is unreadable. It was preserved and will not be overwritten.";
+      persistenceBlocked = true;
+      preserveCorruptFile(file(), "schedules", e);
+    }
   }
 }
 
@@ -77,12 +85,16 @@ function valid(s: unknown): s is StoredSchedule {
   return Boolean(o && typeof o.id === "string" && typeof o.prompt === "string" && typeof o.cron === "string");
 }
 
-function persist(): void {
+function persist(): boolean {
+  if (persistenceBlocked) return false;
   try {
-    fs.mkdirSync(app.getPath("userData"), { recursive: true });
-    fs.writeFileSync(file(), JSON.stringify(schedules, null, 2));
-  } catch {
-    /* best-effort: a schedule that cannot be saved still runs this session */
+    writeJsonFile(file(), schedules);
+    persistenceError = null;
+    return true;
+  } catch (e) {
+    persistenceError = `Schedules could not be saved: ${e instanceof Error ? e.message : String(e)}`;
+    console.warn(`[schedules] ${persistenceError}`);
+    return false;
   }
 }
 
@@ -131,7 +143,10 @@ export function createSchedule(input: {
     createdAt: Date.now(),
   };
   schedules.push(schedule);
-  persist();
+  if (!persist()) {
+    schedules.pop();
+    return { ok: false, error: persistenceError ?? "Schedules could not be saved." };
+  }
   return { ok: true, schedule: toDTO(schedule) };
 }
 
@@ -142,6 +157,7 @@ export function updateSchedule(
   load();
   const schedule = schedules.find((s) => s.id === id);
   if (!schedule) return { ok: false, error: "That schedule is gone." };
+  const previous = { ...schedule };
   if (patch.cron !== undefined) {
     const bad = cronError(patch.cron);
     if (bad) return { ok: false, error: bad };
@@ -153,17 +169,24 @@ export function updateSchedule(
     schedule.prompt = prompt;
   }
   if (patch.enabled !== undefined) schedule.enabled = patch.enabled;
-  persist();
+  if (!persist()) {
+    Object.assign(schedule, previous);
+    return { ok: false, error: persistenceError ?? "Schedules could not be saved." };
+  }
   return { ok: true, schedule: toDTO(schedule) };
 }
 
 export function deleteSchedule(id: string): boolean {
   load();
-  const before = schedules.length;
+  const previous = schedules;
+  const before = previous.length;
   schedules = schedules.filter((s) => s.id !== id);
   if (schedules.length === before) return false;
   firedAt.delete(id);
-  persist();
+  if (!persist()) {
+    schedules = previous;
+    return false;
+  }
   return true;
 }
 
@@ -245,7 +268,7 @@ export function stopScheduler(): void {
   timer = null;
 }
 
-async function tick(): Promise<void> {
+async function runTick(): Promise<void> {
   load();
   const now = Date.now();
   const { run, missed } = due(schedules, now, firedAt);
@@ -261,6 +284,19 @@ async function tick(): Promise<void> {
   for (const schedule of run) {
     firedAt.set(schedule.id, now);
     schedule.lastRunAt = now;
+  }
+  // Claim every due item before the first asynchronous send. This is durable
+  // even if the process exits after the service accepts a prompt.
+  if (!persist()) {
+    for (const schedule of run) {
+      schedule.lastStatus = "failed";
+      schedule.lastDetail = persistenceError ?? "The schedule could not be recorded safely.";
+    }
+    onChange?.();
+    return;
+  }
+
+  for (const schedule of run) {
     try {
       const result = send ? await send(schedule) : { status: "failed" as const, detail: "No sender." };
       schedule.lastStatus = result.status;
@@ -272,6 +308,16 @@ async function tick(): Promise<void> {
   }
   persist();
   onChange?.();
+}
+
+/** Coalesce timer callbacks while a previous batch is still sending. */
+export function tick(): Promise<void> {
+  if (tickInFlight) return tickInFlight;
+  const pending = runTick();
+  tickInFlight = pending.finally(() => {
+    tickInFlight = null;
+  });
+  return tickInFlight;
 }
 
 /** Fire one now, by hand, from the list. */

@@ -56,12 +56,12 @@ const MAX_SNAPSHOTS = 200;
  * recent folders separate — the folder list is derived from the sessions, so
  * separating one separates the other.
  */
-function sessionsDir(): string {
+export function sessionsDirectory(): string {
   return path.join(providerStateDir(), "sessions");
 }
 
 function sessionFile(id: string): string {
-  return path.join(sessionsDir(), `${id}.json`);
+  return path.join(sessionsDirectory(), `${id}.json`);
 }
 
 export function newSessionId(): string {
@@ -109,9 +109,9 @@ export function snapshotContentsAvailable(snapshot: FileSnapshot): boolean {
   return snapshot.contentsOmitted !== true && !(snapshot.before === null && snapshot.after === null);
 }
 
-export function saveSession(session: StoredSession): void {
+export function saveSession(session: StoredSession): boolean {
   try {
-    fs.mkdirSync(sessionsDir(), { recursive: true });
+    fs.mkdirSync(sessionsDirectory(), { recursive: true });
     const trimmed: StoredSession = {
       ...session,
       updatedAt: Date.now(),
@@ -120,8 +120,10 @@ export function saveSession(session: StoredSession): void {
     // Temp file plus rename, so a crash mid-write leaves the previous save
     // rather than a truncated file that loads as no session at all.
     writeFileAtomically(sessionFile(session.id), JSON.stringify(trimmed, null, 2));
+    return true;
   } catch {
     // Persistence is a convenience; never let it take down a live session.
+    return false;
   }
 }
 
@@ -164,7 +166,7 @@ export interface SessionSummary {
 export function listSessions(opts?: { cwd?: string; limit?: number }): SessionSummary[] {
   let files: string[];
   try {
-    files = fs.readdirSync(sessionsDir()).filter((f) => f.endsWith(".json"));
+    files = fs.readdirSync(sessionsDirectory()).filter((f) => f.endsWith(".json"));
   } catch {
     return [];
   }
@@ -172,7 +174,7 @@ export function listSessions(opts?: { cwd?: string; limit?: number }): SessionSu
   const out: SessionSummary[] = [];
   for (const f of files) {
     try {
-      const raw = fs.readFileSync(path.join(sessionsDir(), f), "utf8");
+      const raw = fs.readFileSync(path.join(sessionsDirectory(), f), "utf8");
       const s = JSON.parse(raw) as StoredSession;
       if (!s?.id) continue;
       if (opts?.cwd && path.resolve(s.cwd) !== path.resolve(opts.cwd)) continue;

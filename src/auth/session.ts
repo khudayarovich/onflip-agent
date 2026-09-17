@@ -34,7 +34,7 @@ function openCookieDb(file: string): Database.Database {
       message
     );
     if (!wrongAbi) throw e;
-    const bundled = bundledBinding();
+    const bundled = bundledSqliteBinding();
     if (!bundled) {
       throw new Error(
         `the sqlite binding does not match this runtime (needs ABI ${process.versions.modules}), ` +
@@ -46,7 +46,7 @@ function openCookieDb(file: string): Database.Database {
 }
 
 /** The shipped binding for this runtime's ABI, or null when there is none. */
-function bundledBinding(): string | null {
+export function bundledSqliteBinding(): string | null {
   const file = path.join(
     __dirname,
     "..",

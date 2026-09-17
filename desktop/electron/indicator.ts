@@ -1,6 +1,7 @@
 import { app, BrowserWindow, screen } from "electron";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { writeJsonFile } from "./persistence";
 
 /**
  * A small always-on-top square that says what OnFlip is doing.
@@ -67,8 +68,7 @@ export function loadIndicator(): void {
 
 function persist(): void {
   try {
-    fs.mkdirSync(app.getPath("userData"), { recursive: true });
-    fs.writeFileSync(file(), JSON.stringify(settings, null, 2));
+    writeJsonFile(file(), settings);
   } catch {
     /* best-effort */
   }

@@ -24,7 +24,7 @@ const needsBuild = fs.existsSync(DIST)
   : "desktop/dist is not built (run: cd desktop && npm run build:node)";
 
 /** The module reaches for Electron's userData path at the top. */
-function load() {
+function load(userData = path.join(__dirname, "__nonexistent__")) {
   const originalResolve = Module._resolveFilename;
   Module._resolveFilename = function (request, ...rest) {
     if (request === "electron") return "electron-stub-sched";
@@ -34,7 +34,7 @@ function load() {
     id: "electron-stub-sched",
     filename: "electron-stub-sched",
     loaded: true,
-    exports: { app: { getPath: () => path.join(__dirname, "__nonexistent__") } },
+    exports: { app: { getPath: () => userData } },
   };
   try {
     delete require.cache[require.resolve(DIST)];
@@ -159,4 +159,64 @@ test("several schedules are judged independently", { skip: needsBuild }, () => {
     run.map((s) => s.id),
     ["now"]
   );
+});
+
+test("overlapping timer ticks share one batch and never double-send", { skip: needsBuild }, async () => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "onflip-schedules-"));
+  try {
+    const now = Date.now();
+    const item = (id) => ({
+      id,
+      prompt: id,
+      cron: "* * * * *",
+      cwd: dir,
+      enabled: true,
+      createdAt: now - 2 * MINUTE,
+    });
+    fs.writeFileSync(path.join(dir, "schedules.json"), JSON.stringify([item("A"), item("B")]));
+    const scheduler = load(dir);
+    const calls = [];
+    let release;
+    const gate = new Promise((resolve) => {
+      release = resolve;
+    });
+    scheduler.startScheduler(async (s) => {
+      calls.push(s.id);
+      if (s.id === "A") await gate;
+      return { status: "sent" };
+    }, () => {});
+
+    const first = scheduler.tick();
+    await new Promise((resolve) => setImmediate(resolve));
+    const second = scheduler.tick();
+    assert.equal(second, first, "a second timer callback started another batch");
+    release();
+    await Promise.all([first, second]);
+    scheduler.stopScheduler();
+    assert.deepEqual(calls, ["A", "B"]);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a corrupt schedules file is preserved and never overwritten", { skip: needsBuild }, () => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "onflip-schedules-"));
+  try {
+    const file = path.join(dir, "schedules.json");
+    fs.writeFileSync(file, "{broken", "utf8");
+    const scheduler = load(dir);
+    const result = scheduler.createSchedule({
+      prompt: "do not lose the old file",
+      cron: "* * * * *",
+      cwd: dir,
+    });
+    assert.equal(result.ok, false);
+    assert.equal(fs.readFileSync(file, "utf8"), "{broken");
+    assert.equal(
+      fs.readdirSync(dir).some((name) => name.startsWith("schedules.json.corrupt-")),
+      true
+    );
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });

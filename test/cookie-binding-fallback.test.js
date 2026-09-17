@@ -19,6 +19,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const { getAbi } = require("node-abi");
 
 const { bindingMismatch, bindingFailedEverywhere } = require("../dist/auth/extract");
 
@@ -104,6 +105,13 @@ test("a sqlite binding ships for every platform the app is released for", () => 
   // is exactly how macOS was left behind the first time.
   const distinct = [...new Set(Object.values(abis))];
   assert.equal(distinct.length, 1, `platforms disagree on the ABI: ${JSON.stringify(abis)}`);
+  const electronRange = require("../desktop/package.json").devDependencies.electron;
+  const electronVersion = electronRange.replace(/^\D+/, "");
+  assert.equal(
+    distinct[0],
+    getAbi(electronVersion, "electron"),
+    `the shipped bindings do not match Electron ${electronVersion}`
+  );
 });
 
 test("each platform's binding is actually built for that platform", () => {

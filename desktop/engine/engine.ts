@@ -86,7 +86,9 @@ import {
   BrowserFrame,
   BrowserUserInput,
 } from "onflip/dist/tools/browser";
-import { recordSend, usageSummary, associateAccount, UNKNOWN_ACCOUNT } from "./usage";
+import { recordSend, usageSummary, associateAccount, closeUsageStore, UNKNOWN_ACCOUNT } from "./usage";
+import { restoreSnapshot, snapshotStillCurrent } from "./undo";
+import { claimSessionLock, releaseSessionLock } from "./session-lock";
 import {
   createToolRegistry,
   createSessionState,
@@ -505,8 +507,6 @@ export class Engine {
       this.history = this.session.messages;
       this.archived = this.session.archived ?? [];
     }
-    this.holdSession();
-
     openLog(this.session.id);
     logger.info("session", "desktop engine started", {
       version: ENGINE_VERSION,
@@ -1134,7 +1134,6 @@ export class Engine {
   }
 
   private pushStatus(): void {
-    this.holdSession();
     this.peer.emit("status", this.statusPayload());
   }
 
@@ -2178,7 +2177,8 @@ export class Engine {
 
   newSession(): EngineStatus {
     this.assertIdle();
-    this.saveNow();
+    if (!this.saveNow()) throw new Error("The current session could not be saved. Try again before leaving it.");
+    this.releaseHeldSession();
     this.session = createSession(this.cwd, this.model);
     this.history = this.session.messages;
     this.archived = this.session.archived ?? [];
@@ -2214,12 +2214,24 @@ export class Engine {
 
   async resumeSession(id: string): Promise<EngineStatus> {
     this.assertIdle();
-    const restored = loadSession(id);
+    let restored = loadSession(id);
     if (!restored) throw new Error("That session could not be read.");
-    if (restored.id !== this.session?.id && sessionHeldElsewhere(restored.id)) {
-      throw new Error("That session is open in another OnFlip window.");
+    if (!this.saveNow()) throw new Error("The current session could not be saved. Try again before leaving it.");
+    if (restored.id !== this.session?.id) {
+      const previousId = this.session?.id;
+      if (!this.holdSession(restored.id)) {
+        throw new Error("That session is open in another OnFlip window.");
+      }
+      // The other engine may have made one final save between the first read
+      // and releasing its lock. Read only after ownership is ours.
+      const locked = loadSession(restored.id);
+      if (!locked) {
+        this.releaseHeldSession();
+        if (previousId) this.holdSession(previousId);
+        throw new Error("That session could not be read.");
+      }
+      restored = locked;
     }
-    this.saveNow();
 
     // A session belongs to a directory; follow it there if it still exists.
     if (path.resolve(restored.cwd) !== path.resolve(this.cwd) && fs.existsSync(restored.cwd)) {
@@ -2534,7 +2546,7 @@ export class Engine {
     const target = resolveDir(this.cwd, dir);
     if (path.resolve(target) === path.resolve(this.cwd)) return this.statusPayload();
 
-    this.saveNow();
+    if (!this.saveNow()) throw new Error("The current session could not be saved. Try again before leaving it.");
     this.relocate(target);
     const restored = this.adoptableSession(target);
     if (restored) {
@@ -2544,7 +2556,7 @@ export class Engine {
     } else {
       this.session = createSession(target, this.model);
       this.history = this.session.messages;
-    this.archived = this.session.archived ?? [];
+      this.archived = this.session.archived ?? [];
       this.toolState = createSessionState();
       this.seedSystemPrompt();
       this.transport.reset();
@@ -3029,19 +3041,24 @@ export class Engine {
   }
 
   undoLast(): { ok: boolean; message: string } {
-    const snapshot = this.toolState.snapshots.pop();
+    const snapshot = this.toolState.snapshots[this.toolState.snapshots.length - 1];
     if (!snapshot) return { ok: false, message: "Nothing to undo." };
     const rel = path.relative(this.cwd, snapshot.path).replace(/\\/g, "/") || snapshot.path;
     if (!snapshotContentsAvailable(snapshot)) {
-      this.toolState.snapshots.push(snapshot);
       return {
         ok: false,
         message: `Cannot undo ${rel}: its contents were omitted from the saved session. The file was left unchanged.`,
       };
     }
+    if (!snapshotStillCurrent(snapshot)) {
+      return {
+        ok: false,
+        message: `Cannot undo ${rel}: it changed after OnFlip's edit. The file was left unchanged.`,
+      };
+    }
     try {
-      if (snapshot.before === null) fs.rmSync(snapshot.path, { force: true });
-      else fs.writeFileSync(snapshot.path, snapshot.before, "utf8");
+      restoreSnapshot(snapshot);
+      this.toolState.snapshots.pop();
       // The model still believes its edit stands; tell it otherwise.
       this.history.push(
         newMessage(
@@ -3055,7 +3072,6 @@ export class Engine {
       this.notice(message);
       return { ok: true, message };
     } catch (e) {
-      this.toolState.snapshots.push(snapshot);
       return {
         ok: false,
         message: `Could not revert ${rel}: ${e instanceof Error ? e.message : String(e)}`,
@@ -3121,7 +3137,8 @@ export class Engine {
     this.requireBrowserTransport("Continuing a ChatGPT conversation");
     const messages = await openConversation(this.auth.cookies, id);
 
-    this.saveNow();
+    if (!this.saveNow()) throw new Error("The current session could not be saved. Try again before leaving it.");
+    this.releaseHeldSession();
     this.session = createSession(this.cwd, this.model);
     this.session.title =
       title && !isPlaceholderTitle(title) ? title : "ChatGPT conversation";
@@ -3288,62 +3305,79 @@ export class Engine {
    * session instead. Called wherever the session can have changed; the id
    * comparison makes the repeat calls free.
    */
-  private holdSession(): void {
-    // A session that has never been written cannot be adopted by anyone, so
-    // it needs no lock; claiming it left a lock file behind for every empty
-    // launch. The claim happens on the first save instead.
-    const id = this.session && sessionFileExists(this.session.id) ? this.session.id : null;
-    if (id === this.heldSessionId) return;
+  private holdSession(id: string): boolean {
+    if (id === this.heldSessionId) return true;
+    if (!claimSessionLock(id)) return false;
+    const previous = this.heldSessionId;
+    this.heldSessionId = id;
+    if (previous) releaseSessionLock(previous);
+    return true;
+  }
+
+  private releaseHeldSession(): void {
     if (this.heldSessionId) releaseSessionLock(this.heldSessionId);
     this.heldSessionId = null;
-    if (id) {
-      claimSessionLock(id);
-      this.heldSessionId = id;
-    }
   }
 
   /** The folder's latest session, unless another live engine is writing it. */
   private adoptableSession(cwd: string): StoredSession | null {
     const latest = latestSession(cwd);
-    if (latest && sessionHeldElsewhere(latest.id)) {
+    if (!latest) {
+      this.releaseHeldSession();
+      return null;
+    }
+    if (!this.holdSession(latest.id)) {
       logger.info("session", "latest session is open in another window; starting a new one", {
         cwd,
         session: latest.id,
       });
+      this.releaseHeldSession();
       return null;
     }
-    return latest;
+    const locked = loadSession(latest.id);
+    if (locked) return locked;
+    this.releaseHeldSession();
+    return null;
   }
 
-  private saveNow(): void {
-    this.holdSession();
-    if (!this.session) return;
+  private saveNow(): boolean {
+    if (!this.session) return true;
     // A session nobody spoke in is not worth a file: persisting it put an
     // "(empty session)" row in the sidebar for every launch and every project
     // switch. A chat attachment counts as content even before the first turn.
     const hasContent =
       this.session.chatId || this.history.some((m) => m.role !== "system");
-    if (!hasContent) return;
+    if (!hasContent) return true;
+    if (!this.holdSession(this.session.id)) {
+      logger.error("session", "session save refused because another engine owns its lock", {
+        session: this.session.id,
+      });
+      return false;
+    }
     const current = this.fingerprint();
-    if (current === this.savedFingerprint) return;
+    if (current === this.savedFingerprint) return true;
     this.session.messages = this.history;
     this.session.archived = this.archived;
     this.session.todos = this.toolState.todos;
     this.session.snapshots = this.toolState.snapshots;
     this.session.model = this.model;
-    saveSession(this.session);
+    if (!saveSession(this.session)) {
+      logger.error("session", "session could not be saved; it will be retried", {
+        session: this.session.id,
+      });
+      return false;
+    }
     this.savedFingerprint = current;
-    // Now that the file exists, the lock can name it.
-    this.holdSession();
+    return true;
   }
 
   async shutdown(): Promise<void> {
     this.stopSessionWatch();
     this.abort.abort();
     this.saveNow();
-    if (this.heldSessionId) releaseSessionLock(this.heldSessionId);
-    this.heldSessionId = null;
+    this.releaseHeldSession();
     killAllJobs();
+    closeUsageStore();
     logger.info("session", "desktop engine ended");
     closeLog();
     await closeBrowser();
@@ -3439,61 +3473,6 @@ function isClosingBlock(tool: string): boolean {
   return /^(?:done|finish|final_answer|attempt_completion|complete|completed|submit|final|end_turn|ask_user|ask|ask_followup_question|ask_question|question|clarify)$/i.test(
     tool.replace(/[-\s]/g, "_")
   );
-}
-
-// ---------------------------------------------------------------------------
-// session locks — one live engine per session file
-// ---------------------------------------------------------------------------
-
-function sessionLockFile(id: string): string {
-  return path.join(configDir(), "sessions", `${id}.lock`);
-}
-
-function sessionFileExists(id: string): boolean {
-  return fs.existsSync(path.join(configDir(), "sessions", `${id}.json`));
-}
-
-/**
- * Is another engine that is still running writing this session?
- *
- * The lock names a pid; a pid that no longer exists is a crash's leftover,
- * does not count, and is removed so it cannot pile up. EPERM from the probe
- * means the process exists but is not ours to signal, which for this
- * purpose is "alive".
- */
-export function sessionHeldElsewhere(id: string): boolean {
-  try {
-    const raw = JSON.parse(fs.readFileSync(sessionLockFile(id), "utf8")) as { pid?: number };
-    if (!raw.pid || raw.pid === process.pid) return false;
-    try {
-      process.kill(raw.pid, 0);
-      return true;
-    } catch (e) {
-      if ((e as NodeJS.ErrnoException).code === "EPERM") return true;
-      fs.rmSync(sessionLockFile(id), { force: true });
-      return false;
-    }
-  } catch {
-    return false;
-  }
-}
-
-export function claimSessionLock(id: string): void {
-  try {
-    fs.mkdirSync(path.dirname(sessionLockFile(id)), { recursive: true });
-    fs.writeFileSync(sessionLockFile(id), JSON.stringify({ pid: process.pid, at: Date.now() }));
-  } catch {
-    /* a lock that cannot be written is a lock nobody else can read either */
-  }
-}
-
-export function releaseSessionLock(id: string): void {
-  try {
-    const raw = JSON.parse(fs.readFileSync(sessionLockFile(id), "utf8")) as { pid?: number };
-    if (raw.pid === process.pid) fs.rmSync(sessionLockFile(id), { force: true });
-  } catch {
-    /* already gone */
-  }
 }
 
 // ---------------------------------------------------------------------------
