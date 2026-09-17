@@ -119,7 +119,7 @@ function withTimeout<T>(work: Promise<T>, what: string, ms = PAGE_CALL_MS): Prom
 const SERVICE_MESSAGES: { pattern: RegExp; code: FailureCode }[] = [
   {
     pattern:
-      /verify you are human|checking your browser|just a moment|проверка браузера|подтвердите, что вы человек|минуточку/i,
+      /verify you are human|security verification|checking your browser|just a moment|проверка браузера|проверка безопасности|подтвердите, что вы человек|минуточку/i,
     code: "refused",
   },
   {
@@ -196,6 +196,86 @@ export function arenaWindow(
   };
 }
 
+/** True while this run's window is parked off the desktop. */
+let windowParked = false;
+
+/**
+ * How long a person gets to answer Arena's human check before the turn
+ * fails. Four minutes: a checkbox takes seconds, but the person has to
+ * notice a window appearing first.
+ */
+const CHALLENGE_WAIT_MS = 4 * 60_000;
+
+/**
+ * Is the page showing a human check?
+ *
+ * The widget is a Cloudflare Turnstile iframe, looked for by its own
+ * hostname rather than by wording; the text patterns are the fallback for
+ * the interstitial variants that render as a page instead.
+ */
+export const CHALLENGE_SCRIPT = `(() => {
+  if (document.querySelector('iframe[src*="challenges.cloudflare"], iframe[src*="turnstile"]')) return true;
+  const t = (document.body.innerText || "");
+  return /verify you are human|security verification|checking your browser|just a moment|подтвердите, что вы человек|проверка безопасности/i.test(t);
+})()`;
+
+async function challengeUp(page: Page): Promise<boolean> {
+  return (await withTimeout(page.evaluate(CHALLENGE_SCRIPT), "looking for a human check").catch(
+    () => false
+  )) as boolean;
+}
+
+/** Move the browser window; a window that cannot be moved is still a window. */
+async function moveWindow(page: Page, left: number, top: number): Promise<void> {
+  try {
+    const session = await page.context().newCDPSession(page);
+    const { windowId } = (await session.send("Browser.getWindowForTarget")) as { windowId: number };
+    await session.send("Browser.setWindowBounds", {
+      windowId,
+      bounds: { left, top, windowState: "normal" },
+    });
+    await session.detach().catch(() => {});
+  } catch {
+    /* best effort */
+  }
+}
+
+/**
+ * A human check is the one thing in this driver only a person can do.
+ *
+ * Reported from a Mac: the send opened a security verification with a
+ * captcha, and that was the end of it - the driver read it as a refusal
+ * and the turn just died. But a challenge is not a refusal: it is a
+ * request, and the person it is addressed to is sitting right there. So
+ * the window - parked off the desktop on Windows - is brought on screen,
+ * the person clicks the checkbox, and the turn carries on. Verified that
+ * the CDP window move works in both directions before shipping it.
+ *
+ * Returns false when no challenge is showing, true when one was answered;
+ * throws when four minutes pass with the checkbox unclicked, with the one
+ * error message that says what to actually do.
+ */
+async function waitOutChallenge(page: Page, signal?: AbortSignal): Promise<boolean> {
+  if (!(await challengeUp(page))) return false;
+  logger.warn("arena", "Arena is asking for a human verification; bringing the window on screen");
+  await moveWindow(page, 120, 80);
+  const deadline = Date.now() + CHALLENGE_WAIT_MS;
+  while (Date.now() < deadline) {
+    if (signal?.aborted) throw new ArenaError("interrupted", "interrupted");
+    await page.waitForTimeout(2_000);
+    if (!(await challengeUp(page))) {
+      logger.info("arena", "the human check was answered; carrying on");
+      await page.waitForTimeout(1_500);
+      if (windowParked) await moveWindow(page, -32_000, -32_000);
+      return true;
+    }
+  }
+  throw new ArenaError(
+    "Arena is asking for a human verification (captcha). The Arena browser window is on your screen - complete the check there, then send your message again.",
+    "refused"
+  );
+}
+
 export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContext> {
   if (context) return context;
   const dir = arenaProfileDir();
@@ -206,6 +286,7 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
   await releaseProfileLock(dir, (message, data) => logger.info("arena", message, data));
   logger.info("arena", "opening the browser", { profile: dir, headed: Boolean(opts.headed) });
   const window = arenaWindow(Boolean(opts.headed));
+  windowParked = !window.headless && window.args.some((a) => a.startsWith("--window-position=-"));
   context = await chromium.launchPersistentContext(dir, {
     executablePath: executable(),
     headless: window.headless,
@@ -636,6 +717,10 @@ export async function sendTurn(
   // Never begin behind the previous answer.
   await settlePage(page);
 
+  // Nor behind a human check: everything below assumes the page is Arena's,
+  // and a challenge on screen means it is Cloudflare's until somebody clicks.
+  if (await waitOutChallenge(page, opts.signal)) await settlePage(page);
+
   const before = await read(page);
 
   const submit = async (): Promise<void> => {
@@ -725,6 +810,16 @@ export async function sendTurn(
         await page.waitForTimeout(1_000);
       }
     }
+    // Or the click summoned the human check itself. Answered by the person
+    // and the message is still in the composer, so press Send again.
+    if (await waitOutChallenge(page, opts.signal)) {
+      await page.click(SEND_BUTTON, { timeout: 8_000 }).catch(() => {});
+      for (let i = 0; i < 3; i++) {
+        if (await landed()) return;
+        await page.waitForTimeout(1_000);
+      }
+    }
+
     // A send that will not land has one more honest explanation: Arena has
     // put Direct mode behind an account, and a signed-out session gets a
     // "Log In or Create Account" dialog where its answer would be. Seen
@@ -808,7 +903,14 @@ export async function sendTurn(
       emptyEnds += 1;
       if (emptyEnds === 5) {
         const said = await serviceMessage(page);
-        if (said) throw new ArenaError(`Arena says: ${said.text}`, said.code);
+        // A refusal that is really a human check is answered, not thrown:
+        // the person clicks, the clock restarts, the turn goes on.
+        if (said?.code === "refused" && (await waitOutChallenge(page, opts.signal))) {
+          emptyEnds = 0;
+          lastChange = Date.now();
+        } else if (said) {
+          throw new ArenaError(`Arena says: ${said.text}`, said.code);
+        }
       }
     } else {
       emptyEnds = 0;
@@ -817,6 +919,10 @@ export async function sendTurn(
     if (Date.now() - lastChange > SILENCE_MS) {
       // Before blaming the send: is the page already saying why?
       const said = await serviceMessage(page);
+      if (said?.code === "refused" && (await waitOutChallenge(page, opts.signal))) {
+        lastChange = Date.now();
+        continue;
+      }
       if (said) throw new ArenaError(`Arena says: ${said.text}`, said.code);
       throw new ArenaError(
         `Arena took the message but produced no answer within ${SILENCE_MS / 1_000}s.`,

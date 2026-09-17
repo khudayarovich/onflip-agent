@@ -136,3 +136,40 @@ test("a generation that dies is reported in seconds, not minutes", () => {
   assert.match(loop, /sawGenerating && !now\.generating && now\.text\.trim\(\)\.length === 0/);
   assert.match(loop, /serviceMessage\(page\)/);
 });
+
+test("a human check is answered by the human, not read as a refusal", () => {
+  // Reported from a Mac: the send met a security verification with a
+  // captcha, "and that's it" - the driver read it as a refusal and the
+  // turn died. A challenge is not a refusal; it is a request, addressed
+  // to the person sitting right there. The driver brings the parked
+  // window on screen, waits for the click, and carries on.
+  const { CHALLENGE_SCRIPT } = require("../dist/providers/arena/browser");
+  // Matched by the widget's own hostname first, wording second.
+  assert.match(CHALLENGE_SCRIPT, /challenges\.cloudflare/);
+  assert.match(CHALLENGE_SCRIPT, /turnstile/);
+  assert.match(CHALLENGE_SCRIPT, /verify you are human/);
+  assert.match(CHALLENGE_SCRIPT, /security verification/);
+});
+
+test("the challenge wait guards every seam of a turn", () => {
+  // Four places a challenge can surface: before the send, on the click,
+  // when a generation ends empty, and in the silence window. Missing any
+  // one of them turns the click-through back into a dead turn there.
+  const calls = SRC.split("waitOutChallenge(page").length - 1;
+  assert.ok(calls >= 5, `expected the wait at every seam, found ${calls - 1} uses`);
+  // And a refused service message consults the challenge before throwing.
+  const silent = SRC.slice(SRC.indexOf("Before blaming the send"));
+  assert.ok(
+    silent.indexOf("waitOutChallenge") < silent.indexOf("throw new ArenaError(`Arena says:"),
+    "the silence path must offer the click-through before failing"
+  );
+});
+
+test("the window comes on screen for the person and parks itself after", () => {
+  const wait = SRC.slice(SRC.indexOf("async function waitOutChallenge"), SRC.indexOf("export async function openBrowser"));
+  assert.match(wait, /moveWindow\(page, 120, 80\)/);
+  assert.match(wait, /windowParked.*moveWindow\(page, -32_000, -32_000\)/s);
+  // The failure message tells the user what to do, because "refused" alone
+  // reads as the app being broken.
+  assert.match(wait, /complete the check there/);
+});
