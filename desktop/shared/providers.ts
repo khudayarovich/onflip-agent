@@ -23,7 +23,6 @@ const LABELS: Record<string, string> = {
   chatgpt: "ChatGPT",
   deepseek: "DeepSeek",
   qwen: "Qwen",
-  arena: "Arena",
 };
 
 export function serviceLabel(id: string | null | undefined): string | null {

@@ -33,13 +33,14 @@ export const TERMINAL_TOOLS: ToolDefinition[] = [
     name: "done",
     description:
       "End the turn: the user's request is complete. `summary` is your final answer to the user, in Markdown — the outcome first, files as path:line, and anything you left out and why. " +
+      "Use a four-backtick block and indent every summary line, leaving three-backtick code fences inside. " +
       "Use it only when the whole request is finished and verified: never after a single step, never while an item on your task list is still open (mark it completed or cancelled first), and never right after a failed tool call.",
     parameters: {
       type: "object",
       properties: {
         summary: {
           type: "string",
-          description: "The final answer, exactly as the user should read it.",
+          description: "The final answer exactly as the user should read it, indented inside the four-backtick block.",
         },
       },
       required: ["summary"],
@@ -54,6 +55,7 @@ export const TERMINAL_TOOLS: ToolDefinition[] = [
     name: "ask_user",
     description:
       "End the turn with a question you cannot proceed without — a real choice about what to do, which only the user can make. " +
+      "Use a four-backtick block and indent every question line. " +
       "Never use it to ask permission to run a tool: OnFlip approves tool calls itself, so emit the call instead.",
     parameters: {
       type: "object",

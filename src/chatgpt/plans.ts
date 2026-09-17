@@ -118,24 +118,6 @@ export const DEEPSEEK_CEILING_CHARS = 150_000;
 export const QWEN_CEILING_CHARS = 40_000;
 
 /**
- * How much Arena will take in one message.
- *
- * Unmeasured, and deliberately the cautious number rather than a guess
- * dressed as one. Arena runs one-shot — the whole transcript goes out every
- * turn — so this is the difference between a session that compacts a little
- * early and one whose turns are silently cut off at the composer.
- *
- * DeepSeek's 150,000 is what this would otherwise have inherited, and that
- * figure was measured on DeepSeek: 80,069 characters arrived there in one
- * send and were read to the end. Nothing of the kind has been measured here,
- * and inheriting a number because it happens to be the fallback is how a
- * provider ends up truncating with no error.
- *
- * Raise it when somebody measures it.
- */
-export const ARENA_CEILING_CHARS = 40_000;
-
-/**
  * The ceiling once a turn too large to type is uploaded instead.
  *
  * Typing was the binding constraint, so the plan never got to be. With the

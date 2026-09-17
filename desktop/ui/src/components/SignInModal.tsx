@@ -190,17 +190,6 @@ export function SignInModal({
       ) : (
         service && <p className="modal-note">{t("signInHow", { browser: name, service })}</p>
       )}
-      {/*
-        Arena's sign-in is not on its chat page.
-        Measured at 1440x900 and 1728x1080: the Log In control is not in the
-        page at all until the sidebar is expanded, so somebody who opens that
-        window and looks for a sign-in button finds nothing and closes it —
-        which arrives here as "it cannot detect my account".
-      */}
-      {provider?.id === "arena" && browser !== null && (
-        <p className="modal-note">{t("signInHowArena")}</p>
-      )}
-
       {phase === "waiting" && (
         <div className="content-loading" style={{ padding: "18px 0" }}>
           <span className="spinner big" />

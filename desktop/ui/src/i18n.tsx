@@ -103,7 +103,6 @@ const en = {
   signInAction: "Sign in",
   signInLead: "OnFlip works through your own {service} account — no API key, nothing to pay per message. Sign in once; OnFlip keeps the session in a browser profile of its own.",
   signInHow: "{browser} opens on OnFlip's private profile. Sign in to {service} there — Google, Apple, Microsoft or email all work — and close that window once the chat page appears. Your everyday browser is not touched.",
-  signInHowArena: "Arena keeps its sign-in in the sidebar: open the sidebar with the button at the top left of that window, then choose “Log In”. There is no sign-in button on the chat page itself.",
   signInOpen: "Open {browser} to sign in",
   signInNoBrowser: "No browser to sign in with was found. Install Google Chrome or Microsoft Edge and try again.",
   signInWaiting: "Waiting for you to sign in in {browser}… Close that window when you are done, or click “I have signed in”.",
@@ -335,7 +334,7 @@ const en = {
   aboutTagline: "Your agent for code and everyday tasks, powered by a chat account you already have.",
   aboutIdeaTitle: "How it works",
   aboutIdea:
-    "OnFlip drives an ordinary chat through a real browser — the same conversation you could type at chatgpt.com, chat.deepseek.com or arena.ai. No API key, no per-token billing: the agent rides on an account you already have, so it adds no separate API costs or usage limits. The model does the thinking on the service's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
+    "OnFlip drives an ordinary chat through a real browser — the same conversation you could type at chatgpt.com, chat.deepseek.com or chat.qwen.ai. No API key, no per-token billing: the agent rides on an account you already have, so it adds no separate API costs or usage limits. The model does the thinking on the service's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
   aboutServicesTitle: "Services",
   aboutServicesIntro:
     "One at a time, switched from the account menu. Each keeps its own sign-in, chats, projects and settings — nothing crosses between them.",
@@ -345,8 +344,6 @@ const en = {
     "Free, with no plan tiers to work around: one model for everything, DeepThink on or off, and image attachments. No projects, and chats it did not start cannot be reopened.",
   aboutServiceQwen:
     "Free, with two models to choose between, and it decides for itself when to think. No projects, no attachments yet, and chats it did not start cannot be reopened.",
-  aboutServiceArena:
-    "Free with an account, and one picker over a hundred-plus frontier models — OnFlip offers a curated six, led by Max, Arena’s own router that picks the best model per message. Sign-in is required for direct answers now. Each message currently starts a fresh conversation, which spends more of the allowance than it should — improving this is next. No projects, no attachments.",
   aboutAuthorTitle: "Author",
   aboutLicense: "Open source under the MIT license.",
   aboutLimitsTitle: "ChatGPT models & usage limits",
@@ -520,7 +517,6 @@ const ru: Partial<Record<StringKey, string>> = {
   signInAction: "Войти",
   signInLead: "OnFlip работает через ваш аккаунт {service} — без API-ключа и без оплаты за сообщения. Войдите один раз; OnFlip хранит сессию в собственном профиле браузера.",
   signInHow: "Откроется {browser} с отдельным профилем OnFlip. Войдите там в {service} — через Google, Apple, Microsoft или почту — и закройте окно, когда появится страница чата. Ваш обычный браузер не затрагивается.",
-  signInHowArena: "Вход в Arena находится в боковой панели: откройте её кнопкой в левом верхнем углу окна и выберите «Log In». На самой странице чата кнопки входа нет.",
   signInOpen: "Открыть {browser} для входа",
   signInNoBrowser: "Не найден браузер для входа. Установите Google Chrome или Microsoft Edge и попробуйте снова.",
   signInWaiting: "Ждём, пока вы войдёте в {browser}… Закройте это окно, когда закончите, или нажмите «Я вошёл».",
@@ -745,7 +741,7 @@ const ru: Partial<Record<StringKey, string>> = {
   aboutTagline: "Ваш агент для кода и повседневных задач — на аккаунте чата, который у вас уже есть.",
   aboutIdeaTitle: "Как это работает",
   aboutIdea:
-    "OnFlip управляет обычным чатом через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com, chat.deepseek.com или arena.ai. Без API-ключа и оплаты за токены: агент работает на вашем существующем аккаунте и не добавляет отдельных API-затрат и лимитов. Модель думает на стороне сервиса, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
+    "OnFlip управляет обычным чатом через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com, chat.deepseek.com или chat.qwen.ai. Без API-ключа и оплаты за токены: агент работает на вашем существующем аккаунте и не добавляет отдельных API-затрат и лимитов. Модель думает на стороне сервиса, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
   aboutServicesTitle: "Сервисы",
   aboutServicesIntro:
     "По одному за раз, переключается в меню аккаунта. У каждого свой вход, свои чаты, проекты и настройки — ничего не пересекается.",
@@ -755,8 +751,6 @@ const ru: Partial<Record<StringKey, string>> = {
     "Бесплатно, без тарифов и лимитов: одна модель на всё, DeepThink вкл/выкл и вложения-картинки. Без проектов; чаты, начатые не в OnFlip, открыть нельзя.",
   aboutServiceQwen:
     "Бесплатно, две модели на выбор, а думать ли над вопросом — сервис решает сам. Без проектов и пока без вложений; чаты, начатые не в OnFlip, открыть нельзя.",
-  aboutServiceArena:
-    "Бесплатно с аккаунтом; один выбор из более сотни флагманских моделей — OnFlip предлагает шесть, во главе с Max — собственным маршрутизатором Arena, выбирающим лучшую модель под каждое сообщение. Для прямых ответов теперь нужен вход. Пока каждое сообщение открывает новый диалог и тратит больше лимита — это следующее улучшение. Без проектов и вложений.",
   aboutAuthorTitle: "Автор",
   aboutLicense: "Открытый код по лицензии MIT.",
   aboutLimitsTitle: "Модели и лимиты ChatGPT",
@@ -928,7 +922,6 @@ const uz: Partial<Record<StringKey, string>> = {
   signInAction: "Kirish",
   signInLead: "OnFlip sizning {service} hisobingiz orqali ishlaydi — API kaliti yo‘q, xabar uchun to‘lov yo‘q. Bir marta kiring; OnFlip sessiyani o‘zining brauzer profilida saqlaydi.",
   signInHow: "{browser} OnFlip’ning alohida profili bilan ochiladi. U yerda {service}’ga kiring — Google, Apple, Microsoft yoki email orqali — va chat sahifasi ochilgach, oynani yoping. Kundalik brauzeringizga tegilmaydi.",
-  signInHowArena: "Arena’da kirish yon panelda: o‘sha oynaning chap yuqorisidagi tugma bilan yon panelni oching va “Log In” ni tanlang. Chat sahifasining o‘zida kirish tugmasi yo‘q.",
   signInOpen: "Kirish uchun {browser}’ni ochish",
   signInNoBrowser: "Kirish uchun brauzer topilmadi. Google Chrome yoki Microsoft Edge o‘rnating va qayta urinib ko‘ring.",
   signInWaiting: "{browser}’da kirishingizni kutmoqdamiz… Tugagach oynani yoping yoki «Men kirdim» tugmasini bosing.",
@@ -1153,7 +1146,7 @@ const uz: Partial<Record<StringKey, string>> = {
   aboutTagline: "Kod va kundalik ishlar uchun agentingiz — sizda allaqachon bor chat hisobi asosida.",
   aboutIdeaTitle: "Qanday ishlaydi",
   aboutIdea:
-    "OnFlip haqiqiy brauzer orqali oddiy chatni boshqaradi — bu chatgpt.com, chat.deepseek.com yoki arena.ai da yozadigan o'sha suhbatingiz. API kaliti ham, token uchun to'lov ham yo'q: agent sizdagi mavjud hisobda ishlaydi, alohida API xarajatlari va limitlari qo'shilmaydi. Model xizmat tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",
+    "OnFlip haqiqiy brauzer orqali oddiy chatni boshqaradi — bu chatgpt.com, chat.deepseek.com yoki chat.qwen.ai da yozadigan o'sha suhbatingiz. API kaliti ham, token uchun to'lov ham yo'q: agent sizdagi mavjud hisobda ishlaydi, alohida API xarajatlari va limitlari qo'shilmaydi. Model xizmat tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",
   aboutServicesTitle: "Xizmatlar",
   aboutServicesIntro:
     "Bir vaqtda bittasi; hisob menyusidan almashtiriladi. Har birining o‘z kirishi, chatlari, loyihalari va sozlamalari bor — hech nima aralashmaydi.",
@@ -1163,8 +1156,6 @@ const uz: Partial<Record<StringKey, string>> = {
     "Bepul, tarif va limitlarsiz: bitta model hamma narsa uchun, DeepThink yoqiq yoki o‘chiq, hamda rasm biriktirish. Loyihalar yo‘q; OnFlip boshlamagan chatlarni ocholmaydi.",
   aboutServiceQwen:
     "Bepul, ikkita model tanlovi bor; o‘ylash kerakmi-yo‘qmi, xizmatning o‘zi hal qiladi. Loyihalar yo‘q, hozircha biriktirish ham yo‘q; OnFlip boshlamagan chatlarni ocholmaydi.",
-  aboutServiceArena:
-    "Hisob bilan bepul; yuzdan ortiq ilg‘or model bitta tanlovda — OnFlip ulardan oltitasini taklif qiladi, boshida Max — Arena’ning har xabarga eng mos modelni tanlaydigan o‘z routeri. To‘g‘ridan-to‘g‘ri javoblar uchun endi kirish talab qilinadi. Hozircha har bir xabar yangi suhbat ochadi va limitdan ko‘proq sarflaydi — keyingi yaxshilanish shu. Loyihalar va biriktirmalar yo‘q.",
   aboutAuthorTitle: "Muallif",
   aboutLicense: "MIT litsenziyasi ostidagi ochiq kod.",
   aboutLimitsTitle: "ChatGPT modellari va limitlari",

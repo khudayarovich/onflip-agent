@@ -18,6 +18,7 @@ const assert = require("node:assert/strict");
 
 const { toMarkdown, repairFences } = require("../dist/providers/deepseek/extract");
 const F = "```";
+const F4 = "````";
 
 // --- the ordinary cases -----------------------------------------------------
 
@@ -61,7 +62,21 @@ test("a fence inside a block is put back, and the fragment dropped", () => {
 
   assert.equal(
     toMarkdown(asRendered),
-    `${F}onflip\ntool: write\npath: demo.md\ncontent: |\n  ${F}javascript\n  console.log("hi");\n  ${F}\n${F}`
+    `${F4}onflip\ntool: write\npath: demo.md\ncontent: |\n  ${F}javascript\n  console.log("hi");\n  ${F}\n${F4}`
+  );
+});
+
+test("a rendered terminal answer is enclosed beyond its Markdown fences", () => {
+  const md = toMarkdown([
+    {
+      kind: "code",
+      lang: "onflip",
+      body: `tool: done\nsummary: |\n  Result:\n  ${F}text\n  output\n  ${F}`,
+    },
+  ]);
+  assert.equal(
+    md,
+    `${F4}onflip\ntool: done\nsummary: |\n  Result:\n  ${F}text\n  output\n  ${F}\n${F4}`
   );
 });
 

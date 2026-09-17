@@ -35,7 +35,6 @@ import {
   COMPOSER_CEILING_CHARS,
   DEEPSEEK_CEILING_CHARS,
   QWEN_CEILING_CHARS,
-  ARENA_CEILING_CHARS,
   describePlan,
   planLimitCard,
   promptCrowdsPlan,
@@ -159,6 +158,7 @@ import { replayItems, stripMentionNote } from "./replay";
 import { expandSkillToken } from "../shared/skills";
 import { subjectFor } from "./subjects";
 import { SilenceWatch } from "./silence";
+import { presentableTail } from "./presentable";
 
 /** What a turn is resumed with, and what a person types by hand today. */
 const RESUME_PROMPT = "continue";
@@ -1016,7 +1016,6 @@ export class Engine {
       // 150,000 - a number measured on DeepSeek and on nothing else.
       const ceilings: Record<string, number> = {
         qwen: QWEN_CEILING_CHARS,
-        arena: ARENA_CEILING_CHARS,
         deepseek: DEEPSEEK_CEILING_CHARS,
       };
       return ceilings[activeProvider()] ?? COMPOSER_CEILING_CHARS;
@@ -3387,93 +3386,6 @@ export class Engine {
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
-
-// ---------------------------------------------------------------------------
-// the streaming tail, as a person should see it
-// ---------------------------------------------------------------------------
-
-/**
- * What the "writing" line shows while a reply streams in.
- *
- * The raw page text carries the protocol: fence markers, and the `tool:`
- * block the model is in the middle of typing. Shown as-is it reads as the
- * app glitching — a row of backticks, then half a command. A finished tool
- * block becomes a short label, an unfinished one a note that a call is
- * being written, and bare fence lines are dropped; the prose around them is
- * what people are actually waiting to read.
- */
-export function presentableTail(full: string): string {
-  const lines = full.split("\n");
-  const out: string[] = [];
-  let inFence = false;
-  let fenceIsCall = false;
-  let fenceTool = "";
-  let fenceStart = -1;
-  /**
-   * The summary of a `done` block, or the question of an `ask_user` one, is
-   * prose the person is waiting to read — it streams as itself, not as a
-   * "▸ done call" label.
-   */
-  let closingBody: string[] = [];
-  let inClosingBody = false;
-  const flush = (label: string): void => {
-    const replacement = isClosingBlock(fenceTool) && closingBody.length ? closingBody : [label];
-    out.splice(fenceStart, out.length - fenceStart, ...replacement);
-  };
-  for (const line of lines) {
-    if (/^\s*(`{3,}|~{3,})/.test(line)) {
-      if (!inFence) {
-        inFence = true;
-        fenceIsCall = false;
-        fenceTool = "";
-        fenceStart = out.length;
-        closingBody = [];
-        inClosingBody = false;
-      } else {
-        inFence = false;
-        if (fenceIsCall) flush(`▸ ${fenceTool || "tool"} call`);
-      }
-      continue;
-    }
-    if (inFence && !fenceIsCall && out.length === fenceStart) {
-      const m = /^\s*tool\s*:\s*([A-Za-z0-9_.-]+)/i.exec(line);
-      if (m) {
-        fenceIsCall = true;
-        fenceTool = m[1];
-        continue;
-      }
-    }
-    if (inFence && fenceIsCall) {
-      if (isClosingBlock(fenceTool)) {
-        const inline = /^\s*(?:summary|question)\s*:\s*(\S.*)$/i.exec(line);
-        if (/^\s*(?:summary|question)\s*:\s*[|>]?\s*$/i.test(line)) {
-          inClosingBody = true;
-        } else if (inline && !/^[|>]$/.test(inline[1].trim())) {
-          closingBody.push(inline[1]);
-          inClosingBody = false;
-        } else if (inClosingBody && /^\s+\S/.test(line)) {
-          closingBody.push(line.replace(/^ {1,2}/, ""));
-        } else if (inClosingBody && !line.trim()) {
-          closingBody.push("");
-        } else {
-          // Another key, such as `options:`.
-          inClosingBody = false;
-        }
-      }
-      continue;
-    }
-    out.push(line);
-  }
-  if (inFence && fenceIsCall) flush(`▸ writing a ${fenceTool || "tool"} call…`);
-  return out.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd().slice(-240);
-}
-
-/** `done` and `ask_user`, under every name the registry folds onto them. */
-function isClosingBlock(tool: string): boolean {
-  return /^(?:done|finish|final_answer|attempt_completion|complete|completed|submit|final|end_turn|ask_user|ask|ask_followup_question|ask_question|question|clarify)$/i.test(
-    tool.replace(/[-\s]/g, "_")
-  );
-}
 
 // ---------------------------------------------------------------------------
 // scratch chats — sessions with no project folder of their own

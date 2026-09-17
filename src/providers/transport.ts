@@ -6,7 +6,6 @@ import {
 } from "../chatgpt/transport";
 import { DeepSeekTransport } from "./deepseek/transport";
 import { QwenTransport } from "./qwen/transport";
-import { ArenaTransport } from "./arena/transport";
 import { activeProvider } from "./id";
 
 /**
@@ -33,8 +32,6 @@ export function chooseTransport(auth: {
       return { transport: new DeepSeekTransport(), reason: "DeepSeek browser profile" };
     case "qwen":
       return { transport: new QwenTransport(), reason: "Qwen browser profile" };
-    case "arena":
-      return { transport: new ArenaTransport(), reason: "Arena browser profile" };
     default:
       return chooseChatGptTransport(auth);
   }

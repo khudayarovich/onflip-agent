@@ -603,3 +603,32 @@ test("no question to the page is left unbounded", () => {
   });
   assert.deepEqual(unbounded, [], `unbounded page calls:\n${unbounded.join("\n")}`);
 });
+
+test("the hot reply poll reads one coherent page snapshot", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "providers", "qwen", "browser.ts"),
+    "utf8"
+  );
+  const read = source.slice(
+    source.indexOf("async function readLast("),
+    source.indexOf("async function stopGenerating(")
+  );
+
+  assert.equal((read.match(/page\.(?:evaluate|\$eval|\$\$eval)\(/g) || []).length, 1);
+  assert.match(read, /page\.evaluate\(READ_LAST_SCRIPT\)/);
+});
+
+test("a successful send is observed instead of paying a fixed pause", () => {
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "src", "providers", "qwen", "browser.ts"),
+    "utf8"
+  );
+  const submit = source.slice(source.indexOf("const submit = async"), source.indexOf("await submit();"));
+
+  assert.match(submit, /waitForFunction/);
+  assert.doesNotMatch(submit, /waitForTimeout\(600\)/);
+});

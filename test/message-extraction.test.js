@@ -157,6 +157,21 @@ test("a fenced block inside a list item still starts at column 0", () => {
   assert.ok(out.includes("```onflip\ntool: read"));
 });
 
+test("a rendered terminal answer gets an outer fence beyond its nested markdown", () => {
+  const body = [
+    "tool: done",
+    "summary: |",
+    "  Build output:",
+    "  ```text",
+    "  npm test",
+    "  ```",
+    "  All checks passed.",
+  ].join("\n");
+  const code = el("code", [text(body)], { class: "language-onflip" });
+
+  assert.equal(extract(el("pre", [code])), `\`\`\`\`onflip\n${body}\n\`\`\`\``);
+});
+
 // --- the same whitespace problem, elsewhere --------------------------------
 
 test("a heading does not strand its hashes on their own line", () => {

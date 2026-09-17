@@ -108,6 +108,17 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
   const known = toPredicate(knownTools);
   let text = raw;
 
+  // A closing block whose Markdown answer contained a plain ``` fence may
+  // already have been split by the provider's renderer before OnFlip can
+  // read it back. Recover that terminal-only shape first: unlike a machine
+  // tool, done/ask_user has no side effect, and the rest of the reply is the
+  // user-facing value that was visibly stranded outside the block.
+  const recoveredTerminal = recoverSplitTerminalFence(text, known);
+  if (recoveredTerminal) {
+    calls.push(recoveredTerminal.call);
+    text = recoveredTerminal.text;
+  }
+
   // ---- 1. fenced ```onflip blocks (the documented form) -------------------
   // An untagged fence is accepted too when its first line is `tool:` naming
   // a tool the registry knows: ChatGPT's renderer shows a fence's language
@@ -735,6 +746,90 @@ function pickString(obj: Record<string, unknown>, key: string): string | null {
 // fence and tag scanning
 // ---------------------------------------------------------------------------
 
+/**
+ * Recover the exact DOM round-trip produced when a terminal summary contains
+ * fenced Markdown inside a three-backtick onflip block.
+ *
+ * The page closes the outer block on the inner fence. Subsequent code spans
+ * come back as alternating bare and language-tagged fences, while the final
+ * bare fence is the original outer close. This is deliberately narrow:
+ * terminal tools only, at least one tagged fragment, balanced inner spans,
+ * and no second onflip block to accidentally absorb.
+ */
+function recoverSplitTerminalFence(
+  input: string,
+  known: (name: string) => boolean
+): { call: ToolCall; text: string } | null {
+  const lines = input.split("\n");
+  for (let start = 0; start < lines.length; start++) {
+    const opening = lines[start].match(/^(\s*)(`{3,})(?:\s*)(onflip|onflip:tool)\s*$/i);
+    if (!opening) continue;
+
+    const outer = opening[2];
+    let firstClose = -1;
+    for (let i = start + 1; i < lines.length; i++) {
+      const close = lines[i].match(/^\s*(`{3,})\s*$/);
+      if (close && close[1].length >= outer.length) {
+        firstClose = i;
+        break;
+      }
+    }
+    if (firstClose < 0) continue;
+
+    const parsed = parseBlockCall(lines.slice(start + 1, firstClose).join("\n"));
+    if (!parsed || parsed.length !== 1 || !known(parsed[0].tool)) continue;
+    const terminal = parsed[0].tool.trim().toLowerCase().replace(/[-\s]/g, "_");
+    const field = terminal === "done" ? "summary" : terminal === "ask_user" ? "question" : null;
+    if (!field || typeof parsed[0].arguments[field] !== "string") continue;
+
+    let lastClose = -1;
+    for (let i = lines.length - 1; i > firstClose; i--) {
+      const close = lines[i].match(/^\s*(`{3,})\s*$/);
+      if (close && close[1].length >= outer.length) {
+        lastClose = i;
+        break;
+      }
+    }
+    if (lastClose <= firstClose) continue;
+
+    const tail = lines.slice(firstClose + 1, lastClose);
+    if (
+      tail.some((line) => /^\s*`{3,}\s*(?:onflip|onflip:tool)\b/i.test(line)) ||
+      tail.some((line) => /<\/?onflip:tool>/i.test(line))
+    ) {
+      continue;
+    }
+
+    // The premature outer close is the first inner opener. Provider
+    // extraction labels later code fragments (usually `text`), including
+    // what were closers; strip the label from every closing half.
+    const stranded = [lines[firstClose], ...tail];
+    let insideCode = false;
+    let tagged = false;
+    let fenceCount = 0;
+    const normalised = stranded.map((line) => {
+      const fence = line.match(/^\s*(`{3,})\s*([\w.+-]*)\s*$/);
+      if (!fence) return line;
+      fenceCount++;
+      if (fence[2]) tagged = true;
+      const out = insideCode ? fence[1] : `${fence[1]}${fence[2]}`;
+      insideCode = !insideCode;
+      return out;
+    });
+    if (insideCode || fenceCount < 2 || !tagged) continue;
+
+    const existing = parsed[0].arguments[field] as string;
+    parsed[0].arguments[field] = [existing.trimEnd(), normalised.join("\n").trim()]
+      .filter(Boolean)
+      .join("\n");
+    return {
+      call: parsed[0],
+      text: [...lines.slice(0, start), ...lines.slice(lastClose + 1)].join("\n"),
+    };
+  }
+  return null;
+}
+
 /** Replace fenced blocks whose info string matches one of `tags`. */
 function replaceFences(
   input: string,
@@ -748,15 +843,16 @@ function replaceFences(
   const out: string[] = [];
 
   for (let i = 0; i < lines.length; i++) {
-    const open = lines[i].match(/^\s*(`{3,}|~{3,})([^\r\n]*)$/);
+    const open = lines[i].match(/^(\s*)(`{3,}|~{3,})([^\r\n]*)$/);
     if (!open) {
       out.push(lines[i]);
       continue;
     }
-    const info = open[2].trim().split(/\s+/, 1)[0].toLowerCase();
+    const openIndent = open[1].length;
+    const info = open[3].trim().split(/\s+/, 1)[0].toLowerCase();
 
-    const marker = open[1][0];
-    const markerLength = open[1].length;
+    const marker = open[2][0];
+    const markerLength = open[2].length;
     /**
      * An `onflip` fence closed with two backticks still closes.
      *
@@ -776,17 +872,21 @@ function replaceFences(
      * the block early and truncated it.
      */
     const ours = wanted.has(info);
-    const closeRe = ours ? /^(`{2,}|~{2,})\s*$|^\s*(`{3,}|~{3,})\s*$/ : /^\s*(`{3,}|~{3,})\s*$/;
-    const minClose = ours ? 2 : markerLength;
     const body: string[] = [];
     let j = i + 1;
     let closed = false;
     for (; j < lines.length; j++) {
-      const close = lines[j].match(closeRe);
-      // Two alternatives when the fence is ours (unindented short, or the
-      // ordinary indented long one), so take whichever group matched.
-      const fence = close ? (close[1] ?? close[2]) : undefined;
-      if (fence && fence[0] === marker && fence.length >= minClose) {
+      const short = ours ? lines[j].match(/^(`{2,}|~{2,})\s*$/) : null;
+      const normal = lines[j].match(/^(\s*)(`{3,}|~{3,})\s*$/);
+      const shortClose = short && short[1][0] === marker && short[1].length >= 2;
+      const normalClose =
+        normal &&
+        normal[2][0] === marker &&
+        normal[2].length >= markerLength &&
+        // An inner Markdown fence belongs to a `key: |` scalar and is
+        // indented deeper than the onflip opener. It must not close the call.
+        (!ours || normal[1].length <= openIndent);
+      if (shortClose || normalClose) {
         closed = true;
         break;
       }

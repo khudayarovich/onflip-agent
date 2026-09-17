@@ -538,35 +538,8 @@ export const QwenMark = ({ size = 14, className }: IconProps = {}): React.ReactE
  * ChatGPT's, which is also the default provider, so an id from a newer main
  * process than this renderer draws something rather than nothing.
  */
-/**
- * Arena's mark.
- *
- * Drawn rather than traced from a logo: two brackets facing each other,
- * which is what the site's own wordmark suggests and what "two models put
- * against one another" looks like as a shape. Deliberately not a copy of
- * anyone's trademark, and deliberately legible at fourteen pixels, which is
- * the only size this is ever drawn at.
- */
-export const ArenaMark = ({ size = 14, className }: IconProps = {}): React.ReactElement => (
-  <svg
-    viewBox="0 0 24 24"
-    width={size}
-    height={size}
-    className={className}
-    aria-hidden
-    focusable={false}
-  >
-    <rect x="1" y="1" width="22" height="22" rx="5" fill="#fff" />
-    <g fill="none" stroke="#111" strokeWidth="2.1" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M9 7 5.5 12 9 17" />
-      <path d="M15 7 18.5 12 15 17" />
-    </g>
-  </svg>
-);
-
 export function providerMark(id: string): (props?: IconProps) => React.ReactElement {
   if (id === "deepseek") return DeepSeekMark;
   if (id === "qwen") return QwenMark;
-  if (id === "arena") return ArenaMark;
   return ChatGptMark;
 }

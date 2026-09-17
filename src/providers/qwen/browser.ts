@@ -927,32 +927,30 @@ const SERVICE_CHECK_MS = 4_000;
  */
 const STUCK_STOP_MS = 60_000;
 
+/** One page round trip for everything the hot reply loop needs. */
+const READ_LAST_SCRIPT = `(() => ({
+  nodes: ${EXTRACT_REPLY_SCRIPT},
+  count: document.querySelectorAll(${JSON.stringify(ASSISTANT_SELECTOR)}).length,
+  generating: Boolean(document.querySelector(${JSON.stringify(STOP_BUTTON)})),
+}))()`;
+
 /** The last assistant reply, whether one is being written, and how many exist. */
 async function readLast(page: Page): Promise<{ text: string; count: number; generating: boolean }> {
-  const nodes = (await withTimeout(page.evaluate(EXTRACT_REPLY_SCRIPT), "reading the reply").catch(
+  // This used to make three sequential page calls per poll: reply, count,
+  // then Stop. Besides tripling protocol traffic, the values could describe
+  // three different frames. One bounded snapshot is both faster and true at
+  // one moment.
+  const reading = (await withTimeout(page.evaluate(READ_LAST_SCRIPT), "reading the reply").catch(
     () => null
-  )) as unknown;
-  // Every question to the page is bounded, including these two.
-  //
-  // `.catch()` handles a call that *rejects*; it does nothing about one that
-  // never comes back, and `$$eval` runs script in the page exactly as
-  // `evaluate` does — with no timeout of its own, for the reason set out
-  // above. These two sit in the poll loop, so one wedged renderer stops the
-  // loop running at all, and the turn deadline is only checked at the top of
-  // it: the turn then waits for ever, with no failure and nothing in the log
-  // after the last heartbeat.
-  const count = (await withTimeout(
-    page.$$eval(ASSISTANT_SELECTOR, (els) => els.length),
-    "counting the replies"
-  ).catch(() => 0)) as number;
-  const generating = (await withTimeout(
-    page.$$eval(STOP_BUTTON, (els) => els.length > 0),
-    "reading the progress indicator"
-  ).catch(() => false)) as boolean;
+  )) as { nodes: unknown; count: number; generating: boolean } | null;
   // The page hands back Monaco's lines as it found them; the rules that turn
   // those into text — order, indentation, trailing blanks — live in
   // `normalizeNodes`, where they are tested.
-  return { text: nodes ? toMarkdown(normalizeNodes(nodes as never)) : "", count, generating };
+  return {
+    text: reading?.nodes ? toMarkdown(normalizeNodes(reading.nodes as never)) : "",
+    count: Number.isFinite(reading?.count) ? reading!.count : 0,
+    generating: reading?.generating === true,
+  };
 }
 
 /**
@@ -1149,19 +1147,25 @@ export async function sendTurn(
       page.$eval(USER_MESSAGE, (els) => els.length),
       "counting my messages"
     ).catch(() => 0)) as number;
-    const landed = async (): Promise<boolean> => {
-      await page.waitForTimeout(600);
-      return (await withTimeout(
-        page.evaluate(
+    const landed = async (): Promise<boolean> =>
+      page
+        .waitForFunction(
           `(() => {
             const el = document.querySelector(${JSON.stringify(COMPOSER)});
             const mine = document.querySelectorAll(${JSON.stringify(USER_MESSAGE)}).length;
             return (el && el.value.length === 0) || mine > ${minesBefore};
-          })()`
-        ),
-        "checking the send landed"
-      ).catch(() => false)) as boolean;
-    };
+          })()`,
+          undefined,
+          // The old fixed 600ms pause charged every successful send the full
+          // amount. Polling returns as soon as Qwen clears the composer while
+          // preserving the same bounded wait before trying a fallback.
+          { timeout: 650, polling: 50 }
+        )
+        .then(async (handle) => {
+          await handle.dispose().catch(() => {});
+          return true;
+        })
+        .catch(() => false);
 
     // Playwright's click first: a real input event, at the real position.
     const why = await page
@@ -1464,13 +1468,17 @@ export async function sendTurn(
       // fall between two polls, and without it a reply that was never seen
       // mid-flight would wait out the settle window for nothing.
       if (!now.generating && (sawGenerating || quiet >= SETTLE_POLLS)) {
-        // One more poll after the button goes, because the last frame of
-        // text can land just after it.
-        await page.waitForTimeout(POLL_MS);
-        const settled = await readLast(page);
-        if (settled.text && settled.text !== last) {
-          last = settled.text;
-          opts.onProgress?.(last);
+        if (sawGenerating) {
+          // One more poll after the button goes, because the last frame of
+          // text can land just after it. When generation was too fast to see,
+          // `quiet >= SETTLE_POLLS` already performed this stillness check;
+          // charging another poll only delayed a finished answer.
+          await page.waitForTimeout(POLL_MS);
+          const settled = await readLast(page);
+          if (settled.text && settled.text !== last) {
+            last = settled.text;
+            opts.onProgress?.(last);
+          }
         }
         break;
       }

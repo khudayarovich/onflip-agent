@@ -198,22 +198,22 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "",
       "Every reply ends with a block: either the tool block(s) for the next step, or one of these two closing blocks.",
       "",
-      "```onflip",
+      "````onflip",
       "tool: done",
       "summary: |",
       "  What was done, with files as path:line, and anything left out and why.",
-      "```",
+      "````",
       "",
-      "`done` ends the turn with your final answer; `summary` is that answer, in Markdown, as the user should read it. Send it only when the whole request is finished and verified — never after a single step, never while an item on your task list is still open (mark it completed or cancelled first), and never right after a failed tool call.",
+      "`done` ends the turn; `summary` is the final Markdown answer. Use four backticks around this block so three-backtick code fences stay inside it, and indent every summary line two spaces. Send it only when the whole request is finished and verified — never after a single step, while a task-list item is open, or right after a failed tool call.",
       "",
-      "```onflip",
+      "````onflip",
       "tool: ask_user",
       "question: |",
       "  Which database should the report read from?",
       "options:",
       "  - the production replica",
       "  - the local SQLite copy",
-      "```",
+      "````",
       "",
       "`ask_user` ends the turn with a question only the user can answer — a real choice about what to do, with `options` when there are obvious ones. Never use it to ask permission to run a tool: OnFlip approves tool calls itself, so emit the call instead. Never use it to ask for the tools to be enabled, exposed, reconnected or granted: they are attached to every turn, this one included, and a reply that says otherwise is sent back to you. If you believe a tool is missing, call it and read the result.",
       "",
@@ -468,7 +468,7 @@ export function briefReminder(): string {
   return [
     "[OnFlip protocol reminder]",
     "To act on the user's machine, emit a fenced ```onflip block: a `tool:` line naming the tool, then its arguments as `key: value` lines, using `key: |` with an indented body for anything multi-line. Escape nothing.",
-    "Every reply ends with a block: `tool: done` with `summary: |` when the request is finished and verified, `tool: ask_user` with `question: |` when only the user can decide. Prose with no block is an error and comes back to you.",
+    "Every reply ends with a block: `tool: done` with `summary: |` when finished and verified, or `tool: ask_user` with `question: |` when only the user can decide. Closing blocks use a four-backtick fence; indent their value so three-backtick code fences stay inside. Prose with no block is an error and comes back to you.",
   ].join("\n");
 }
 
@@ -496,7 +496,7 @@ export function turnReminder(
     // The whole protocol for ending a turn, in three sentences. The
     // lighter models ended turns with "I'm verifying the build now." and no
     // block for as long as prose alone was allowed to end one.
-    "Every reply ends with a block. When the whole request is finished and verified, end with `tool: done` and `summary: |` holding your final answer; when only the user can decide what happens next, end with `tool: ask_user` and `question: |`. There is no third way to end a reply: prose with no block is an error and comes back to you.",
+    "Every reply ends with a block. When finished and verified, use `tool: done` and `summary: |`; when only the user can decide, use `tool: ask_user` and `question: |`. Closing blocks use four backticks; indent their value so three-backtick code fences stay inside. There is no third way: prose with no block is an error and comes back to you.",
     'Never end a reply by announcing what you are about to do ("I\'m verifying the build now", "next I\'ll implement…") — put the tool block for that step in the same reply. Never send done while an item on your task list is still open, or right after a failed tool call: fix the failure and take the next step.',
     remote ? remoteLine(tools) : "",
     languageAnchor(request) ||
@@ -594,7 +594,7 @@ export function protocolCorrection(
     "  <multi-line value, indented two spaces, taken literally>",
     "```",
     "",
-    "Escape nothing — quotes, backslashes, `$_` and newlines are all safe inside a `|` block, and that is the whole point of it. Or end the turn with `tool: done` (`summary: |`) or `tool: ask_user` (`question: |`), as documented.",
+    "Escape nothing — quotes, backslashes, `$_` and newlines are safe inside a `|` block. Or end with `tool: done` (`summary: |`) or `tool: ask_user` (`question: |`); their four-backtick fence keeps code fences inside the Markdown value.",
     "Do not describe output you have not received from a tool result.",
   );
   return lines.join("\n");

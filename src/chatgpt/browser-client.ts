@@ -2318,7 +2318,18 @@ export const EXTRACT_MESSAGE = new Function(
       // contents (or a card's decoration), not a code block: emitting the
       // fence made an empty reply look like a finished one.
       if (!body.trim()) return "";
-      return "\\n\`\`\`" + lang + "\\n" + body + "\\n\`\`\`\\n";
+      // A terminal tool deliberately uses an outer fence longer than the
+      // Markdown fences in its summary. Preserve that relationship after
+      // ChatGPT has rendered away the source markers: rebuilding every
+      // block with three backticks makes the first nested example close the
+      // tool call and strands the rest of the answer as unformatted prose.
+      let fenceLength = 3;
+      for (const line of body.split("\\n")) {
+        const nested = /^\\s*(\\x60{3,})/.exec(line);
+        if (nested) fenceLength = Math.max(fenceLength, nested[1].length + 1);
+      }
+      const fence = String.fromCharCode(96).repeat(fenceLength);
+      return "\\n" + fence + lang + "\\n" + body + "\\n" + fence + "\\n";
     }
     if (tag === "br") return "\\n";
     if (tag === "script" || tag === "style" || tag === "svg" || tag === "button") return "";

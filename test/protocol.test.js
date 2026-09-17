@@ -192,3 +192,80 @@ test("the closing blocks parse like any other call", () => {
   const ask = parse("```onflip\ntool: ask_user\nquestion: |\n  Which file?\n```");
   assert.equal(ask.calls[0].tool, "ask_user");
 });
+
+test("a four-backtick closing block keeps fenced Markdown in its summary", () => {
+  const done = parse([
+    "````onflip",
+    "tool: done",
+    "summary: |",
+    "  **Result**",
+    "  ```text",
+    "  first line",
+    "  second line",
+    "  ```",
+    "  The explanation remains prose.",
+    "````",
+  ].join("\n"));
+
+  assert.equal(done.calls.length, 1);
+  assert.equal(done.text, "");
+  assert.equal(
+    done.calls[0].arguments.summary,
+    "**Result**\n```text\nfirst line\nsecond line\n```\nThe explanation remains prose."
+  );
+});
+
+test("a provider-split done answer is recovered as formatted Markdown", () => {
+  // From onflip-20260917140451-c74694b1.md: the provider closed the onflip
+  // block on the first inner fence, then returned later code spans with a
+  // `text` label where their closing fence had been.
+  const done = parse([
+    "Report follows.",
+    "```onflip",
+    "tool: done",
+    "summary: |",
+    "  **First error**",
+    "```",
+    "output one",
+    "```text",
+    "Explanation between blocks.",
+    "```",
+    "output two",
+    "```text",
+    "Closing explanation.",
+    "```",
+  ].join("\n"));
+
+  assert.equal(done.calls.length, 1);
+  assert.equal(done.text, "Report follows.");
+  assert.equal(
+    done.calls[0].arguments.summary,
+    [
+      "**First error**",
+      "```",
+      "output one",
+      "```",
+      "Explanation between blocks.",
+      "```",
+      "output two",
+      "```",
+      "Closing explanation.",
+    ].join("\n")
+  );
+});
+
+test("an indented inner fence does not close its onflip block", () => {
+  const done = parse([
+    "```onflip",
+    "tool: done",
+    "summary: |",
+    "  ```text",
+    "  output",
+    "  ```",
+    "  Still part of the answer.",
+    "```",
+  ].join("\n"));
+
+  assert.equal(done.calls.length, 1);
+  assert.match(done.calls[0].arguments.summary, /Still part of the answer/);
+});

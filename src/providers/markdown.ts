@@ -29,6 +29,16 @@ export type ReplyNode =
 /** Three backticks, as a value, so a template literal can hold them. */
 const FENCE = "```";
 
+/** A backtick fence longer than every fence-like line in the body. */
+function enclosingFence(body: string): string {
+  let longest = 2;
+  for (const line of body.split("\n")) {
+    const marker = /^\s*(`{3,})/.exec(line)?.[1];
+    if (marker) longest = Math.max(longest, marker.length);
+  }
+  return "`".repeat(longest + 1);
+}
+
 /** How many fence markers a block's body contains. */
 function fenceCount(body: string): number {
   return body.split("\n").filter((l) => /^\s*`{3}/.test(l)).length;
@@ -86,9 +96,15 @@ export function toMarkdown(nodes: ReplyNode[]): string {
       parts.push(
         node.items.map((it, n) => (node.ordered ? `${n + 1}. ${it}` : `- ${it}`)).join("\n")
       );
-    else parts.push(`${FENCE}${node.lang}
+    else {
+      // The provider discarded the source fence. Rebuild it longer than any
+      // Markdown fence carried inside the tool argument; a fixed ``` outer
+      // fence is exactly how a done summary was split into unformatted text.
+      const fence = enclosingFence(node.body);
+      parts.push(`${fence}${node.lang}
 ${node.body}
-${FENCE}`);
+${fence}`);
+    }
   }
   return parts.join("\n\n").trim();
 }

@@ -60,6 +60,7 @@ test("and it still carries the two things a drifting model forgets", () => {
   assert.match(brief, /```onflip/, "how to write a call");
   assert.match(brief, /ends with a block/, "that a reply must end with one");
   assert.match(brief, /tool: done/, "and how to end the turn");
+  assert.match(brief, /four-backtick/, "nested Markdown cannot close a terminal block");
 });
 
 test("the full form keeps what only it can carry", () => {

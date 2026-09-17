@@ -39,9 +39,11 @@ const {
 
 // --- what counts as a provider ---------------------------------------------
 
-test("the two known ids are accepted and nothing else is", () => {
+test("the three supported ids are accepted and retired providers are not", () => {
   assert.equal(isProviderId("chatgpt"), true);
   assert.equal(isProviderId("deepseek"), true);
+  assert.equal(isProviderId("qwen"), true);
+  assert.equal(isProviderId("arena"), false);
   assert.equal(isProviderId("gemini"), false);
   assert.equal(isProviderId(""), false);
   assert.equal(isProviderId(undefined), false);
@@ -65,6 +67,10 @@ test("a value nobody recognises means ChatGPT, not a broken run", () => {
   write({ provider: "" });
   assert.equal(activeProvider(), "chatgpt");
   write({ provider: 7 });
+  assert.equal(activeProvider(), "chatgpt");
+  // Existing installs that last used the retired Arena provider recover to
+  // the default instead of starting with an unknown transport.
+  write({ provider: "arena" });
   assert.equal(activeProvider(), "chatgpt");
 });
 
