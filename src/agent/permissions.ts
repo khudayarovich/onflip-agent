@@ -1,4 +1,5 @@
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /**
@@ -142,17 +143,21 @@ export type PermissionDecision =
  * down. These always prompt unless the mode is explicitly `yolo`.
  */
 const DESTRUCTIVE_PATTERNS: { re: RegExp; why: string }[] = [
-  { re: /\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rf]/, why: "recursive/forced delete" },
+  // `-R` as well as `-r`: POSIX rm takes both for recursion.
+  { re: /\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rRf]/, why: "recursive/forced delete" },
   { re: /\brm\b[^|;\n]*\s--(recursive|force)\b/, why: "recursive/forced delete" },
-  { re: /\b(rd|rmdir)\b(\s+\/[a-z])*\s+\/s\b/i, why: "recursive directory delete" },
-  { re: /\bdel\s+.*\/[sfq]/i, why: "forced delete" },
+  // The switches can come after the path: `rd C:\proj /s /q`.
+  { re: /\b(rd|rmdir)\b[^|;&\n]*\s\/s\b/i, why: "recursive directory delete" },
+  { re: /\b(del|erase)\b[^|;&\n]*\s\/[sfq]\b/i, why: "forced delete" },
   // PowerShell spells delete five ways and lets a parameter be any unambiguous
   // prefix of its name, so `ri -Rec -Fo` is the same call as
-  // `Remove-Item -Recurse -Force`, in either order.
-  { re: /\b(ri|rm|del|erase|rd|rmdir|Remove-Item)\b[^|;\n]*\s-(Rec|Fo)\w*/i, why: "recursive/forced delete" },
+  // `Remove-Item -Recurse -Force`, in either order — and `-r` is as far as
+  // `-Recurse` needs spelling.
+  { re: /\b(ri|rm|del|erase|rd|rmdir|Remove-Item)\b[^|;\n]*\s-(r|re|rec\w*|fo\w*)\b/i, why: "recursive/forced delete" },
   // `Get-ChildItem -Recurse | Remove-Item`: the recursion sits on the
   // producer, and every delete later in the pipeline inherits it.
-  { re: /-Rec\w*\b[^\n]*\|\s*(Remove-Item|ri|rm|del|erase|rd|rmdir)\b/i, why: "recursive delete" },
+  { re: /\s-r(ec\w*)?\b[^\n]*\|\s*(Remove-Item|ri|rm|del|erase|rd|rmdir)\b/i, why: "recursive delete" },
+  { re: /\bfind\b[^|;&\n]*\s(-delete\b|-exec\s+rm\b)/, why: "deletes what it finds" },
   { re: /\bformat\b\s+[a-z]:/i, why: "disk format" },
   { re: /\b(Format-Volume|Clear-Disk|Initialize-Disk|Remove-Partition|diskpart)\b/i, why: "disk or partition wipe" },
   { re: /\bmkfs(\.\w+)?\b/, why: "filesystem format" },
@@ -166,10 +171,13 @@ const DESTRUCTIVE_PATTERNS: { re: RegExp; why: string }[] = [
   { re: /\bgit\s+push\b[^|;\n]*\s\+\S/, why: "force push" },
   { re: /\bgit\s+push\b.*--force-with-lease\b/, why: "force push with lease" },
   { re: /\bgit\s+reset\s+--hard\b/, why: "discards local changes" },
-  { re: /\bgit\s+clean\s+-[a-zA-Z]*[fd]/, why: "deletes untracked files" },
-  { re: /\bcurl\b[^|]*\|\s*(sudo\s+)?(ba)?sh\b/, why: "pipes remote script to shell" },
-  { re: /\bwget\b[^|]*\|\s*(sudo\s+)?(ba)?sh\b/, why: "pipes remote script to shell" },
-  { re: /\bInvoke-Expression\b|\biex\b\s*\(/i, why: "evaluates dynamic code" },
+  // Any flag order, and the long form; only a dry run is safe.
+  { re: /\bgit\s+clean\b(?![^|;&\n]*\s(-n\b|--dry-run\b))[^|;&\n]*\s(-[a-zA-Z]*[fdx]|--force)\b/, why: "deletes untracked files" },
+  {
+    re: /\b(curl|wget|iwr|irm|Invoke-WebRequest|Invoke-RestMethod)\b[^|]*\|\s*(sudo\s+)?((ba|z|k|da|fi)?sh|python\d?|node|perl|ruby|pwsh|powershell|iex|Invoke-Expression)\b/i,
+    why: "pipes remote script to shell",
+  },
+  { re: /\bInvoke-Expression\b|\biex\b\s*\(|\|\s*iex\b/i, why: "evaluates dynamic code" },
   { re: /\bnpm\s+publish\b|\byarn\s+publish\b|\bpnpm\s+publish\b/, why: "publishes a package" },
   { re: /\bsudo\b|\brunas\b/i, why: "elevates privileges" },
   { re: /\b(chmod|chown)\s+-R\b/, why: "recursive permission change" },
@@ -243,6 +251,43 @@ export function commandKey(command: string): string {
  * command to remember - it is data on its way to a file.
  */
 export function stripHeredocBodies(command: string): string {
+  // Dropping lines is only safe when they really are a body. Anything this
+  // takes for one is hidden from the allowlist and the rules alike, so a
+  // wrong guess is a bypass: `Write-Output '<<EOF'`, approved once, carried
+  // every line after it past the approval check as "body". So a marker only
+  // counts outside quotes.
+  //
+  // Both shells' forms, whichever shell runs the line, and that is safe both
+  // ways round: PowerShell refuses an unquoted `<<` at parse time and runs
+  // nothing at all, and to a POSIX shell `@'…'@` is a quoted string.
+  return stripHereStrings(stripPosixHeredocs(command));
+}
+
+/** The opening `<<` markers on a line that sit outside quotes. */
+function heredocDelimiters(line: string): string[] {
+  const delimiters: string[] = [];
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote && !(quote === '"' && line[i - 1] === "\\")) quote = null;
+      continue;
+    }
+    if (ch === "'" || ch === '"') {
+      quote = ch;
+      continue;
+    }
+    if (ch !== "<" || line[i + 1] !== "<" || line[i - 1] === "<" || line[i + 2] === "<") continue;
+    const m = /^<<-?\s*(?:(['"])([A-Za-z_]\w*)\1|([A-Za-z_]\w*))/.exec(line.slice(i));
+    if (m) {
+      delimiters.push(m[2] ?? m[3]);
+      i += m[0].length - 1;
+    }
+  }
+  return delimiters;
+}
+
+function stripPosixHeredocs(command: string): string {
   const lines = command.split("\n");
   const kept: string[] = [];
   let index = 0;
@@ -254,11 +299,7 @@ export function stripHeredocBodies(command: string): string {
 
     // Several on one line is legal: `cmd <<A <<B`. Each body follows in
     // the order its delimiter was named.
-    const delimiters = [...line.matchAll(/(?<!<)<<(?!<)-?\s*(?:(['"])([A-Za-z_][\w]*)\1|([A-Za-z_][\w]*))/g)]
-      .map((match) => match[2] ?? match[3])
-      .filter(Boolean);
-
-    for (const delimiter of delimiters) {
+    for (const delimiter of heredocDelimiters(line)) {
       while (index < lines.length) {
         const body = lines[index];
         index++;
@@ -267,6 +308,49 @@ export function stripHeredocBodies(command: string): string {
     }
   }
   return kept.join("\n");
+}
+
+/**
+ * PowerShell's here-strings: `@'` or `@"` ending a line opens one, and `'@`
+ * or `"@` at the start of a line closes it. `<<` means nothing to PowerShell.
+ */
+function stripHereStrings(command: string): string {
+  const lines = command.split("\n");
+  const kept: string[] = [];
+  let closer: string | null = null;
+  for (const line of lines) {
+    if (closer) {
+      if (line.trimEnd().startsWith(closer)) {
+        closer = null;
+        kept.push(line);
+      }
+      continue;
+    }
+    kept.push(line);
+    closer = hereStringOpener(line);
+  }
+  return kept.join("\n");
+}
+
+/**
+ * The closer a line's here-string needs, if the line opens one: `@'` or `@"`
+ * outside any quotes, and nothing after it. `Write-Output 'user@'` ends in
+ * the same two characters and opens nothing.
+ */
+function hereStringOpener(line: string): string | null {
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i];
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === "@" && (line[i + 1] === "'" || line[i + 1] === '"') && !line.slice(i + 2).trim()) {
+      return `${line[i + 1]}@`;
+    }
+    if (ch === "'" || ch === '"') quote = ch;
+  }
+  return null;
 }
 /**
  * Split a line into the commands it actually runs.
@@ -503,8 +587,9 @@ export function evaluate(policy: PolicyState, req: PermissionRequest): PolicyVer
 
     // An explicit rule is the user's own decision about this exact command, so
     // it outranks the mode in both directions — including `deny` under yolo,
-    // which is the point of writing a deny rule at all.
-    const rule = matchBashRule(req.subject, policy.bashRules);
+    // which is the point of writing a deny rule at all. Decided per command
+    // on the line: see `evaluateBashRules`.
+    const rule = evaluateBashRules(req.subject, policy.bashRules);
     if (rule?.action === "deny") {
       return {
         outcome: "deny",
@@ -553,8 +638,27 @@ export function remember(policy: PolicyState, req: PermissionRequest): void {
       if (isStorableCommandKey(key)) policy.allowedCommands.add(key);
     }
   } else if (req.kind === "write" && req.targetPath) {
-    policy.allowedWriteDirs.add(path.dirname(path.resolve(req.targetPath)));
+    const dir = rememberableWriteDir(req.targetPath);
+    if (dir) policy.allowedWriteDirs.add(dir);
   }
+}
+
+/**
+ * The folder "always allow" would clear for a write, or null when it is too
+ * broad to clear at all.
+ *
+ * It is the file's parent, and a remembered folder is checked before the
+ * mode — so approving one write to `C:\note.txt` remembered `C:\`, and every
+ * write on the drive ran unasked afterwards, `hosts` and `~/.ssh` included,
+ * in "ask first" mode. A drive root, the filesystem root, the home folder
+ * and anything above it are never remembered; that write is allowed once.
+ */
+export function rememberableWriteDir(targetPath: string, home: string = os.homedir()): string | null {
+  const dir = path.dirname(path.resolve(targetPath));
+  if (path.parse(dir).root === dir) return null;
+  const homeDir = path.resolve(home);
+  if (isInside(dir, homeDir)) return null;
+  return dir;
 }
 
 // ---------------------------------------------------------------------------
@@ -601,6 +705,82 @@ function patternToRegExp(pattern: string): RegExp {
 export interface RuleMatch {
   action: RuleAction;
   pattern: string;
+}
+
+/**
+ * The forms a command can hide inside: a group `( … )`, a call operator, or
+ * a wrapper that runs whatever follows it. A deny rule for `rm *` must see
+ * `sudo rm -rf /` and `(rm -rf /)` as the `rm` they are.
+ */
+function commandVariants(segment: string): string[] {
+  const variants: string[] = [];
+  let current = segment.trim();
+  for (let depth = 0; depth < 6 && current; depth++) {
+    variants.push(current);
+    const ungrouped = current.replace(/^[({[&!@]+\s*/, "").replace(/\s*[)}\]]+$/, "").trim();
+    const unwrapped = ungrouped
+      .replace(/^(sudo|doas|nohup|time|command|exec|builtin|xargs|nice|stdbuf)(\s+-\S+)*\s+/i, "")
+      .replace(/^env(\s+-\S+)*(\s+[A-Za-z_]\w*=\S*)*\s+/i, "")
+      .replace(/^cmd(\.exe)?\s+\/[ck]\s+/i, "")
+      .replace(/^(pwsh|powershell)(\.exe)?(\s+-\S+)*\s+-c(ommand)?\s+/i, "")
+      .replace(/^(ba|z|da)?sh\s+-c\s+/i, "")
+      .replace(/^(["'])([\s\S]*)\1$/, "$2")
+      .trim();
+    if (unwrapped === current) break;
+    current = unwrapped;
+  }
+  return variants;
+}
+
+/** A pattern that is itself about several commands, written on purpose. */
+function spansCommands(pattern: string): boolean {
+  return /;|&&|\|\||\||\n/.test(pattern);
+}
+
+/**
+ * The rule table's verdict on a command line, one command at a time.
+ *
+ * Matching the whole line was a bypass in both directions. `git *: allow`
+ * matched `git status && rm -rf ~` — the glob swallowed the rest of the line
+ * — and an allow returns before the destructive check, so it ran unasked.
+ * And `rm *: deny` never saw the `rm` in `cd build && rm -rf *`. The
+ * allowlist already split the line for exactly this reason; the rules did
+ * not.
+ *
+ * So every command on the line is judged on its own. Any one denied denies
+ * the line; any one that asks makes the line ask; and only a line whose
+ * every command is allowed by a rule is allowed by the rules. Anything less
+ * is left to the mode and the destructive check, as an unruled command
+ * always was. A deny or ask also looks through wrappers (`sudo`, `env`,
+ * `cmd /c`, a subshell); an allow never does, so `git *` cannot approve
+ * `sudo git …`. A pattern the user wrote about a whole compound line still
+ * matches the whole line.
+ */
+export function evaluateBashRules(command: string, rules: BashRules | undefined): RuleMatch | null {
+  if (!rules || Object.keys(rules).length === 0) return null;
+  const segments = commandKeys(command);
+  if (segments.length === 0) return matchBashRule(command, rules);
+
+  let asked: RuleMatch | null = null;
+  let allAllowed = true;
+  const allowedBy: string[] = [];
+  for (const segment of segments) {
+    const verdicts = commandVariants(segment)
+      .map((variant) => matchBashRule(variant, rules))
+      .filter((v): v is RuleMatch => v !== null);
+    const denied = verdicts.find((v) => v.action === "deny");
+    if (denied) return denied;
+    asked ??= verdicts.find((v) => v.action === "ask") ?? null;
+    const own = matchBashRule(segment, rules);
+    if (own?.action === "allow") allowedBy.push(own.pattern);
+    else allAllowed = false;
+  }
+  const whole = matchBashRule(command, rules);
+  if (whole?.action === "deny") return whole;
+  if (asked) return asked;
+  if (allAllowed) return { action: "allow", pattern: [...new Set(allowedBy)].join(", ") };
+  if (whole?.action === "allow" && spansCommands(whole.pattern)) return whole;
+  return null;
 }
 
 /**

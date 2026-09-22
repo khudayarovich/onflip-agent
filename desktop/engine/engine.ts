@@ -115,6 +115,7 @@ import {
   evaluate,
   remember,
   commandKey,
+  rememberableWriteDir,
   PolicyState,
   BashRules,
   isRuleAction,
@@ -1247,7 +1248,10 @@ export class Engine {
   private rememberLabel(req: PermissionRequest): string | undefined {
     if (req.kind === "command") return commandKey(req.subject) ? "Always allow" : undefined;
     if (req.kind === "write" && req.targetPath) {
-      const dir = path.dirname(path.resolve(req.targetPath));
+      // A drive root or the home folder is never remembered, so the control
+      // is not offered for one: see `rememberableWriteDir`.
+      const dir = rememberableWriteDir(req.targetPath);
+      if (!dir) return undefined;
       const rel = path.relative(this.cwd, dir).replace(/\\/g, "/") || ".";
       return `Always allow writes in ${rel}`;
     }
