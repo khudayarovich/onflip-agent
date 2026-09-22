@@ -82,3 +82,12 @@ test("a file that is not a database falls back to its bytes", () => {
   assert.equal(liveSessionCookies(cookiesFile), null);
   assert.equal(profileHasSession(), true);
 });
+
+test("a store that cannot be read at all is unknown, not signed out", () => {
+  // What a running browser's lock looks like from here: the file is there
+  // and neither a copy nor a read of it can be made. (A folder in its place
+  // fails both the same way, without needing a browser.)
+  fs.rmSync(path.dirname(path.dirname(cookiesFile)), { recursive: true, force: true });
+  fs.mkdirSync(cookiesFile, { recursive: true });
+  assert.equal(profileHasSession(), null);
+});

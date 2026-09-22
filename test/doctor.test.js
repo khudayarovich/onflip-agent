@@ -72,6 +72,14 @@ test("signed out in the app is a failure, not a missing session", () => {
   assert.match(check.message, /Signed out in the app/i);
 });
 
+test("a profile that could not be read is not a missing session", () => {
+  // On Windows the running browser holds its cookie store; reading it
+  // failed, and a working session was reported as "no session anywhere".
+  const check = find(runChecks(healthy({ profileSignedIn: null, storedSessionCookies: 0 })), "session");
+  assert.equal(check.status, "warn");
+  assert.match(check.message, /could not be checked/);
+});
+
 test("a stored jar with no profile session is a warning, not a failure", () => {
   // This heals itself on the next launch, so it must not read as broken.
   const check = find(

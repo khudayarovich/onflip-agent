@@ -5054,6 +5054,12 @@ export async function signInWithRealBrowser(
     };
   }
   logger.info("browser", "signed in through a real browser", { channel: pick.channel });
+  // A session the person has just made is not the jar that failed before.
+  // The flag outlived the sign-in when nothing was injected — the profile
+  // holds this session itself — so the first page to load before its
+  // cookies settled was declared expired, fatally, with no reload.
+  storedJarSpent = false;
+  sessionSuspect = false;
   return { ok: true, browser: pick };
 }
 

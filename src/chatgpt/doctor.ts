@@ -68,8 +68,11 @@ export interface DoctorEnvironment {
   writable(p: string): boolean;
   /** How many session-token cookies the stored jar holds. */
   storedSessionCookies: number;
-  /** Whether the browser profile directory has been signed in to. */
-  profileSignedIn: boolean;
+  /**
+   * Whether the browser profile directory has been signed in to; null when
+   * its cookie store exists and could not be read at all.
+   */
+  profileSignedIn: boolean | null;
   /** Milliseconds left on a persisted cooldown. */
   cooldownMs: number;
   /** The account plan, when one has been read. */
@@ -107,6 +110,16 @@ export function runChecks(env: DoctorEnvironment): DoctorReport {
       env.storedSessionCookies > 0
         ? "The browser profile is signed in, with a stored session held in reserve."
         : "The browser profile is signed in."
+    );
+  } else if (env.profileSignedIn === null) {
+    // The store is there and could not be read — on Windows, the browser
+    // OnFlip drives holds it while it runs. That is not an absent session,
+    // and a FAIL here was shown during perfectly working sessions.
+    add(
+      "session",
+      "ChatGPT session",
+      "warn",
+      "OnFlip's browser is holding its profile, so the session in it could not be checked just now. If sending works, it is fine; if not, sign in from the account menu."
     );
   } else if (env.storedSessionCookies > 0) {
     add(
@@ -306,7 +319,7 @@ export function liveSessionCookies(db: string, now = Date.now()): number | null 
  * runtime, say — the cookie's name in the file's bytes is the fallback:
  * Chromium encrypts the values, not the names.
  */
-export function profileHasSession(): boolean {
+export function profileHasSession(): boolean | null {
   const profile = path.join(configDir(), "browser-profile");
   // Chromium moved the cookie store under `Network/` around v96, and the
   // layout is otherwise identical on Windows, macOS and Linux. Both are
@@ -317,6 +330,7 @@ export function profileHasSession(): boolean {
     path.join(profile, "Default", "Network", "Cookies"),
     path.join(profile, "Default", "Cookies"),
   ];
+  let unreadable = false;
   for (const db of candidates) {
     try {
       if (!fs.existsSync(db)) continue;
@@ -327,13 +341,16 @@ export function profileHasSession(): boolean {
       }
       if (fs.readFileSync(db).includes(SESSION_COOKIE)) return true;
     } catch (e) {
+      unreadable = true;
       logger.debug("doctor", "could not read a profile cookie store", {
         db,
         error: e instanceof Error ? e.message : String(e),
       });
     }
   }
-  return false;
+  // Found nowhere, and at least one store could not even be opened: that
+  // is not knowing, not "no session".
+  return unreadable ? null : false;
 }
 
 /**
