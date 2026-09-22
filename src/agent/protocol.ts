@@ -1399,9 +1399,21 @@ function tidy(s: string): string {
 export function formatToolResult(call: ToolCall, output: string, isError: boolean): string {
   return [
     `<onflip:result tool="${call.tool}"${isError ? ' status="error"' : ""}>`,
-    output,
+    defuseResultClose(output),
     "</onflip:result>",
   ].join("\n");
+}
+
+/**
+ * Output that contains `</onflip:result` ends its own result early, and
+ * whatever follows it no longer reads as tool output: a fetched page or a
+ * file could close the result and write its own "instructions" after it.
+ * Escaped the way `</script>` is escaped in HTML, so the text stays readable
+ * and closes nothing. Only the close: an opening tag inside output cannot
+ * end the result it sits in.
+ */
+function defuseResultClose(output: string): string {
+  return output.replace(/<\/(onflip:result)/gi, "<\\/$1");
 }
 
 /**
