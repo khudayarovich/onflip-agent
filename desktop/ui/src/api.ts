@@ -35,7 +35,8 @@ export const api = {
   listSessions: (limit?: number) => call<SessionSummaryDTO[]>("listSessions", { limit }),
   resumeSession: (id: string) => call<EngineStatus>("resumeSession", { id }),
   deleteSession: (id: string) => call<{ ok: boolean }>("deleteSession", { id }),
-  rollback: (messageId: string) => call<{ text: string }>("rollback", { messageId }),
+  rollback: (messageId: string) =>
+    call<{ text: string; attachments?: string[] }>("rollback", { messageId }),
   /** Tell the agent's browser what shape the panel is, so pages fill it. */
   setBrowserViewport: (width: number, height: number, scale?: number) =>
     call<{ ok: boolean }>("setBrowserViewport", { width, height, scale }),

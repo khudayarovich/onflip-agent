@@ -130,6 +130,23 @@ test("the engine's Undo steps back through one file's edits", { skip: needsBuild
   assert.equal(fs.readFileSync(file, "utf8"), "v0");
 });
 
+test("rolling a message back returns its words and its files, without OnFlip's notes", { skip: needsBuild }, async () => {
+  // Edit and Resend are built on this. The history kept only a note naming
+  // the files, so a resend sent "[Attached to this message: …]" as words
+  // and attached nothing.
+  const { engine, work } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+  const file = path.join(work, "shot.png");
+  fs.writeFileSync(file, "png");
+  // A real session, which opens with its system prompt.
+  engine.newSession();
+  engine.send("look at this", [file]);
+  await waitIdle(engine);
+  const sent = engine.history.find((m) => m.role === "user");
+  assert.deepEqual(sent.attachments, [file]);
+  const back = engine.rollbackMessage(sent.id);
+  assert.deepEqual(back, { text: "look at this", attachments: [file] });
+});
+
 test("a setting named after Object.prototype is not a setting", { skip: needsBuild }, () => {
   // The table of settings answered for "constructor" with the Object
   // function, which ran on the value and saved whatever it made.

@@ -120,7 +120,12 @@ export function replayItems(history: ChatMessage[]): ChatItem[] {
       continue;
     }
     // The history message's own id, so edit/resend can address it later.
-    items.push({ type: "user", id: message.id, text: stripMentionNote(message.content) });
+    items.push({
+      type: "user",
+      id: message.id,
+      text: stripUserNotes(message.content),
+      attachments: message.attachments?.length ? message.attachments : undefined,
+    });
   }
 
   // The last turn has no request after it to trigger the check above.
@@ -206,12 +211,17 @@ function argumentList(value: unknown): string[] {
 }
 
 /**
- * Remove the note `expandMentions` appends for @path references — it is for
- * the model, and showing or re-editing it reads as noise the user never typed.
+ * Remove the notes OnFlip appends to a message for the model — the one
+ * `expandMentions` writes for @path references, and the one naming the
+ * files attached — in the reverse of the order they are appended. They are
+ * for the model; shown or re-edited they read as words the user never
+ * typed, and a resend sent "[Attached to this message: …]" as the prompt.
  */
-export function stripMentionNote(content: string): string {
-  return content.replace(
-    /\n\n\[The user referenced these paths: [^\]]*\. Read them before answering\.\]$/,
-    ""
-  );
+export function stripUserNotes(content: string): string {
+  return content
+    .replace(
+      /\n\n\[(?:Attached to this message: [^\]]*|These files were named but not uploaded, because this plan rations uploads\. Read them from disk if you need them: [^\]]*)\]$/,
+      ""
+    )
+    .replace(/\n\n\[The user referenced these paths: [^\]]*\. Read them before answering\.\]$/, "");
 }

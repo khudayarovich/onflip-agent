@@ -9,6 +9,7 @@ import { Menu, useMenu } from "./common";
 import { useT, StringKey, LangContext } from "../i18n";
 import { SKILLS, canonicaliseSkillMentions, findSkillMention } from "../../../shared/skills";
 import { isOffered } from "../../../shared/approval";
+import { LAYER_QUERY, escapeInterrupts } from "../../../shared/escape";
 import { ChevronDown, Close, fileGlyph } from "./icons";
 
 export { SLASH_COMMANDS, slashCommands } from "../../../shared/commands";
@@ -396,7 +397,7 @@ export function Composer({
       submit();
       return;
     }
-    if (e.key === "Escape" && busy) {
+    if (escapeInterrupts(e, busy, Boolean(document.querySelector(LAYER_QUERY)))) {
       e.preventDefault();
       onInterrupt();
     }

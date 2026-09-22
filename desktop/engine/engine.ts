@@ -161,7 +161,7 @@ import {
   SubTaskDTO,
 } from "../shared/protocol";
 import { buildFileDiff, FULL_MAX_CHARS, FULL_MAX_LINES } from "./diffs";
-import { replayItems, stripMentionNote } from "./replay";
+import { replayItems, stripUserNotes } from "./replay";
 import { expandSkillToken } from "../shared/skills";
 import { subjectFor } from "./subjects";
 import { SilenceWatch } from "./silence";
@@ -1576,6 +1576,9 @@ export class Engine {
     // @skill tags expand into their full prompt for the model; the emitted
     // item keeps the compact tag, which the chat renders as a link.
     const userMessage = newMessage("user", expandMentions(expandSkillToken(text), this.cwd));
+    // Kept on the message as paths, which the text below only names: an
+    // edit or a resend needs the files themselves to attach again.
+    if (attachments?.length) userMessage.attachments = [...attachments];
     // Files go to the browser transport as a side-channel: the payload is
     // text, and the composer uploads these alongside it. The model is told
     // in words too, so it knows to look at what was attached.
@@ -2979,13 +2982,14 @@ export class Engine {
    * conversation, which is the same recovery a resumed session uses. An
    * attached chat link is dropped for the same reason.
    */
-  rollbackMessage(messageId: string): { text: string } {
+  rollbackMessage(messageId: string): { text: string; attachments?: string[] } {
     this.assertIdle();
     const index = this.history.findIndex((m) => m.id === messageId);
     if (index <= 0 || this.history[index].role !== "user") {
       throw new Error("That message can no longer be edited — start a new prompt instead.");
     }
-    const text = stripMentionNote(this.history[index].content);
+    const text = stripUserNotes(this.history[index].content);
+    const attachments = this.history[index].attachments;
     this.history.length = index;
     this.transport?.reset();
     this.session.chatId = undefined;
@@ -3001,7 +3005,7 @@ export class Engine {
     }
     this.pushTranscript();
     this.pushStatus();
-    return { text };
+    return attachments?.length ? { text, attachments: [...attachments] } : { text };
   }
 
   async compactTranscript(): Promise<{ ok: boolean }> {

@@ -494,7 +494,7 @@ export interface EngineMethods {
   };
   deleteSession: { params: { id: string }; result: { ok: boolean } };
   /** Drop everything after a user message, handing its text back for editing. */
-  rollback: { params: { messageId: string }; result: { text: string } };
+  rollback: { params: { messageId: string }; result: { text: string; attachments?: string[] } };
 
   /** Signing in and out, and the agent's browser panel. */
   importBrowserSession: { params: Record<string, never>; result: BrowserImportResult };

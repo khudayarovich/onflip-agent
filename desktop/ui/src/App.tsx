@@ -659,10 +659,17 @@ export function App(): React.ReactElement {
         setModal("signin");
         return false;
       }
-      guard(api.send(text, attachments?.length ? attachments : undefined));
+      api.send(text, attachments?.length ? attachments : undefined).catch((e: Error) => {
+        notifyError(e.message);
+        // The composer cleared when it handed the message over. A send the
+        // engine refused — "still connecting", most often, in the seconds
+        // after launch — never happened, so the words and files go back
+        // where they were typed instead of vanishing with the error.
+        setDraft({ text, files: attachments, nonce: Date.now() });
+      });
       return true;
     },
-    [guard, connect]
+    [notifyError, connect]
   );
 
   const loadModels = useCallback(() => {
@@ -705,8 +712,10 @@ export function App(): React.ReactElement {
           .rollback(id)
           .then((r) => {
             refreshLists();
-            if (mode === "edit") setDraft({ text: r.text, nonce: Date.now() });
-            else sendPrompt(r.text);
+            // The files come back with the words: a resend without them
+            // was a different message, and an edit lost them silently.
+            if (mode === "edit") setDraft({ text: r.text, files: r.attachments, nonce: Date.now() });
+            else sendPrompt(r.text, r.attachments);
           })
           .catch((e: Error) => notifyError(e.message));
       if (id === lastUserId) run();

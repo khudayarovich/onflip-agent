@@ -16,6 +16,12 @@ export interface ChatMessage {
   prunedChars?: number;
   /** Where the whole of this result was written before it was cut down. */
   spilledTo?: string;
+  /**
+   * Files the person attached to this message, by path. The text only names
+   * them for the model; without the paths an edit or a resend had nothing to
+   * attach again.
+   */
+  attachments?: string[];
 }
 
 export interface ToolCall {
