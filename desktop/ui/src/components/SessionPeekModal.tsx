@@ -71,7 +71,7 @@ export function SessionPeekModal({
       ) : (
         <div className="peek-transcript">
           {items.map((item) => (
-            <TranscriptItem key={item.id} item={item} toolProgress={{}} />
+            <TranscriptItem key={item.id} item={item} />
           ))}
         </div>
       )}

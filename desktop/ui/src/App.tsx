@@ -672,6 +672,12 @@ export function App(): React.ReactElement {
     [notifyError, connect]
   );
 
+  // One function for the life of `sendPrompt`: a fresh closure on every
+  // render would defeat the memoised transcript items that receive it.
+  const resumeTurn = useCallback(() => {
+    sendPrompt("continue");
+  }, [sendPrompt]);
+
   const loadModels = useCallback(() => {
     if (models.length === 0) void api.listModels().then(setModels).catch(() => {});
   }, [models.length]);
@@ -1310,7 +1316,7 @@ export function App(): React.ReactElement {
             deliveries={deliveries}
             onRevise={busy || engineDown ? undefined : reviseMessage}
             onUnqueue={engineDown ? undefined : unqueueMessage}
-            onResume={busy || engineDown ? undefined : () => sendPrompt("continue")}
+            onResume={busy || engineDown ? undefined : resumeTurn}
             searchOpen={searchOpen}
             onCloseSearch={() => setSearchOpen(false)}
           />

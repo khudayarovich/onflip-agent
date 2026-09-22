@@ -101,7 +101,7 @@ test("a transcript item with such a name renders too", { skip: needsBuild }, () 
   const { React, renderToStaticMarkup, TranscriptItem } = ui();
   for (const tool of PROTOTYPE_NAMES) {
     assert.doesNotThrow(
-      () => renderToStaticMarkup(React.createElement(TranscriptItem, { item: toolItem(tool), toolProgress: {} })),
+      () => renderToStaticMarkup(React.createElement(TranscriptItem, { item: toolItem(tool) })),
       tool
     );
   }
@@ -123,4 +123,20 @@ test("an item that cannot be drawn becomes a line of text", { skip: needsBuild }
   assert.match(html, /msg-error/);
   assert.match(html, /could not be shown \(Objects are not valid as a React child\)/);
   assert.ok(!html.includes("an ordinary item"));
+});
+
+test("a streamed delta does not redraw every item", { skip: needsBuild }, () => {
+  // The transcript renders on every delta of the running turn. Items are
+  // memoised so the ones that did not change are skipped — which only holds
+  // while their props keep their identity: their own progress line rather
+  // than the whole map, and a resume callback that is not rebuilt each time.
+  const { TranscriptItem } = ui();
+  assert.equal(TranscriptItem.$$typeof, Symbol.for("react.memo"), "TranscriptItem is not memoised");
+  const fs = require("node:fs");
+  const transcript = fs.readFileSync(path.join(UI, "components", "Transcript.tsx"), "utf8");
+  assert.match(transcript, /const UserMessage = React\.memo\(function UserMessage\(/);
+  assert.match(transcript, /<TranscriptItem item=\{entry\.item\} progress=\{toolProgress\[entry\.item\.id\]\} onResume=\{onResume\} \/>/);
+  const app = fs.readFileSync(path.join(UI, "App.tsx"), "utf8");
+  assert.match(app, /onResume=\{busy \|\| engineDown \? undefined : resumeTurn\}/);
+  assert.match(app, /const resumeTurn = useCallback\(/);
 });

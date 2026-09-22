@@ -298,7 +298,7 @@ export function Transcript({
                 onRevise={onRevise}
               />
             ) : (
-              <TranscriptItem item={entry.item} toolProgress={toolProgress} onResume={onResume} />
+              <TranscriptItem item={entry.item} progress={toolProgress[entry.item.id]} onResume={onResume} />
             )}
           </ItemBoundary>
         ))}
@@ -384,7 +384,8 @@ function AttachmentChip({ file }: { file: string }): React.ReactElement {
   );
 }
 
-function UserMessage({
+/** Memoised for the same reason as TranscriptItem. */
+const UserMessage = React.memo(function UserMessage({
   id,
   text,
   attachments,
@@ -488,7 +489,7 @@ function UserMessage({
       )}
     </div>
   );
-}
+});
 
 // ---------------------------------------------------------------------------
 // notices, folded away
@@ -565,13 +566,22 @@ function NoticeGroup({
   );
 }
 
-export function TranscriptItem({
+/**
+ * One item, drawn again only when it changes.
+ *
+ * Memoised because the transcript renders on every streamed delta of the
+ * running turn, and without it every item re-rendered each time — every
+ * tool card and its diff, in a session hundreds of items long — to show a
+ * few new words at the bottom. It takes its own progress line rather than
+ * the whole map, which changes whenever any tool reports.
+ */
+export const TranscriptItem = React.memo(function TranscriptItem({
   item,
-  toolProgress,
+  progress,
   onResume,
 }: {
   item: ChatItem;
-  toolProgress: Record<string, string>;
+  progress?: string;
   onResume?: () => void;
 }): React.ReactElement | null {
   const t = useT();
@@ -596,7 +606,7 @@ export function TranscriptItem({
         </div>
       );
     case "tool":
-      return <ToolCard item={item} progress={toolProgress[item.id]} />;
+      return <ToolCard item={item} progress={progress} />;
     case "image":
       return <GeneratedImage dataUrl={item.dataUrl} name={item.name} />;
     case "files":
@@ -632,7 +642,7 @@ export function TranscriptItem({
     default:
       return null;
   }
-}
+});
 
 /**
  * An image ChatGPT drew, shown in the transcript.
