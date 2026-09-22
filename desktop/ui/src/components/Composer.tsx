@@ -13,7 +13,7 @@ import { LAYER_QUERY, escapeInterrupts } from "../../../shared/escape";
 import { ChevronDown, Close, fileGlyph } from "./icons";
 
 export { SLASH_COMMANDS, slashCommands } from "../../../shared/commands";
-import { slashCommands, type SlashCommand } from "../../../shared/commands";
+import { slashCommands, slashDecision, type SlashCommand } from "../../../shared/commands";
 export type { SlashCommand };
 
 const THINKING_LEVELS: { level: ThinkingLevel | null; label: StringKey; hint: StringKey }[] = [
@@ -310,26 +310,22 @@ export function Composer({
       setAttached([]);
       requestAnimationFrame(autosize);
     };
-    if (value && value.startsWith("/")) {
-      const space = value.indexOf(" ");
-      const name = (space < 0 ? value : value.slice(0, space)).toLowerCase();
-      const arg = space < 0 ? "" : value.slice(space + 1).trim();
-      // A unique prefix works, the way it does in the CLI.
-      const matches = commands.filter((c) => c.name.startsWith(name));
-      if (matches.length === 1) {
-        clear();
-        onCommand(matches[0].name, arg);
-        return;
-      }
-      if (matches.length === 0) {
-        clear();
-        onCommand(name, arg); // surfaces "unknown command"
-        return;
-      }
-      // Several commands share the prefix. Guessing would run the wrong one,
-      // and falling through would send "/s hello" to ChatGPT as a prompt —
-      // so the candidates are listed and the text stays put to be finished.
-      onNotice(`Ambiguous command: ${matches.map((c) => c.name).join(", ")}`);
+    const decision = slashDecision(value, commands.map((c) => c.name));
+    if (decision.kind === "run") {
+      clear();
+      onCommand(decision.name, decision.arg);
+      return;
+    }
+    // Several commands share the prefix. Guessing would run the wrong one,
+    // and falling through would send "/s hello" to ChatGPT as a prompt — so
+    // the candidates are listed and the text stays put to be finished.
+    if (decision.kind === "ambiguous") {
+      onNotice(`Ambiguous command: ${decision.names.join(", ")}`);
+      return;
+    }
+    // A mistyped command keeps the composer, so it can be corrected.
+    if (decision.kind === "unknown") {
+      onNotice(`Unknown command: ${decision.name}`);
       return;
     }
     if (onSend(value, files)) clear();
@@ -756,8 +752,13 @@ export function Composer({
   );
 }
 
-/** Just the file name, for a chip that has to stay narrow. */
-function fileName(p: string): string {
-  const parts = p.split(/[\/]/);
+/**
+ * Just the file name, for a chip that has to stay narrow.
+ *
+ * Either separator: split on `/` alone, a Windows path came back whole, and
+ * the chip showed `C:\Users\…\Desk…` instead of the file.
+ */
+export function fileName(p: string): string {
+  const parts = p.split(/[\\/]/);
   return parts[parts.length - 1] || p;
 }

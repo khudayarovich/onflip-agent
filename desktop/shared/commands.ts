@@ -48,3 +48,34 @@ export function slashCommands(provider: string | undefined): SlashCommand[] {
     c.name === "/thinking" ? { ...c, args: "on|off", description: "DeepThink: on · off" } : c
   );
 }
+
+export type SlashDecision =
+  | { kind: "run"; name: string; arg: string }
+  | { kind: "ambiguous"; names: string[] }
+  | { kind: "unknown"; name: string }
+  | { kind: "message" };
+
+/**
+ * What a line that begins with "/" is.
+ *
+ * Everything beginning with a slash was taken for a command, and one that
+ * matched nothing was cleared from the composer and answered "Unknown
+ * command" — so "/api/login returns 500", the most natural way to start a
+ * bug report, was thrown away. A first word that is a path is a message; a
+ * command word nobody knows followed by more words is a sentence ("/tmp is
+ * full again"); only a lone unknown word is a mistyped command, and that
+ * keeps the composer so it can be fixed.
+ */
+export function slashDecision(value: string, commandNames: string[]): SlashDecision {
+  if (!value.startsWith("/")) return { kind: "message" };
+  const space = value.search(/\s/);
+  const token = space < 0 ? value : value.slice(0, space);
+  const arg = space < 0 ? "" : value.slice(space + 1).trim();
+  if (!/^\/[a-z][\w-]*$/i.test(token)) return { kind: "message" };
+  const name = token.toLowerCase();
+  // A unique prefix works, the way it does in the CLI.
+  const matches = commandNames.filter((c) => c.startsWith(name));
+  if (matches.length === 1) return { kind: "run", name: matches[0], arg };
+  if (matches.length > 1) return { kind: "ambiguous", names: matches };
+  return arg ? { kind: "message" } : { kind: "unknown", name };
+}

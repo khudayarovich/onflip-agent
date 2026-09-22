@@ -56,3 +56,33 @@ test("filtering one service does not edit the list the other reads", { skip: nee
   assert.match(chatgpt.description, /medium/, "ChatGPT's four levels are untouched");
   assert.ok(names(slashCommands("chatgpt")).includes("/project"));
 });
+
+test("a line that starts with a path is a message, not an unknown command", { skip: needsBuild }, () => {
+  // "/api/login returns 500" was cleared from the composer and answered
+  // "Unknown command" — the most natural start of a bug report, thrown away.
+  const { slashDecision } = require(MODULE);
+  const names = SLASH_COMMANDS.map((c) => c.name);
+  assert.deepEqual(slashDecision("/api/login returns 500", names), { kind: "message" });
+  assert.deepEqual(slashDecision("/etc/hosts is wrong", names), { kind: "message" });
+  assert.deepEqual(slashDecision("/tmp is full again", names), { kind: "message" });
+  assert.deepEqual(slashDecision("fix /api/login", names), { kind: "message" });
+  // A path on its own too: it is not a word a command could be.
+  assert.deepEqual(slashDecision("/etc/hosts", names), { kind: "message" });
+});
+
+test("commands still run, and a lone mistyped one is reported, not sent", { skip: needsBuild }, () => {
+  // The false-positive half.
+  const { slashDecision } = require(MODULE);
+  const names = SLASH_COMMANDS.map((c) => c.name);
+  assert.deepEqual(slashDecision("/new", names), { kind: "run", name: "/new", arg: "" });
+  assert.deepEqual(slashDecision("/cwd src", names), { kind: "run", name: "/cwd", arg: "src" });
+  assert.deepEqual(slashDecision("/zzz", names), { kind: "unknown", name: "/zzz" });
+  const shared = names.filter((n) => n.startsWith("/c"));
+  if (shared.length > 1) assert.equal(slashDecision("/c", names).kind, "ambiguous");
+});
+
+test("the composer asks the decision, and keeps an unknown command's text", { skip: needsBuild }, () => {
+  const composer = fs.readFileSync(path.join(__dirname, "..", "ui", "src", "components", "Composer.tsx"), "utf8");
+  assert.match(composer, /const decision = slashDecision\(value, commands\.map\(\(c\) => c\.name\)\);/);
+  assert.match(composer, /if \(decision\.kind === "unknown"\) \{\s*onNotice\(`Unknown command: \$\{decision\.name\}`\);\s*return;\s*\}/);
+});
