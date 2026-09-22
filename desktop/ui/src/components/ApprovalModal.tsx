@@ -2,6 +2,7 @@ import React, { useEffect } from "react";
 import type { ApprovalDecisionDTO, ApprovalRequestDTO } from "../../../shared/protocol";
 import { DiffView } from "./DiffView";
 import { useT } from "../i18n";
+import { HOTKEY_ARM_MS, isApprovalHotkey, type ApprovalKey } from "../../../shared/approval";
 
 const KIND_LABELS: Record<ApprovalRequestDTO["kind"], string> = {
   read: "Read",
@@ -24,9 +25,11 @@ export function ApprovalModal({
 }): React.ReactElement {
   const t = useT();
   useEffect(() => {
+    // A prompt that appears under someone's fingers must not be answered by
+    // what they were already typing.
+    const armedAt = Date.now() + HOTKEY_ARM_MS;
     const onKey = (e: KeyboardEvent) => {
-      const target = e.target as HTMLElement | null;
-      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA")) return;
+      if (!isApprovalHotkey(e as unknown as ApprovalKey, Date.now() >= armedAt)) return;
       if (e.key === "y" || e.key === "Y") onDecision({ allow: true });
       else if (e.key === "a" || e.key === "A") {
         if (request.rememberLabel) onDecision({ allow: true, remember: true });

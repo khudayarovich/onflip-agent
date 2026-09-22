@@ -166,6 +166,7 @@ import { expandSkillToken } from "../shared/skills";
 import { subjectFor } from "./subjects";
 import { SilenceWatch } from "./silence";
 import { presentableTail } from "./presentable";
+import { recordableChatIds } from "./chat-ids";
 
 /** What a turn is resumed with, and what a person types by hand today. */
 const RESUME_PROMPT = "continue";
@@ -1562,6 +1563,9 @@ export class Engine {
     // What the workspace held before the turn, so its deliverables can be
     // picked out by diff afterwards.
     const scratchBefore = inScratch(this.cwd) ? scratchIndex(this.cwd) : null;
+    // The chats this process had already seen, so only the ones this turn
+    // opened are credited to this session: see `recordableChatIds`.
+    const chatsBefore = new Set(openedConversationIds());
     this.peer.emit("turn", { state: "start" });
 
     // @skill tags expand into their full prompt for the model; the emitted
@@ -1768,10 +1772,12 @@ export class Engine {
       // one a successful reply ended in: a turn that failed still created
       // chats, and an unrecorded chat is one the sweep below cannot rescue.
       if (this.session) {
-        const ids = (this.session.chatIds ??= []);
-        for (const id of [currentConversationId(), ...openedConversationIds()]) {
-          if (id && !ids.includes(id)) ids.push(id);
-        }
+        this.session.chatIds = recordableChatIds(
+          this.session.chatIds ?? [],
+          [currentConversationId(), ...openedConversationIds()],
+          chatsBefore,
+          this.session.chatId
+        );
       }
       // Every chat this session ever opened belongs in the project, not just
       // the one still on screen — a filing that failed under a throttle used
@@ -2498,7 +2504,9 @@ export class Engine {
     // chats (`chatId`) are the user's own and are left alone.
     const stored = loadSession(id);
     const ok = deleteSession(id);
-    const remote = stored?.chatIds ?? [];
+    // Never the attached chat, even if an older build recorded it among the
+    // session's own: deleting the session must not delete the user's chat.
+    const remote = (stored?.chatIds ?? []).filter((chat) => chat !== stored?.chatId);
     if (ok && remote.length > 0 && this.transport?.name === "browser") {
       this.deleteRemoteConversations(remote);
     }
