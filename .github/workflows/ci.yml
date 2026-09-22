@@ -43,8 +43,16 @@ jobs:
       # code it ships. The suite is pure logic only — the failure taxonomy,
       # the tool-call parser, the refusal detectors — so it needs no browser,
       # no account and no network, and it runs in well under a second.
+      #
+      # Each failing test is also written as an annotation
+      # (scripts/gha-reporter.mjs): a job's log needs admin rights to
+      # download, its annotations do not, and a red run that says only
+      # "exit code 1" is a red run nobody can read.
       - name: run the test suite
-        run: npm run test:only
+        run: >-
+          node --test
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=./scripts/gha-reporter.mjs --test-reporter-destination=stdout
 
   desktop:
     name: desktop app
@@ -88,4 +96,7 @@ jobs:
       # desktop test without that guard turns every engine job red, which is
       # how this workflow spent five days failing on all seven jobs.
       - name: run the test suite, desktop tests included
-        run: npm run test:only
+        run: >-
+          node --test
+          --test-reporter=spec --test-reporter-destination=stdout
+          --test-reporter=./scripts/gha-reporter.mjs --test-reporter-destination=stdout

@@ -190,5 +190,8 @@ test("a new session's commands start at its own folder", { skip: needsBuild }, a
   await waitIdle(engine);
   const outputs = events.filter((e) => e.event === "tool-update").map((e) => e.data.result.output);
   const ranIn = outputs[outputs.length - 1].split("\n")[0].trim();
-  assert.equal(path.resolve(ranIn), path.resolve(work), `ran in ${ranIn}`);
+  // As the file system names them: a shell reports the long name behind an
+  // 8.3 TEMP, and macOS's /var is /private/var.
+  const real = (p) => fs.realpathSync.native(p);
+  assert.equal(real(ranIn), real(work), `ran in ${ranIn}`);
 });

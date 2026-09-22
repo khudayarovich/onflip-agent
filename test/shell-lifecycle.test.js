@@ -62,7 +62,12 @@ test("a trailing comment does not swallow the probe", async () => {
   resetShellCwd();
   const ws = workspace();
   await ws.run("cd sub # step into the folder");
-  assert.equal(path.resolve(getShellCwd(ws.dir)), path.resolve(ws.dir, "sub"));
+  // Compared as the file system names them, not as strings: the shell
+  // reports the folder its own way — the long name behind an 8.3 TEMP on
+  // the Windows runners, /private/var behind macOS's /var — which is the
+  // same folder, and failed every CI run on both.
+  const real = (p) => fs.realpathSync.native(p);
+  assert.equal(real(getShellCwd(ws.dir)), real(path.join(ws.dir, "sub")));
   resetShellCwd();
 });
 
