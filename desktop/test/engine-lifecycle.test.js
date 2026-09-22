@@ -388,3 +388,20 @@ test("resuming, opening and signing in hold sends the same way", { skip: needsBu
     assert.ok(src.slice(at, at + 400).includes(`return this.holdingSends(() => ${call});`), `${name} holds sends`);
   }
 });
+
+test("a file left out for the shared budget is not blamed on its own size", { skip: needsBuild }, () => {
+  const { engine, events } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+  engine.context = {
+    ...engine.context,
+    instructionsSkipped: [
+      { file: "AGENTS.md", bytes: 20_000, reason: "total" },
+      { file: "CLAUDE.md", bytes: 40_000, reason: "file" },
+    ],
+  };
+  engine.reportSkippedInstructions();
+  const said = events.filter((e) => e.event === "item" && e.data?.type === "notice").map((e) => e.data.text);
+  assert.equal(said.length, 2);
+  assert.match(said[0], /AGENTS\.md \(20KB\) was not loaded: with the instruction files nearer this folder/);
+  assert.doesNotMatch(said[0], /over the 32KB limit for instruction files/);
+  assert.match(said[1], /CLAUDE\.md is 40KB, over the 32KB limit for instruction files/);
+});

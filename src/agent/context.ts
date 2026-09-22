@@ -24,14 +24,26 @@ const INSTRUCTION_FILES = [
   ".github/copilot-instructions.md",
 ];
 
-const MAX_INSTRUCTION_BYTES = 32_000;
+export const MAX_INSTRUCTION_BYTES = 32_000;
+
+/**
+ * What every instruction file together may hold: what one file may.
+ *
+ * The cap was per file only, and a folder may have eight of them, plus each
+ * folder above it and the global one. OnFlip's own system prompt is about
+ * 22,000 characters; with 32 KB of instructions a first send is near 55,000,
+ * inside the 60,831 the composer is known to accept, where four files at the
+ * per-file cap made about 150,000 — past the 112,586 it is known to refuse,
+ * so every send in that folder would have failed.
+ */
+export const MAX_INSTRUCTION_TOTAL_BYTES = 32_000;
 
 export interface ProjectContext {
   cwd: string;
   /** Concatenated instruction files, empty when the project ships none. */
   instructions: string;
-  /** Instruction files found but left out for being over the size cap. */
-  instructionsSkipped: { file: string; bytes: number }[];
+  /** Instruction files found but left out: see `SkippedInstructions`. */
+  instructionsSkipped: SkippedInstructions[];
   /**
    * Skills available here: names and one-line descriptions only.
    *
@@ -43,6 +55,14 @@ export interface ProjectContext {
   instructionSources: string[];
   git: GitInfo | null;
   environment: string;
+}
+
+/** An instruction file left out, and which limit it was over. */
+export interface SkippedInstructions {
+  file: string;
+  bytes: number;
+  /** `file`: over `MAX_INSTRUCTION_BYTES` alone; `total`: no room left under `MAX_INSTRUCTION_TOTAL_BYTES`. */
+  reason: "file" | "total";
 }
 
 export interface GitInfo {
@@ -66,14 +86,14 @@ export interface GitInfo {
  * paid plan gets. The answer to a file over the cap is to split it, which is
  * advice nobody can act on without being told.
  */
-let skipped: { file: string; bytes: number }[] = [];
+let skipped: SkippedInstructions[] = [];
 
 function readIfSmall(file: string): string | null {
   try {
     const stat = fs.statSync(file);
     if (!stat.isFile()) return null;
     if (stat.size > MAX_INSTRUCTION_BYTES) {
-      skipped.push({ file, bytes: stat.size });
+      skipped.push({ file, bytes: stat.size, reason: "file" });
       return null;
     }
     return fs.readFileSync(file, "utf8");
@@ -86,10 +106,10 @@ function readIfSmall(file: string): string | null {
 function collectInstructions(cwd: string): {
   text: string;
   sources: string[];
-  skipped: { file: string; bytes: number }[];
+  skipped: SkippedInstructions[];
 } {
-  const chunks: string[] = [];
-  const sources: string[] = [];
+  /** In the order they are sent: global, then outermost folder to this one. */
+  const found: { file: string; header: string; text: string; rank: number }[] = [];
   const seen = new Set<string>();
   skipped = [];
 
@@ -97,8 +117,7 @@ function collectInstructions(cwd: string): {
   const globalFile = path.join(configDir(), "AGENTS.md");
   const globalText = readIfSmall(globalFile);
   if (globalText?.trim()) {
-    chunks.push(`# Global instructions (${globalFile})\n\n${globalText.trim()}`);
-    sources.push(globalFile);
+    found.push({ file: globalFile, header: `# Global instructions (${globalFile})`, text: globalText.trim(), rank: -1 });
   }
 
   // Ancestors first so the closest file wins by appearing last.
@@ -113,19 +132,48 @@ function collectInstructions(cwd: string): {
     dir = parent;
   }
 
-  for (const ancestor of ancestors) {
-    for (const name of INSTRUCTION_FILES) {
+  ancestors.forEach((ancestor, depth) => {
+    INSTRUCTION_FILES.forEach((name, order) => {
       const file = path.join(ancestor, name);
-      if (seen.has(file)) continue;
+      if (seen.has(file)) return;
       const text = readIfSmall(file);
-      if (!text?.trim()) continue;
+      if (!text?.trim()) return;
       seen.add(file);
-      chunks.push(`# Project instructions (${path.relative(cwd, file) || name})\n\n${text.trim()}`);
-      sources.push(file);
-    }
-  }
+      found.push({
+        file,
+        header: `# Project instructions (${path.relative(cwd, file) || name})`,
+        text: text.trim(),
+        // Nearest folder first, and within a folder the listed order.
+        rank: (ancestors.length - depth) * INSTRUCTION_FILES.length + order,
+      });
+    });
+  });
 
-  return { text: chunks.join("\n\n---\n\n"), sources, skipped };
+  // What fits under the total, decided nearest first — the folder being
+  // worked in says the most about the work, the global file the least — and
+  // a file identical to one already in is not sent twice: CLAUDE.md is very
+  // often a copy of AGENTS.md.
+  const kept = new Set<(typeof found)[number]>();
+  const texts = new Set<string>();
+  let total = 0;
+  const byRank = [...found].sort((a, b) => (a.rank < 0 ? 1 : b.rank < 0 ? -1 : a.rank - b.rank));
+  for (const entry of byRank) {
+    if (texts.has(entry.text)) continue;
+    const bytes = Buffer.byteLength(entry.text, "utf8");
+    if (total + bytes > MAX_INSTRUCTION_TOTAL_BYTES) {
+      skipped.push({ file: entry.file, bytes, reason: "total" });
+      continue;
+    }
+    texts.add(entry.text);
+    total += bytes;
+    kept.add(entry);
+  }
+  const included = found.filter((entry) => kept.has(entry));
+  return {
+    text: included.map((entry) => `${entry.header}\n\n${entry.text}`).join("\n\n---\n\n"),
+    sources: included.map((entry) => entry.file),
+    skipped,
+  };
 }
 
 function git(cwd: string, args: string[]): string | null {

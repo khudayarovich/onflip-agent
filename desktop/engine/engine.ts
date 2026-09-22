@@ -96,7 +96,12 @@ import {
   getShellCwd,
 } from "onflip/dist/tools";
 import { buildSystemPrompt } from "onflip/dist/agent/system";
-import { loadProjectContext, ProjectContext } from "onflip/dist/agent/context";
+import {
+  loadProjectContext,
+  MAX_INSTRUCTION_BYTES,
+  MAX_INSTRUCTION_TOTAL_BYTES,
+  ProjectContext,
+} from "onflip/dist/agent/context";
 import { newMessage } from "onflip/dist/agent/protocol";
 import type { SubAgentRequest, SubAgentResult } from "onflip/dist/tools/task";
 import {
@@ -816,9 +821,12 @@ export class Engine {
     const skipped = this.context?.instructionsSkipped ?? [];
     if (skipped.length === 0) return;
     logger.warn("engine", "instruction files were too large to load", { skipped });
-    for (const { file, bytes } of skipped) {
+    for (const { file, bytes, reason } of skipped) {
+      const kb = (n: number) => `${Math.round(n / 1000)}KB`;
       this.notice(
-        `${file} is ${Math.round(bytes / 1000)}KB, over the ${32}KB limit for instruction files, so it was not loaded. Instructions are re-sent every turn and come out of the conversation budget — split it into smaller files to have it read.`
+        reason === "total"
+          ? `${file} (${kb(bytes)}) was not loaded: with the instruction files nearer this folder it would pass the ${kb(MAX_INSTRUCTION_TOTAL_BYTES)} limit for all instruction files together. Instructions are re-sent every turn and come out of the conversation budget — shorten or merge them to have it read.`
+          : `${file} is ${kb(bytes)}, over the ${kb(MAX_INSTRUCTION_BYTES)} limit for instruction files, so it was not loaded. Instructions are re-sent every turn and come out of the conversation budget — split it into smaller files to have it read.`
       );
     }
   }
