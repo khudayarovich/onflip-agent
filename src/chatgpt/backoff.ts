@@ -239,6 +239,13 @@ export function isResumableFailure(message: string, code?: FailureCode): boolean
 export function serviceMessage(text: string): string | null {
   const t = (text ?? "").trim();
   if (!t || t.length > 400) return null;
+  // A reply carrying a block is the model answering, whatever its words:
+  // ChatGPT's own notices never contain one. Without this a short, correct
+  // `done` — "Added rate limiting to the login route" — was taken for a
+  // throttle, thrown away, and a five-minute cooldown saved to config; and
+  // "There was an error in the import path; fixing it" beside its edit was
+  // read as an error page and the whole transcript replayed.
+  if (/^\s*(`{3,}|~{3,})\s*onflip|<onflip:tool>|^\s*tool\s*:\s*\w/im.test(t)) return null;
 
   // Not moderation but the same channel: ChatGPT declining a capability of
   // its own, which reads as the agent giving up on the task it was asked to
@@ -247,13 +254,23 @@ export function serviceMessage(text: string): string | null {
   if (/image (creation|generation) is (currently |temporarily )?unavailable/i.test(t)) {
     return "That was ChatGPT declining to generate an image, not OnFlip refusing the task. OnFlip has no image tool — ask for SVG or CSS instead and the agent can write it directly into your files.";
   }
-  if (/image we created may violate|content polic/i.test(t)) {
+  // "our content policy" is ChatGPT's voice; a reply about someone's own
+  // app's content policy says "your" or names it.
+  if (/image we created may violate|our content polic/i.test(t)) {
     return "That message came from ChatGPT's image moderation, not from OnFlip — the picture was generated and then blocked. Rewording the prompt usually clears it; brand and game names are a common trigger. OnFlip has no image tool, so a generated image stays in the web chat rather than being saved to your project.";
   }
-  if (/you'?ve (reached|hit) (your|the) .{0,30}(limit|cap)|rate limit|usage limit/i.test(t)) {
+  // ChatGPT's own wording only. A bare "rate limit" or "usage limit" matched
+  // any short answer about rate limiting, which is ordinary work.
+  if (
+    /you'?ve (reached|hit) (your|the|our) .{0,40}(limit|cap)\b|\btoo many requests\b|\busage cap\b|\brate limit (reached|exceeded)\b/i.test(
+      t
+    )
+  ) {
     return "ChatGPT is rate-limiting this account, so that was its message rather than an answer. Waiting, or switching model with /model, is what clears it.";
   }
-  if (/^(something went wrong|an error occurred|there was an error)\b/i.test(t)) {
+  // One short line, the shape of the page's own error — not the opening of
+  // an answer that happens to start by describing an error.
+  if (t.length <= 240 && !t.includes("\n") && /^(something went wrong|an error occurred|there was an error)\b/i.test(t)) {
     return "ChatGPT returned an error page instead of a reply, so nothing of what OnFlip sent reached the model. This is usually an oversized message — /compact shrinks the conversation, and /new starts a fresh one.";
   }
   // The backend's own failure pages, arriving as a one-line "reply". Live:

@@ -14,6 +14,7 @@ import {
 } from "./session";
 import { mkdirPrivate } from "../../config";
 import { releaseProfileLock } from "../profile-lock";
+import { linesSince, pageLines } from "../page-news";
 
 /**
  * The browser OnFlip drives DeepSeek with.
@@ -148,12 +149,25 @@ export function matchServiceMessage(body: string): { text: string; code: Failure
   return null;
 }
 
-/** The service's own words, when the page is showing some. */
-async function serviceMessage(page: Page): Promise<{ text: string; code: FailureCode } | null> {
-  const body = (await page
+/** The page's visible text, or "" when it cannot be read. */
+async function bodyText(page: Page): Promise<string> {
+  return (await page
     .evaluate("(document.body && document.body.innerText) || \"\"")
     .catch(() => "")) as string;
-  return matchServiceMessage(body);
+}
+
+/**
+ * The service's own words about this send, when the page is showing some.
+ *
+ * Only lines that appeared since `before` and are not part of what was
+ * sent: see `linesSince`.
+ */
+async function serviceMessage(
+  page: Page,
+  before: ReadonlySet<string>,
+  sent: string
+): Promise<{ text: string; code: FailureCode } | null> {
+  return matchServiceMessage(linesSince(await bodyText(page), before, sent));
 }
 /** Send, and — while an answer is being written — stop. The same control. */
 const STOP_BUTTON = ".ds-button--primary";
@@ -574,6 +588,8 @@ export async function sendTurn(
   // conversation. The last reply's text catches that; the count catches the
   // rarer case of a model repeating itself word for word.
   const before = await readLast(page);
+  // What the page already said, so a notice is only ever something new.
+  const pageBefore = pageLines(await bodyText(page));
 
   await attachPending(page);
 
@@ -632,7 +648,7 @@ export async function sendTurn(
         // sentence that persists would cost more than it saves.
         if (!last && Date.now() - lastServiceCheck > SERVICE_CHECK_MS) {
           lastServiceCheck = Date.now();
-          const said = await serviceMessage(page);
+          const said = await serviceMessage(page, pageBefore, text);
           if (said) {
             throw new DeepSeekError(
               `DeepSeek says: ${said.text}`,

@@ -18,6 +18,7 @@ import {
 } from "./session";
 import { mkdirPrivate } from "../../config";
 import { releaseProfileLock } from "../profile-lock";
+import { linesSince, pageLines } from "../page-news";
 
 /**
  * The browser OnFlip drives Qwen with.
@@ -332,13 +333,26 @@ export function retryHintFrom(text: string): string | null {
   return null;
 }
 
-/** The service's own words, when the page is showing some. */
-async function serviceMessage(page: Page): Promise<{ text: string; code: FailureCode } | null> {
-  const body = (await withTimeout(
+/** The page's visible text, or "" when it cannot be read. */
+async function bodyText(page: Page): Promise<string> {
+  return (await withTimeout(
     page.evaluate('(document.body && document.body.innerText) || ""'),
     "reading the page"
   ).catch(() => "")) as string;
-  return matchServiceMessage(body);
+}
+
+/**
+ * The service's own words about this send, when the page is showing some.
+ *
+ * Only lines that appeared since `before` and are not part of what was
+ * sent: see `linesSince`.
+ */
+async function serviceMessage(
+  page: Page,
+  before: ReadonlySet<string>,
+  sent: string
+): Promise<{ text: string; code: FailureCode } | null> {
+  return matchServiceMessage(linesSince(await bodyText(page), before, sent));
 }
 
 let context: BrowserContext | null = null;
@@ -1115,6 +1129,8 @@ export async function sendTurn(
   /** This turn's text appends to a live conversation rather than starting one. */
   const continuing = conversationId !== null;
   const before = await readLast(page);
+  // What the page already said, so a notice is only ever something new.
+  const pageBefore = pageLines(await bodyText(page));
 
   /**
    * Put the turn in the composer and press send.
@@ -1384,7 +1400,7 @@ export async function sendTurn(
         // readable in a second rather than in ninety.
         if (!last && Date.now() - lastServiceCheck > SERVICE_CHECK_MS) {
           lastServiceCheck = Date.now();
-          const said = await serviceMessage(page);
+          const said = await serviceMessage(page, pageBefore, text);
           if (said && said.code !== "signed-out") {
             // The wait, when the service named one. "Four hours" is the
             // difference between waiting and retrying into a wall.
