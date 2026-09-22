@@ -205,7 +205,7 @@ const STOP_BUTTON = [
  * A request has no such race: it answers about the session rather than about
  * what has painted so far.
  */
-const SESSION_PROBE_SCRIPT = `(async () => {
+export const SESSION_PROBE_SCRIPT = `(async () => {
   const token = localStorage.getItem(${JSON.stringify(TOKEN_KEY)}) || "";
   if (!token) return { status: 0, reached: true };
   try {
@@ -213,7 +213,18 @@ const SESSION_PROBE_SCRIPT = `(async () => {
       credentials: "include",
       headers: { authorization: "Bearer " + token },
     });
-    return { status: res.status, reached: true };
+    // A live answer is the account itself; its name and email are what the
+    // app shows as who is signed in (see accountFromAuths).
+    let account = null;
+    if (res.ok) {
+      try {
+        const body = await res.json();
+        account = { name: body && body.name, email: body && body.email };
+      } catch (e) {
+        account = null;
+      }
+    }
+    return { status: res.status, reached: true, account };
   } catch (e) {
     return { status: 0, reached: false };
   }
@@ -396,13 +407,19 @@ export interface OpenOptions {
  */
 let lastApiFailure: { status: number; path: string; body: string; at: number } | null = null;
 
-function watchApi(ctx: BrowserContext): void {
+export function watchApi(ctx: BrowserContext): void {
   ctx.on("response", (res) => {
     try {
       const url = res.url();
       if (!url.startsWith(QWEN_ORIGIN) || !/\/api\//.test(url)) return;
       const status = res.status();
       if (status >= 200 && status < 400) return;
+      // A read the page makes on the side — a setting, a model list — can
+      // fail without the turn failing, and it was taken as the turn's
+      // refusal: the turn ended "Qwen did not accept it" while the answer
+      // was on its way. What refuses a turn is the send, which is not a GET,
+      // or an answer about the credential or the rate, whatever asked.
+      if (res.request().method() === "GET" && ![401, 403, 429].includes(status)) return;
       const path = url.slice(QWEN_ORIGIN.length).split("?")[0];
       void res
         .text()
@@ -427,6 +444,30 @@ function watchApi(ctx: BrowserContext): void {
  * the silence happening now, and offering it as the reason would be worse
  * than offering nothing.
  */
+/** For tests: the refusal the watcher last recorded. */
+export function __lastApiFailureForTest(): typeof lastApiFailure {
+  return lastApiFailure;
+}
+
+/**
+ * What a refused request means, by what it answered.
+ *
+ * Every 4xx used to mean "signed out", so a 429 — Qwen saying slow down —
+ * told the person to sign in again, and a sign-in is the one thing that
+ * does not help with a rate limit; a 413 or a 400 got the same advice. Only
+ * a refused credential is signed out. A 403 is that when it says so in
+ * words; otherwise it is the risk control, which a person clears and a
+ * resend makes worse.
+ */
+export function refusalCode(failure: { status: number; body: string }): FailureCode {
+  if (failure.status === 401) return "signed-out";
+  if (failure.status === 429) return "throttled";
+  if (failure.status === 403) {
+    return /expired|token|sign ?in|log ?in|登录|войд/i.test(failure.body) ? "signed-out" : "refused";
+  }
+  return "service-error";
+}
+
 export function recentApiFailure(
   failure: { status: number; path: string; body: string; at: number } | null,
   since: number,
@@ -676,6 +717,27 @@ export interface SessionAnswer {
   status?: number;
   /** Did the request complete at all? False for offline, DNS, a timeout. */
   reached?: boolean;
+  /** The account a live answer named, as the page read it. */
+  account?: { name?: unknown; email?: unknown } | null;
+}
+
+/**
+ * Who is signed in, as the service said — never as the page happens to read.
+ *
+ * The email used to be the first thing shaped like one anywhere in the
+ * page's text, and the page is the conversation: a tool result reading
+ * `shop@1.0.0 C:\work\shop` made "shop@1.0.0" the signed-in account, and
+ * an address mentioned in a chat would have been shown as the person's own.
+ * The `/api/v1/auths/` answer that decides the session names the account
+ * too, so that is where it comes from, checked for shape.
+ */
+export function accountFromAuths(account: SessionAnswer["account"]): { name?: string; email?: string } {
+  const out: { name?: string; email?: string } = {};
+  const name = typeof account?.name === "string" ? account.name.trim().slice(0, 80) : "";
+  const email = typeof account?.email === "string" ? account.email.trim() : "";
+  if (name) out.name = name;
+  if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && email.length <= 254) out.email = email;
+  return out;
 }
 
 /**
@@ -706,13 +768,18 @@ export function qwenSessionVerdict(answer: SessionAnswer | null | undefined): Se
  * because an evaluate timed out is the fault this file has spent six
  * releases correcting, in one direction or the other.
  */
-async function askQwen(page: Page): Promise<SessionVerdict> {
+async function askQwen(
+  page: Page,
+  /** Filled with the account a live answer named, for a caller that shows it. */
+  seen?: { account?: { name?: string; email?: string } }
+): Promise<SessionVerdict> {
   try {
     const raw = (await withTimeout(
       page.evaluate<SessionAnswer>(SESSION_PROBE_SCRIPT),
       "asking Qwen about the session"
     )) as SessionAnswer;
     const verdict = qwenSessionVerdict(raw);
+    if (seen && verdict === "live") seen.account = accountFromAuths(raw?.account);
     if (verdict !== "live") {
       logger.info("qwen", "asked the service about the session", {
         verdict,
@@ -761,7 +828,10 @@ export interface SignedInCheck {
  * outcome, not a failure: the account bar falls back to "Qwen account",
  * which is better than a raw id where a person's name goes.
  */
-async function readProfile(page: Page): Promise<{ name?: string; email?: string }> {
+export async function readProfile(page: Page): Promise<{ name?: string }> {
+  // The name only, and only from the account control. The email is not
+  // looked for on the page any more: the page is the conversation, and the
+  // first address-shaped string in it was taken for the account's.
   const found = (await withTimeout(
     page.evaluate(
       `(() => {
@@ -770,19 +840,12 @@ async function readProfile(page: Page): Promise<{ name?: string; email?: string 
           const t = el && (el.getAttribute("title") || el.innerText || "");
           return t ? t.trim().split("\\n")[0].slice(0, 80) : "";
         };
-        const email = (document.body.innerText.match(/[\\w.+-]+@[\\w-]+\\.[\\w.]+/) || [""])[0];
-        return {
-          name: pick('[class*="user-name"]') || pick('[class*="account-name"]'),
-          email,
-        };
+        return { name: pick('[class*="user-name"]') || pick('[class*="account-name"]') };
       })()`
     ),
     "reading the account"
-  ).catch(() => null)) as { name?: string; email?: string } | null;
-  const out: { name?: string; email?: string } = {};
-  if (found?.name) out.name = found.name;
-  if (found?.email) out.email = found.email;
-  return out;
+  ).catch(() => null)) as { name?: string } | null;
+  return found?.name ? { name: found.name } : {};
 }
 
 export async function checkSignedIn(
@@ -793,6 +856,7 @@ export async function checkSignedIn(
   for (let attempt = 1; attempt <= tries; attempt++) {
     try {
       const page = await chatPage(opts);
+      const seen: { account?: { name?: string; email?: string } } = {};
       // The token is written as the app boots, so a page asked the instant
       // it loads can answer "no" about a profile that is perfectly signed
       // in. A short settle costs a second and removes a false negative that
@@ -808,11 +872,14 @@ export async function checkSignedIn(
         // Asked of the service, not of the token and not of the header:
         // this is the check that draws the Sign in button, and the header
         // races the very request that decides what it should say.
-        await askQwen(page)
+        await askQwen(page, seen)
       );
       if (state === "present") {
-        const profile = await readProfile(page);
-        return { signedIn: true, ...profile };
+        // Who is signed in comes from the service's own answer; the page's
+        // account control only fills in a name the answer did not carry.
+        const account = seen.account ?? {};
+        const name = account.name ?? (await readProfile(page)).name;
+        return { signedIn: true, ...account, ...(name ? { name } : {}) };
       }
       if (attempt < tries) {
         await page.waitForTimeout(1_500);
@@ -1367,7 +1434,7 @@ export async function sendTurn(
           logger.warn("qwen", "the service refused this turn", { refused: refusedNow });
           throw new QwenError(
             `${refusedNow} The message is on the page but Qwen did not accept it, so no answer is coming.`,
-            /^4/.test(String(lastApiFailure?.status)) ? "signed-out" : "service-error"
+            lastApiFailure ? refusalCode(lastApiFailure) : "service-error"
           );
         }
         // Before anything else: has the page dropped into a guest
@@ -1485,7 +1552,7 @@ export async function sendTurn(
             logger.warn("qwen", "the silence has a cause in the network", { refused });
             throw new QwenError(
               `${refused} The message is on the page but Qwen did not accept it, so no answer is coming.`,
-              /^4/.test(String(lastApiFailure?.status)) ? "signed-out" : "service-error"
+              lastApiFailure ? refusalCode(lastApiFailure) : "service-error"
             );
           }
           // Not "the send did not land": `submit` verified the message
