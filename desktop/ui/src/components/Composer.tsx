@@ -10,6 +10,7 @@ import { useT, StringKey, LangContext } from "../i18n";
 import { SKILLS, canonicaliseSkillMentions, findSkillMention } from "../../../shared/skills";
 import { isOffered } from "../../../shared/approval";
 import { LAYER_QUERY, composing, escapeInterrupts } from "../../../shared/escape";
+import { withDraft, withDraftFiles } from "../../../shared/draft";
 import { ChevronDown, Close, fileGlyph } from "./icons";
 
 export { SLASH_COMMANDS, slashCommands } from "../../../shared/commands";
@@ -225,13 +226,14 @@ export function Composer({
     text
   );
 
-  // "Edit message" hands the recalled text back through here.
+  // "Edit message" hands the recalled text back through here — beside what
+  // is being typed, never over it (see `withDraft`).
   useEffect(() => {
     if (!draft) return;
-    setText(draft.text);
-    // A queued message brings its attachments back with it; anything else
-    // leaves whatever is already staged alone.
-    if (draft.files?.length) setAttached(draft.files);
+    setText((current) => withDraft(current, draft.text));
+    // A queued message brings its attachments back with it, added to any
+    // already staged.
+    setAttached((staged) => withDraftFiles(staged, draft.files));
     const el = areaRef.current;
     if (el) {
       el.focus();

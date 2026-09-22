@@ -9,6 +9,8 @@
  *   over it — and, having claimed the key, left the dialog open.
  * - Edit and Resend brought back the words without the files, and with
  *   OnFlip's "[Attached to this message: …]" note in them as if typed.
+ * - Whatever brought words back — Edit, a queued message taken back, a
+ *   refused send — replaced what was being typed at that moment.
  *
  * The renderer is bundled and has no harness that can press keys in it, so
  * its call sites are checked in the source; the rules they call, and the
@@ -119,4 +121,31 @@ test("a replayed message shows its files, and none of OnFlip's notes", { skip: n
     { text: user.text, attachments: user.attachments },
     { text: "look at these", attachments: ["C:\\shots\\shot.png", "C:\\docs\\spec.pdf"] }
   );
+});
+
+test("recalled text joins what is being typed instead of replacing it", { skip: needsBuild }, () => {
+  // Edit on a message, taking a queued one back, a refused send put back:
+  // each replaced the composer, and the words being typed were gone.
+  const { withDraft, withDraftFiles } = require(path.join(__dirname, "..", "dist", "shared", "draft.js"));
+  assert.equal(withDraft("also check the logs", "fix the build"), "fix the build\n\nalso check the logs");
+  assert.deepEqual(withDraftFiles(["C:/b.png"], ["C:/a.png"]), ["C:/a.png", "C:/b.png"]);
+  // The false-positive half: an empty composer, or one already holding the
+  // message, simply gets the message; nothing recalled leaves it be.
+  assert.equal(withDraft("", "fix the build"), "fix the build");
+  assert.equal(withDraft("  \n", "fix the build"), "fix the build");
+  assert.equal(withDraft("fix the build", "fix the build"), "fix the build");
+  assert.equal(withDraft("half typed", ""), "half typed");
+  assert.deepEqual(withDraftFiles(["C:/b.png"], undefined), ["C:/b.png"]);
+  // And twice is once: StrictMode runs an effect twice in development.
+  const once = withDraft("also check the logs", "fix the build");
+  assert.equal(withDraft(once, "fix the build"), once);
+  assert.deepEqual(withDraftFiles(withDraftFiles([], ["C:/a.png"]), ["C:/a.png"]), ["C:/a.png"]);
+});
+
+test("and the composer's draft effect is where it is asked", { skip: needsBuild }, () => {
+  const composer = ui(path.join("components", "Composer.tsx"));
+  const effect = composer.slice(composer.indexOf("useEffect(() => {\n    if (!draft) return;"));
+  assert.match(effect, /^useEffect\(\(\) => \{\s*if \(!draft\) return;\s*setText\(\(current\) => withDraft\(current, draft\.text\)\);/);
+  assert.match(effect, /setAttached\(\(staged\) => withDraftFiles\(staged, draft\.files\)\);/);
+  assert.doesNotMatch(effect.slice(0, 400), /setText\(draft\.text\)/);
 });
