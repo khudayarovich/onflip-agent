@@ -1,6 +1,7 @@
 import { app, BrowserWindow, session, shell, Session } from "electron";
 import { hideAutomation, installChromeBrands } from "./chrome-identity";
 import { parseBrands, renderBrands, withGoogleChrome } from "../shared/chrome-brands";
+import { isWebUrl } from "../shared/open-safety";
 
 /**
  * Signing in to ChatGPT, in a browser ChatGPT will actually accept.
@@ -381,7 +382,8 @@ export function runSignIn(parent: BrowserWindow | null): Promise<SignInResult> {
           },
         };
       }
-      void shell.openExternal(url);
+      // Web addresses only: any other scheme is a program or a handler.
+      if (isWebUrl(url)) void shell.openExternal(url);
       return { action: "deny" };
     });
 

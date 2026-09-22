@@ -79,6 +79,7 @@ import {
 import { saveConfig } from "onflip/dist/config";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 import { writeJsonFile } from "./persistence";
+import { isWebUrl, openableArtifact } from "../shared/open-safety";
 
 /**
  * The Electron main process is deliberately thin: it owns windows and their
@@ -1079,7 +1080,7 @@ function createWindow(cwd?: string): Workspace {
 
   // External links open in the user's real browser, never inside the app.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^https?:/i.test(url)) void shell.openExternal(url);
+    if (isWebUrl(url)) void shell.openExternal(url);
     return { action: "deny" };
   });
 
@@ -1445,6 +1446,13 @@ function registerIpc(): void {
 
   trustedHandle("open-artifact", async (_e, payload: { path: string }) => {
     if (!payload?.path || !fs.existsSync(payload.path)) return false;
+    // A file's default application is, for a .bat or a .hta, running it —
+    // and these files come from the chat. Anything that is not a document,
+    // image, media file or archive is shown in its folder instead.
+    if (!openableArtifact(payload.path)) {
+      shell.showItemInFolder(path.resolve(payload.path));
+      return true;
+    }
     const error = await shell.openPath(payload.path);
     return error === "";
   });
