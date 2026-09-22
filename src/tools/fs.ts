@@ -416,6 +416,23 @@ export function rereadDelta(before: string, after: string, name: string): string
 // write
 // ---------------------------------------------------------------------------
 
+/**
+ * The content as a text file wants it: ending in a line break.
+ *
+ * A `key: |` block cannot carry a final newline — the parser takes the last
+ * line break along with the closing fence — so every file the agent wrote
+ * ended mid-line: git marks it "No newline at end of file", linters flag
+ * it, and rewriting a file changed its last line for no reason. One is
+ * added, in the content's own style, unless the content is empty, already
+ * ends in one, or replaces a file that had none: that file's convention is
+ * kept.
+ */
+export function withFinalNewline(content: string, before: string | null): string {
+  if (!content || content.endsWith("\n")) return content;
+  if (before && !before.endsWith("\n")) return content;
+  return content + (content.includes("\r\n") ? "\r\n" : "\n");
+}
+
 export const writeTool: ToolDefinition = {
   name: "write",
   description:
@@ -432,7 +449,6 @@ export const writeTool: ToolDefinition = {
   async run(args, ctx) {
     const file = resolveIn(ctx.cwd, args.path);
     if (typeof args.content !== "string") return err("`content` must be a string");
-    const content = args.content;
     let beforeRevision: FileRevision;
     try {
       beforeRevision = captureFileRevision(file);
@@ -440,6 +456,7 @@ export const writeTool: ToolDefinition = {
       return err(`Cannot inspect ${relative(ctx.cwd, file)}: ${e instanceof Error ? e.message : String(e)}`);
     }
     const before = beforeRevision.contents;
+    const content = withFinalNewline(args.content, before);
 
     const decision = await ctx.requestPermission({
       kind: "write",
@@ -458,7 +475,9 @@ export const writeTool: ToolDefinition = {
     snapshot(ctx, file, before, content, "write");
     ctx.session.readFiles.set(file, Date.now());
 
-    const lineCount = content.split("\n").length;
+    // Lines, not line breaks: the final newline ends the last line rather
+    // than starting another.
+    const lineCount = content.split("\n").length - (content.endsWith("\n") ? 1 : 0);
     return ok(
       `${before === null ? "Created" : "Overwrote"} ${relative(ctx.cwd, file)} (${lineCount} lines)`,
       {
