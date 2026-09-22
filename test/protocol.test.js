@@ -269,3 +269,139 @@ test("an indented inner fence does not close its onflip block", () => {
   assert.equal(done.calls.length, 1);
   assert.match(done.calls[0].arguments.summary, /Still part of the answer/);
 });
+
+// ---------------------------------------------------------------------------
+// a block that may have been cut off, and a tag that is only an example
+// ---------------------------------------------------------------------------
+
+const FENCE = "`".repeat(3);
+
+test("a write whose fence never closed is refused, and the model told which block", () => {
+  // A reply cut off mid-value arrives exactly like this, and `write` would
+  // have saved the first half of the file as the whole of it.
+  const r = parse([
+    FENCE + "onflip",
+    "tool: edit",
+    "path: app.py",
+    "old_string: |",
+    "  import os",
+    "new_string: |",
+    "  import os",
+    "  def main():",
+    "      cfg = load(",
+  ].join("\n"));
+  assert.equal(r.calls.length, 0, "nothing runs from half a block");
+  assert.match(r.malformed, /`edit` block was never closed/);
+  assert.match(r.malformed, /Nothing was executed/);
+});
+
+test("beside a call that did parse, the refused block is reported, not lost", () => {
+  const r = parse([
+    FENCE + "onflip",
+    "tool: read",
+    "path: a.txt",
+    FENCE,
+    "",
+    FENCE + "onflip",
+    "tool: bash",
+    "command: |",
+    "  npm run build && npm run",
+  ].join("\n"));
+  assert.deepEqual(r.calls.map((c) => c.tool), ["read"]);
+  assert.match(r.dropped, /`bash` block was never closed/);
+});
+
+test("but a read from an unclosed block still runs, and so does a closing block", () => {
+  // The false-positive half: nothing that changes anything, nothing refused.
+  const read = parse(FENCE + "onflip\ntool: read\npath: a.txt");
+  assert.deepEqual(read.calls.map((c) => [c.tool, c.arguments.path]), [["read", "a.txt"]]);
+  const done = parse(FENCE + "onflip\ntool: done\nsummary: |\n  All three files are fixed.");
+  assert.equal(done.calls[0].tool, "done");
+  assert.match(done.calls[0].arguments.summary, /All three files are fixed/);
+  // And a closed block of any kind is untouched by the rule.
+  const edit = parse(FENCE + "onflip\ntool: edit\npath: a.py\nold_string: a\nnew_string: b\n" + FENCE);
+  assert.equal(edit.calls[0].tool, "edit");
+});
+
+test("an unclosed tag is held to the same rule", () => {
+  // Truncated JSON never parses, so the block form is the one at risk.
+  const r = parse("<onflip:tool>\ntool: bash\ncommand: |\n  rm -rf build && npm run");
+  assert.equal(r.calls.length, 0);
+  assert.match(r.malformed, /`bash` block was never closed/);
+  const read = parse('<onflip:tool>{"tool":"read","path":"a.txt"}');
+  assert.equal(read.calls[0].tool, "read", "a read still runs");
+});
+
+test("a tag inside inline code is an example, not a call", () => {
+  const example =
+    'A call looks like `<onflip:tool>{"tool":"bash","command":"git push --force"}</onflip:tool>` in the tag form.';
+  const r = parse(example);
+  assert.equal(r.calls.length, 0, "the push is not run");
+  assert.equal(r.malformed, undefined, "and the example is not taken for a broken call");
+  assert.match(r.text, /git push --force/, "it stays in the answer as written");
+  const named = parse("Wrap it in `<onflip:tool>` tags, or use a fence.");
+  assert.equal(named.calls.length, 0);
+  assert.equal(named.malformed, undefined, "naming the tag is not an attempt either");
+});
+
+test("while a real tag beside inline code, or with backticks in it, still runs", () => {
+  // The false-positive half. A span closed before the tag hides nothing.
+  const after = parse('Run `npm test` first:\n<onflip:tool>{"tool":"bash","command":"npm test"}</onflip:tool>');
+  assert.deepEqual(after.calls.map((c) => c.arguments.command), ["npm test"]);
+  // PowerShell escapes with a single backtick. One in each call pairs up
+  // across the two if the bodies are counted, and hides the second tag.
+  const escaped = parse(
+    '<onflip:tool>{"tool":"bash","command":"Write-Host `$HOME"}</onflip:tool>\n' +
+      '<onflip:tool>{"tool":"bash","command":"Write-Host `$PWD"}</onflip:tool>'
+  );
+  assert.deepEqual(
+    escaped.calls.map((c) => c.arguments.command),
+    ["Write-Host `$HOME", "Write-Host `$PWD"],
+    "a backtick inside one call does not hide the next"
+  );
+  // And a stray backtick earlier in the reply opens no span: not in an
+  // earlier paragraph, and not in the same one when nothing after it closes.
+  const earlier = parse('The key left of 1 is ` on most keyboards.\n\n<onflip:tool>{"tool":"read","path":"a.txt"}</onflip:tool>');
+  assert.equal(earlier.calls.length, 1);
+  const unpaired = parse('PowerShell escapes with ` so:\n<onflip:tool>{"tool":"read","path":"a.txt"}</onflip:tool>');
+  assert.equal(unpaired.calls.length, 1, "a backtick with no partner hides nothing");
+});
+
+test("a reply with CRLF line endings is read like any other", () => {
+  const r = parse(FENCE + "onflip\r\ntool: edit\r\npath: a.txt\r\nold_string: one\r\nnew_string: two\r\n" + FENCE + "\r\n");
+  assert.equal(r.calls.length, 1);
+  assert.deepEqual(r.calls[0].arguments, { path: "a.txt", old_string: "one", new_string: "two" });
+});
+
+test("a block that forgot its closer ends at the next block's opener", () => {
+  const r = parse([
+    FENCE + "onflip",
+    "tool: read",
+    "path: a.txt",
+    "",
+    FENCE + "onflip",
+    "tool: read",
+    "path: b.txt",
+    FENCE,
+  ].join("\n"));
+  assert.deepEqual(r.calls.map((c) => c.arguments.path), ["a.txt", "b.txt"], "both calls run");
+});
+
+test("but an indented opener inside a value is content", () => {
+  // The false-positive half: a doc being written that shows a block.
+  const r = parse([
+    FENCE + "onflip",
+    "tool: edit",
+    "path: docs/protocol.md",
+    "old_string: TODO",
+    "new_string: |",
+    "  Write a block like this:",
+    "  " + FENCE + "onflip",
+    "  tool: read",
+    "  " + FENCE,
+    FENCE,
+  ].join("\n"));
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].tool, "edit");
+  assert.match(r.calls[0].arguments.new_string, /tool: read/);
+});

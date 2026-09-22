@@ -29,6 +29,28 @@ export const FENCE_TAG = "onflip";
 export const TOOL_OPEN = "<onflip:tool>";
 export const TOOL_CLOSE = "</onflip:tool>";
 
+/**
+ * Tools that change nothing, so a block cut off halfway can still be run.
+ * An allowlist, so a tool added later is refused from a truncated block
+ * until someone decides otherwise. The closing blocks are here because
+ * their only effect is the answer itself.
+ */
+const SAFE_WHEN_UNCLOSED = new Set([
+  "read",
+  "list",
+  "glob",
+  "grep",
+  "todo_read",
+  "todo_write",
+  "job_output",
+  "web_search",
+  "web_fetch",
+  "browser_snapshot",
+  "browser_screenshot",
+  "done",
+  "ask_user",
+]);
+
 export function newMessage(
   role: ChatMessage["role"],
   content: string,
@@ -116,7 +138,11 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
   /** Blocks that were plainly calls and could not be read. */
   const dropped: string[] = [];
   const known = toPredicate(knownTools);
-  let text = raw;
+  // Line breaks as the parser knows them. A reply with CRLF endings — the API
+  // transport passes the model's bytes straight through — matched no fence
+  // and no key line, and every call in it was dropped with nothing said.
+  const source = raw.replace(/\r\n?/g, "\n");
+  let text = source;
 
   // A closing block whose Markdown answer contained a plain ``` fence may
   // already have been split by the provider's renderer before OnFlip can
@@ -143,13 +169,37 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
     dropped.push(problems[problems.length - 1] ?? "a tool block could not be read");
     return null;
   };
+  /**
+   * Calls from a block that never closed, if every one of them is safe to
+   * run from half a block.
+   *
+   * A fence or tag that runs to the end of the reply is how a cut-off reply
+   * looks, and a cut-off `content: |` is a file with its second half
+   * missing — which `write` would save as the whole file, over the real one.
+   * A read is worth running either way — the worst a truncated path does is
+   * fail — so only tools that change something are refused, and the model
+   * is told which block to send again.
+   */
+  const whole = (parsed: ToolCall[], closed: boolean): boolean => {
+    if (closed) return true;
+    const partial = parsed.find((call) => !SAFE_WHEN_UNCLOSED.has(call.tool.trim().toLowerCase()));
+    if (!partial) return true;
+    problems.push(
+      `the \`${partial.tool}\` block was never closed, so the reply may have been cut off and it was not run — send the whole block again, ending with its closing fence`
+    );
+    dropping();
+    return false;
+  };
   text = replaceFences(
     text,
     [FENCE_TAG, "onflip:tool"],
-    (body) => {
+    (body, closed) => {
       if (!body.trim()) return null;
       const parsed = parseCallBody(body, problems);
       if (!parsed) return dropping();
+      // A refused block leaves the prose as well, or one of the looser paths
+      // below reads the same lines and runs what this one refused.
+      if (!whole(parsed, closed)) return "";
       calls.push(...parsed);
       return "";
     },
@@ -157,10 +207,11 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
   );
 
   // ---- 2. <onflip:tool> tags ---------------------------------------------
-  text = replaceTagged(text, TOOL_OPEN, TOOL_CLOSE, (body) => {
+  text = replaceTagged(text, TOOL_OPEN, TOOL_CLOSE, (body, closed) => {
     if (!body.trim()) return null;
     const parsed = parseCallBody(stripWrappingFence(body), problems);
     if (!parsed) return dropping();
+    if (!whole(parsed, closed)) return "";
     calls.push(...parsed);
     return "";
   });
@@ -212,7 +263,7 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
 
   // ---- 5. an attempt that did not parse -----------------------------------
   if (calls.length === 0) {
-    const attempt = detectAttempt(raw, problems, known);
+    const attempt = detectAttempt(source, problems, known);
     if (attempt) return { text: tidied, calls, malformed: attempt };
   }
 
@@ -556,6 +607,46 @@ function fencedLineMask(lines: string[]): boolean[] {
     }
   }
   return mask;
+}
+
+/**
+ * If `at` sits inside an inline code span, the index just past the span's
+ * closing backticks; otherwise -1.
+ *
+ * A span opens at a backtick run left unpaired earlier in the same
+ * paragraph and closes at the next run of the same length, as Markdown has
+ * it. A backtick with no partner later in the paragraph opens nothing —
+ * PowerShell escapes with one, and a stray one must not hide a real call.
+ */
+function inlineCodeEnd(text: string, at: number): number {
+  const paragraph = /\n[ \t]*\n/g;
+  let from = 0;
+  for (let m = paragraph.exec(text); m && m.index < at; m = paragraph.exec(text)) {
+    from = m.index + m[0].length;
+  }
+  let open = 0;
+  for (const run of text.slice(from, at).matchAll(/`+/g)) {
+    if (open === 0) open = run[0].length;
+    else if (run[0].length === open) open = 0;
+  }
+  if (open === 0) return -1;
+  paragraph.lastIndex = at;
+  const stop = paragraph.exec(text)?.index ?? text.length;
+  const closer = new RegExp(`(?<!\`)\`{${open}}(?!\`)`, "g");
+  closer.lastIndex = at;
+  const found = closer.exec(text);
+  return found && found.index < stop ? found.index + open : -1;
+}
+
+/** Does the text hold an `onflip:tool` marker outside inline code? */
+function hasLiveTag(text: string): boolean {
+  for (let from = 0; ; ) {
+    const at = text.indexOf("onflip:tool", from);
+    if (at === -1) return false;
+    const spanEnd = inlineCodeEnd(text, at);
+    if (spanEnd === -1) return true;
+    from = spanEnd;
+  }
 }
 
 function hasTopLevelFence(input: string, tags: string[]): boolean {
@@ -945,7 +1036,8 @@ function recoverSplitTerminalFence(
 function replaceFences(
   input: string,
   tags: string[],
-  fn: (body: string) => string | null,
+  /** `closed` is false for a fence that ran to the end of the input. */
+  fn: (body: string, closed: boolean) => string | null,
   /** Accept a fence with no language when its body passes this check. */
   untagged?: (body: string) => boolean
 ): string {
@@ -986,7 +1078,21 @@ function replaceFences(
     const body: string[] = [];
     let j = i + 1;
     let closed = false;
+    /** This block was ended by the next one's opening fence, which is not consumed. */
+    let reopened = false;
     for (; j < lines.length; j++) {
+      // The next block's opener, unindented, ends this one. A model batching
+      // blocks that forgets one closer otherwise has the next block's
+      // opening line swallowed into this body — and that call never runs,
+      // with nothing said. Same column-0 argument as the short close below:
+      // a `key: |` body is indented, so an unindented ```onflip line cannot
+      // be content.
+      const next = ours ? lines[j].match(/^(`{3,}|~{3,})([^\s`~]+)\s*$/) : null;
+      if (next && wanted.has(next[2].toLowerCase())) {
+        closed = true;
+        reopened = true;
+        break;
+      }
       const short = ours ? lines[j].match(/^(`{2,}|~{2,})\s*$/) : null;
       const normal = lines[j].match(/^(\s*)(`{3,}|~{3,})\s*$/);
       const shortClose = short && short[1][0] === marker && short[1].length >= 2;
@@ -1014,15 +1120,17 @@ function replaceFences(
       continue;
     }
 
-    // An unterminated fence is still worth reading — models truncate.
-    const replacement = fn(body.join("\n"));
+    // An unterminated fence is still read — models truncate — and the
+    // callback decides what is safe to run from it.
+    const replacement = fn(body.join("\n"), closed);
     if (replacement === null) {
       out.push(lines[i], ...body);
-      if (closed) out.push(lines[j]);
+      if (closed && !reopened) out.push(lines[j]);
     } else if (replacement) {
       out.push(replacement);
     }
-    i = closed ? j : lines.length;
+    // A block ended by the next opener leaves that line for the loop.
+    i = reopened ? j - 1 : closed ? j : lines.length;
   }
   return out.join("\n");
 }
@@ -1032,7 +1140,8 @@ function replaceTagged(
   input: string,
   open: string,
   close: string,
-  fn: (body: string) => string | null
+  /** `closed` is false for a tag that ran to the end of the input. */
+  fn: (body: string, closed: boolean) => string | null
 ): string {
   const lines = input.split("\n");
   const fenced = fencedLineMask(lines);
@@ -1052,18 +1161,27 @@ function replaceTaggedChunk(
   input: string,
   open: string,
   close: string,
-  fn: (body: string) => string | null
+  fn: (body: string, closed: boolean) => string | null
 ): string {
   let out = "";
   let rest = input;
   for (;;) {
     const start = rest.indexOf(open);
     if (start === -1) break;
+    // A tag inside inline code is the model showing what a call looks like:
+    // "e.g. `<onflip:tool>{"tool":"bash","command":"git push --force"}</onflip:tool>`"
+    // ran the push. The span is prose, tag and all.
+    const spanEnd = inlineCodeEnd(rest, start);
+    if (spanEnd !== -1) {
+      out += rest.slice(0, spanEnd);
+      rest = rest.slice(spanEnd);
+      continue;
+    }
     const bodyStart = start + open.length;
     const end = rest.indexOf(close, bodyStart);
     // An unclosed tag at the end of a reply still carries a usable body.
     const body = end === -1 ? rest.slice(bodyStart) : rest.slice(bodyStart, end);
-    const replacement = fn(body);
+    const replacement = fn(body, end !== -1);
     if (replacement === null) {
       if (end === -1) break;
       out += rest.slice(0, end + close.length);
@@ -1217,7 +1335,8 @@ function detectAttempt(
     known(bareToolName(named[1]));
 
   const mentionsProtocol =
-    outsideFences.includes("onflip:tool") ||
+    // A tag shown in inline code is an example, not a failed call.
+    hasLiveTag(outsideFences) ||
     hasTopLevelFence(raw, [FENCE_TAG, "onflip:tool"]) ||
     hasUnfencedBlock ||
     jsonAttempt;
