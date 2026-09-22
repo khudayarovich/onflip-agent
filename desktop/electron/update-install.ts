@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { createHash } from "node:crypto";
@@ -159,6 +159,13 @@ export function downloadUpdate(
             reject(new Error(`the download stopped early (${received} of ${total} bytes)`));
             return;
           }
+          // What reached the disk, not what arrived: the two differ exactly
+          // when a write went wrong.
+          if (out.bytesWritten !== received) {
+            settled = true;
+            reject(new Error(`the download could not be written in full (${out.bytesWritten} of ${received} bytes)`));
+            return;
+          }
           settled = true;
           resolve(target);
         });
@@ -219,11 +226,11 @@ function macSwapScript(file: string, staging: string, bundle: string, pid: numbe
  */
 export const WINDOWS_INSTALLER_ARGS = ["--updated", "/S", "--force-run"];
 
-export function applyUpdate(file: string): { relaunches: boolean } {
+export async function applyUpdate(file: string): Promise<{ relaunches: boolean }> {
   if (process.platform === "win32") {
     // Detached with stdio ignored, or the installer dies with its parent the
     // moment the app quits — which is the very next thing that happens.
-    spawn(file, WINDOWS_INSTALLER_ARGS, { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    await started(spawn(file, WINDOWS_INSTALLER_ARGS, { detached: true, stdio: "ignore", windowsHide: true }));
     return { relaunches: true };
   }
 
@@ -233,12 +240,31 @@ export function applyUpdate(file: string): { relaunches: boolean } {
     const staging = path.dirname(file);
     const script = path.join(staging, "apply.sh");
     fs.writeFileSync(script, macSwapScript(file, staging, bundle, process.pid), { mode: 0o755 });
-    spawn("/bin/sh", [script], { detached: true, stdio: "ignore" }).unref();
+    await started(spawn("/bin/sh", [script], { detached: true, stdio: "ignore" }));
     return { relaunches: true };
   }
 
   // Nothing installable here; the caller falls back to opening the page.
   return { relaunches: false };
+}
+
+/**
+ * Resolve once the hand-off process is really running.
+ *
+ * It was reported started the moment `spawn` returned, and the app quit a
+ * second later — so an installer the system refused to launch (antivirus
+ * holding an unsigned exe, most often) was an uncaught exception in the
+ * main process and an app that closed with no update behind it. A failure
+ * here keeps the app open and says why.
+ */
+function started(child: ChildProcess): Promise<void> {
+  return new Promise((resolve, reject) => {
+    child.once("spawn", () => {
+      child.unref();
+      resolve();
+    });
+    child.once("error", (e) => reject(new Error(`the installer could not be started: ${e.message}`)));
+  });
 }
 
 // ---------------------------------------------------------------------------

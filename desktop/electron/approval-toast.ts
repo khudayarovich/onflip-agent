@@ -69,5 +69,14 @@ export function parseApprovalUrl(
 ): { nonce: string; id: number; allow: boolean } | null {
   const m = /^onflip:\/\/approval\/([^/]+)\/(\d+)\/(allow|deny)\/?$/.exec(url.trim());
   if (!m) return null;
-  return { nonce: decodeURIComponent(m[1]), id: Number(m[2]), allow: m[3] === "allow" };
+  // Any local process, or a web page once the browser's "Open OnFlip?" is
+  // accepted, can hand the app a URL: `%` alone made decodeURIComponent
+  // throw in the main process's second-instance handler.
+  let nonce: string;
+  try {
+    nonce = decodeURIComponent(m[1]);
+  } catch {
+    return null;
+  }
+  return { nonce, id: Number(m[2]), allow: m[3] === "allow" };
 }

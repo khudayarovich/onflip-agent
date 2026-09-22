@@ -193,25 +193,43 @@ test("but a slow download that keeps arriving is not a stall", { skip: needsBuil
   }
 });
 
-test("the Windows installer is told to start the app again", { skip: needsBuild }, () => {
-  const { WINDOWS_INSTALLER_ARGS, applyUpdate } = load(scriptedNet(threeChunks));
-  assert.ok(WINDOWS_INSTALLER_ARGS.includes("/S"));
-  assert.ok(WINDOWS_INSTALLER_ARGS.includes("--force-run"));
-
+/** Run applyUpdate as Windows, with a spawn that does what `outcome` says. */
+async function applyOnWindows(applyUpdate, outcome) {
   const cp = require("node:child_process");
   const realSpawn = cp.spawn;
   const platform = Object.getOwnPropertyDescriptor(process, "platform");
   const spawned = [];
   cp.spawn = (file, args) => {
+    const child = new EventEmitter();
+    child.unref = () => {};
     spawned.push({ file, args });
-    return { unref() {} };
+    setImmediate(() =>
+      outcome === "spawn" ? child.emit("spawn") : child.emit("error", Object.assign(new Error("Access is denied."), { code: "EPERM" }))
+    );
+    return child;
   };
   Object.defineProperty(process, "platform", { value: "win32" });
   try {
-    assert.deepEqual(applyUpdate("C:\\temp\\OnFlip-Setup.exe"), { relaunches: true });
+    return { result: await applyUpdate("C:\\temp\\OnFlip-Setup.exe"), spawned };
   } finally {
     cp.spawn = realSpawn;
     Object.defineProperty(process, "platform", platform);
   }
+}
+
+test("the Windows installer is told to start the app again", { skip: needsBuild, timeout: 10_000 }, async () => {
+  const { WINDOWS_INSTALLER_ARGS, applyUpdate } = load(scriptedNet(threeChunks));
+  assert.ok(WINDOWS_INSTALLER_ARGS.includes("/S"));
+  assert.ok(WINDOWS_INSTALLER_ARGS.includes("--force-run"));
+  const { result, spawned } = await applyOnWindows(applyUpdate, "spawn");
+  assert.deepEqual(result, { relaunches: true });
   assert.deepEqual(spawned, [{ file: "C:\\temp\\OnFlip-Setup.exe", args: WINDOWS_INSTALLER_ARGS }]);
+});
+
+test("an installer the system refuses to start is reported, not quit on", { skip: needsBuild, timeout: 10_000 }, async () => {
+  // It was reported started the moment spawn returned and the app quit a
+  // second later; an antivirus holding the unsigned exe meant an uncaught
+  // exception and an app that closed with no update behind it.
+  const { applyUpdate } = load(scriptedNet(threeChunks));
+  await assert.rejects(() => applyOnWindows(applyUpdate, "error"), /the installer could not be started: Access is denied/);
 });

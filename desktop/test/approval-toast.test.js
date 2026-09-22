@@ -77,3 +77,12 @@ test("every language the app speaks has its button labels", { skip: needsBuild }
   const fallback = approvalToastXml({ title: "t", body: "b", lang: "fr", nonce: "n", id: 1 });
   assert.ok(fallback.includes('content="Allow once"'));
 });
+
+test("a malformed decision URL is not a decision, and does not throw", { skip: needsBuild }, () => {
+  // Any local process, or a web page once the browser's "Open OnFlip?" is
+  // accepted, can launch the app with a URL; `%` alone made
+  // decodeURIComponent throw in the main process's second-instance handler.
+  const { parseApprovalUrl } = load();
+  assert.equal(parseApprovalUrl("onflip://approval/%/1/allow"), null);
+  assert.equal(parseApprovalUrl("onflip://approval/%E0%A4%A/2/deny"), null);
+});

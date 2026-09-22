@@ -10,6 +10,7 @@ import {
   type ChromeIdentity,
 } from "./chrome-identity";
 import { fallbackBrands, renderBrands } from "../shared/chrome-brands";
+import { isWebUrl } from "../shared/open-safety";
 
 /**
  * The agent's browser, embedded in the window.
@@ -137,18 +138,41 @@ export function resolveEndpoint(): string | null {
  * launching a browser of its own — the old behaviour, screencast and all.
  * Degrading is much better than a browser tool that cannot run.
  */
-export function embeddedEnv(): Record<string, string> {
+export function embeddedEnv(win: BrowserWindow): Record<string, string> {
   const url = resolveEndpoint();
   if (!url || !viewMark) return {};
+  const mark = markFor(win);
   return {
     ONFLIP_EMBEDDED_CDP: url,
-    ONFLIP_EMBEDDED_MARK: viewMark,
+    ONFLIP_EMBEDDED_MARK: mark,
     // Handed over whole rather than described, because the engine has to
     // navigate back to it when the agent closes the browser — and a URL
     // format agreed between two files in two packages is a format that will
     // drift, at which point the view stops being findable.
-    ONFLIP_EMBEDDED_BLANK: blankUrl(),
+    ONFLIP_EMBEDDED_BLANK: blankUrl(mark),
   };
+}
+
+const windowMarks = new WeakMap<BrowserWindow, string>();
+
+/**
+ * The mark of one window's view.
+ *
+ * It was one mark for the whole app, so every window's idle view sat on the
+ * same URL and an engine attached to the first page carrying it: with two
+ * windows open, window B's agent could browse in window A's panel while its
+ * own stayed blank, and two engines could share one page. Each window's view
+ * now has its own. The app-wide mark stays its prefix, which is what tells
+ * any of them apart from the app's own pages, and the suffix is random and
+ * of one length, so no window's mark is ever a substring of another's.
+ */
+export function markFor(win: BrowserWindow): string {
+  let mark = windowMarks.get(win);
+  if (!mark) {
+    mark = `${viewMark}-${randomBytes(6).toString("hex")}`;
+    windowMarks.set(win, mark);
+  }
+  return mark;
 }
 
 /**
@@ -159,13 +183,10 @@ export function embeddedEnv(): Record<string, string> {
  * not something to hand an agent. Playwright keeps its `Page` handle across
  * navigations, so the mark only has to survive long enough to be found once.
  */
-function blankUrl(): string {
-  const body = `<title>OnFlip browser ${viewMark}</title>`;
+export function blankUrl(mark: string): string {
+  const body = `<title>OnFlip browser ${mark}</title>`;
   return `data:text/html;charset=utf-8,${encodeURIComponent(body)}`;
 }
-
-/** Declared before `embeddedEnv` uses it; hoisting keeps the order readable. */
-export const blankViewUrl = blankUrl;
 
 /**
  * Chrome's user agent, from Electron's own.
@@ -316,12 +337,21 @@ export function ensureView(win: BrowserWindow): WebContentsView | null {
   };
   view.webContents.on("dom-ready", brandOnce);
 
+  // A page the agent visits may open windows of its own, and Electron has no
+  // popup blocker: each one became a native window that outlived the panel.
+  // A web address opens in the view itself, the way a tab would follow a
+  // link; anything else is refused.
+  view.webContents.setWindowOpenHandler(({ url }) => {
+    if (isWebUrl(url)) void view.webContents.loadURL(url);
+    return { action: "deny" };
+  });
+
   view.setBackgroundColor("#00000000");
   win.contentView.addChildView(view);
   // Parked off-screen rather than absent: a view with no bounds still loads,
   // so the agent can be browsing before the panel has ever been opened.
   view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
-  void view.webContents.loadURL(blankUrl());
+  void view.webContents.loadURL(blankUrl(markFor(win)));
   views.set(win, view);
 
   win.once("closed", () => {

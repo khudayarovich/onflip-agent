@@ -600,13 +600,13 @@ function engineRuntimeChoice(): "node" | "electron" {
   return runtimeChoice;
 }
 
-function spawnEngine(cwd: string): ChildProcess {
+function spawnEngine(cwd: string, win: BrowserWindow): ChildProcess {
   const entry = engineEntry();
   const args = [entry, "--cwd", cwd];
   const nodeBin = process.env.ONFLIP_NODE || "node";
   // A machine whose Node cannot open the sqlite binding the app ships runs
   // the engine where one fits (see engine-runtime.ts).
-  if (engineRuntimeChoice() === "electron") return spawnEngineViaElectron(args, cwd);
+  if (engineRuntimeChoice() === "electron") return spawnEngineViaElectron(args, cwd, win);
   // The engine runs under plain Node, so it cannot find Electron by itself —
   // and the cookie worker needs Electron, whose ABI matches the sqlite
   // binding this app ships. Handing the path down is what makes the reader
@@ -625,7 +625,7 @@ function spawnEngine(cwd: string): ChildProcess {
     ...process.env,
     ONFLIP_ELECTRON_PATH: process.execPath,
     ONFLIP_PROVIDER: activeProvider(),
-    ...embeddedEnv(),
+    ...embeddedEnv(win),
   };
   try {
     const child = spawn(nodeBin, args, {
@@ -637,11 +637,11 @@ function spawnEngine(cwd: string): ChildProcess {
     // ENOENT arrives as an async error; handled by the caller's error hook.
     return child;
   } catch {
-    return spawnEngineViaElectron(args, cwd);
+    return spawnEngineViaElectron(args, cwd, win);
   }
 }
 
-function spawnEngineViaElectron(args: string[], cwd: string): ChildProcess {
+function spawnEngineViaElectron(args: string[], cwd: string, win: BrowserWindow): ChildProcess {
   return spawn(process.execPath, args, {
     cwd,
     stdio: ["pipe", "pipe", "pipe"],
@@ -654,7 +654,8 @@ function spawnEngineViaElectron(args: string[], cwd: string): ChildProcess {
       // import would run on whatever Node was around.
       ONFLIP_ELECTRON_PATH: process.execPath,
       ONFLIP_PROVIDER: activeProvider(),
-      ...embeddedEnv(),
+      // This window's view, and no other window's.
+      ...embeddedEnv(win),
     },
   });
 }
@@ -697,7 +698,7 @@ function engineStderrLog(pid: number | undefined): fs.WriteStream | null {
 function startEngine(ws: Workspace, requested?: string): void {
   const { cwd, missing } = engineCwd(requested);
   ws.engineExited = false;
-  let child = spawnEngine(cwd);
+  let child = spawnEngine(cwd, ws.win);
   const stderrLog = engineStderrLog(child.pid);
   // One fallback, then the failure is final. The retry used to key on
   // `c === child` alone, which the fallback satisfied too, so a second
@@ -738,7 +739,7 @@ function startEngine(ws: Workspace, requested?: string): void {
       // No system Node — retry once inside Electron's own Node.
       if (e.code === "ENOENT" && !fellBack) {
         fellBack = true;
-        const fallback = spawnEngineViaElectron([engineEntry(), "--cwd", cwd], cwd);
+        const fallback = spawnEngineViaElectron([engineEntry(), "--cwd", cwd], cwd, ws.win);
         child = fallback;
         ws.engine = fallback;
         attach(fallback);
@@ -751,7 +752,6 @@ function startEngine(ws: Workspace, requested?: string): void {
     });
     c.on("exit", (code) => {
       if (c !== child) return;
-      ws.engineExited = true;
       try {
         stderrLog?.write(
           `--- engine pid ${c.pid ?? "?"} exited ${new Date().toISOString()} code ${code ?? "unknown"} ---\n`
@@ -761,6 +761,12 @@ function startEngine(ws: Workspace, requested?: string): void {
         /* best-effort */
       }
       wire.close(`The engine exited (code ${code ?? "unknown"}).`);
+      // Only the window's current engine speaks for the window. A stopped
+      // engine that outlived stopEngine's four-second wait exited after its
+      // replacement had started, and marked that healthy engine dead: every
+      // request refused, and the window told its engine had gone.
+      if (ws.engine !== c) return;
+      ws.engineExited = true;
       sendTo(ws, "engine-exit", { code });
     });
   };
@@ -1547,7 +1553,7 @@ function registerIpc(): void {
         );
         console.log(`[desktop] update downloaded to ${file}; handing off to the installer`);
         report({ phase: "installing" });
-        const { relaunches } = applyUpdate(file);
+        const { relaunches } = await applyUpdate(file);
         if (!relaunches) {
           updating = false;
           report({ phase: "error", message: "This platform has no automatic installer." });
