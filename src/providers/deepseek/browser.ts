@@ -149,11 +149,46 @@ export function matchServiceMessage(body: string): { text: string; code: Failure
   return null;
 }
 
+/**
+ * How long one call into the page may take.
+ *
+ * A page call has no deadline of its own, and the reply loop awaits one on
+ * every poll: a wedged renderer stopped the loop at that await, the turn
+ * deadline is only tested at the top of it, and the turn waited for ever
+ * with nothing in the log after the last heartbeat. Qwen's driver measured
+ * and fixed exactly this; this one had the same loop without the fix.
+ * Healthy calls take milliseconds, so crossing this means something is
+ * wrong rather than slow. Overridable so a test can watch it fire.
+ */
+function pageCallMs(): number {
+  return Number(process.env.ONFLIP_PAGE_CALL_MS) || 20_000;
+}
+
+function withTimeout<T>(work: Promise<T>, what: string, ms = pageCallMs()): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  return Promise.race([
+    work.finally(() => clearTimeout(timer)),
+    new Promise<T>((_, reject) => {
+      timer = setTimeout(
+        () =>
+          reject(
+            new DeepSeekError(
+              `DeepSeek's page stopped answering while ${what} (${Math.round(ms / 1000)}s).`,
+              "send-not-landed"
+            )
+          ),
+        ms
+      );
+    }),
+  ]);
+}
+
 /** The page's visible text, or "" when it cannot be read. */
 async function bodyText(page: Page): Promise<string> {
-  return (await page
-    .evaluate("(document.body && document.body.innerText) || \"\"")
-    .catch(() => "")) as string;
+  return (await withTimeout(
+    page.evaluate("(document.body && document.body.innerText) || \"\""),
+    "reading the page"
+  ).catch(() => "")) as string;
 }
 
 /**
@@ -247,12 +282,15 @@ export async function chatPage(opts: OpenOptions = {}): Promise<Page> {
 
 /** Read the session out of a page's localStorage. */
 export async function readStorage(page: Page): Promise<Record<string, string | null>> {
-  return page.evaluate(
-    ([tokenKey, userKey]) => ({
-      [tokenKey]: localStorage.getItem(tokenKey),
-      [userKey]: localStorage.getItem(userKey),
-    }),
-    [TOKEN_KEY, USER_KEY]
+  return withTimeout(
+    page.evaluate(
+      ([tokenKey, userKey]) => ({
+        [tokenKey]: localStorage.getItem(tokenKey),
+        [userKey]: localStorage.getItem(userKey),
+      }),
+      [TOKEN_KEY, USER_KEY]
+    ),
+    "reading the session"
   );
 }
 
@@ -515,9 +553,14 @@ const SILENCE_MS = 90_000;
 const SERVICE_CHECK_MS = 4_000;
 
 /** The last assistant reply, and how many are mounted, in one read. */
-async function readLast(page: Page): Promise<{ text: string; count: number }> {
-  const nodes = (await page.evaluate(EXTRACT_REPLY_SCRIPT).catch(() => null)) as unknown;
-  const count = await page.$$eval(ASSISTANT_SELECTOR, (els) => els.length).catch(() => 0);
+export async function readLast(page: Page): Promise<{ text: string; count: number }> {
+  const nodes = (await withTimeout(page.evaluate(EXTRACT_REPLY_SCRIPT), "reading the reply").catch(
+    () => null
+  )) as unknown;
+  const count = await withTimeout(
+    page.$$eval(ASSISTANT_SELECTOR, (els) => els.length),
+    "counting the replies"
+  ).catch(() => 0);
   return { text: nodes ? toMarkdown(nodes as never) : "", count };
 }
 
@@ -605,7 +648,9 @@ export async function sendTurn(
     el.dispatchEvent(new Event("input", { bubbles: true }));
     return el.value.length;
   })()`;
-  const accepted = (await page.evaluate(fill)) as number;
+  const accepted = (await withTimeout(page.evaluate(fill), "typing the message").catch((e) => {
+    throw new DeepSeekError(e instanceof Error ? e.message : String(e), "composer-entry");
+  })) as number;
   // The page not being ready is the failure one retry fixes, so say so in
   // the code rather than leaving it to be guessed from the sentence.
   if (accepted < 0) {
@@ -874,7 +919,7 @@ export async function checkSelectors(): Promise<{
           ").length"
       ).join(",") +
       "})";
-    const matches = (await page.evaluate(script)) as Record<string, number>;
+    const matches = (await withTimeout(page.evaluate(script), "reading the page")) as Record<string, number>;
 
     const broken: string[] = [];
     const returned: string[] = [];
@@ -963,7 +1008,10 @@ export async function setDeepThink(on: boolean): Promise<boolean> {
       }
       return { found: true, state };
     })()`;
-    const before = (await page.evaluate(script(on))) as { found: boolean; state: boolean | null };
+    const before = (await withTimeout(page.evaluate(script(on)), "setting deep thinking")) as {
+      found: boolean;
+      state: boolean | null;
+    };
     if (!before.found) {
       logger.warn("deepseek", "the deep-thinking toggle was not on the page");
       return false;
@@ -972,7 +1020,9 @@ export async function setDeepThink(on: boolean): Promise<boolean> {
     // Confirm rather than assume: a click that did not land would otherwise
     // leave every turn running at the wrong effort, silently.
     await page.waitForTimeout(600);
-    const after = (await page.evaluate(script(on))) as { state: boolean | null };
+    const after = (await withTimeout(page.evaluate(script(on)), "setting deep thinking")) as {
+      state: boolean | null;
+    };
     const ok = after.state === on;
     logger.info("deepseek", "deep thinking", { wanted: on, applied: ok });
     return ok;
@@ -1037,7 +1087,7 @@ export async function setMode(mode: string): Promise<boolean> {
       }
       return { present: true, current };
     })()`;
-    const before = (await page.evaluate(script(mode))) as {
+    const before = (await withTimeout(page.evaluate(script(mode)), "choosing the mode")) as {
       present: boolean;
       current: string | null;
       missing?: boolean;
@@ -1056,7 +1106,9 @@ export async function setMode(mode: string): Promise<boolean> {
     }
     if (before.current === mode) return true;
     await page.waitForTimeout(700);
-    const after = (await page.evaluate(script(mode))) as { current: string | null };
+    const after = (await withTimeout(page.evaluate(script(mode)), "choosing the mode")) as {
+      current: string | null;
+    };
     const ok = after.current === mode;
     logger.info("deepseek", "mode", { wanted: mode, applied: ok, was: before.current });
     return ok;
@@ -1123,7 +1175,7 @@ async function attachPending(page: Page): Promise<void> {
     return { imgs: imgs, named: named };
   })()`;
   const look = () =>
-    page.evaluate(probe).catch(() => ({ imgs: 0, named: 0 })) as Promise<{
+    withTimeout(page.evaluate(probe), "checking the attachment").catch(() => ({ imgs: 0, named: 0 })) as Promise<{
       imgs: number;
       named: number;
     }>;
