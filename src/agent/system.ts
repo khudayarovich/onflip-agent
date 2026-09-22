@@ -412,6 +412,15 @@ export function backgroundJobLine(jobs?: JobSummary[]): string {
  * out the wrong answer without pretending to identify the right one — English
  * and Uzbek both pass through as "that language", which is what the quote is
  * for.
+ *
+ * Cyrillic is not the same thing as Russian, though, and treating it so sent
+ * the same wrong answer the other way: Uzbek is written in Cyrillic as well
+ * as Latin, and "лойиҳани тузат" was ruled Russian and answered in Russian.
+ * Letters decide it again. Uzbek Cyrillic has ў, қ, ғ and ҳ, which Russian
+ * does not; Ukrainian, Kazakh, Serbian and the rest each have letters of
+ * their own. Only a message whose Cyrillic is all Russian letters is ruled
+ * Russian — a short Uzbek line that happens to use none of its own letters
+ * still is, which is the limit of deciding by script.
  */
 export function languageAnchor(request?: string | null): string {
   const line = (request ?? "")
@@ -421,9 +430,16 @@ export function languageAnchor(request?: string | null): string {
   if (!line) return "";
   const sample = line.length > 120 ? `${line.slice(0, 120)}…` : line;
   const cyrillic = /[Ѐ-ӿ]/.test(line);
-  const ruling = cyrillic
-    ? "It is in Russian, so answer in Russian."
-    : "It contains no Cyrillic at all, so it is not Russian: do not answer in Russian, whatever language your account or this machine prefers.";
+  const uzbek = /[ЎўҚқҒғҲҳ]/.test(line);
+  // Every Cyrillic letter outside Russian's own alphabet (А–я, Ё, ё).
+  const notRussian = /[ЀЂ-Џѐђ-џѠ-ӿ]/.test(line);
+  const ruling = !cyrillic
+    ? "It contains no Cyrillic at all, so it is not Russian: do not answer in Russian, whatever language your account or this machine prefers."
+    : uzbek
+      ? "It is Uzbek written in Cyrillic, so answer in Uzbek, in Cyrillic — not in Russian."
+      : notRussian
+        ? "It is written in Cyrillic but with letters Russian does not have, so it is not Russian: answer in its own language, not in Russian."
+        : "It is in Russian, so answer in Russian.";
   return `The user's latest message reads: "${sample}" — write your prose in that language, whatever language the rest of this conversation happens to be in. ${ruling}`;
 }
 

@@ -162,6 +162,22 @@ test("Uzbek is not mistaken for English, only ruled out of Russian", () => {
   assert.ok(!/English/.test(anchor), "it must not claim the message is English");
 });
 
+test("Uzbek written in Cyrillic is not ruled Russian", () => {
+  // Any Cyrillic used to mean Russian, so this was answered in Russian.
+  const anchor = languageAnchor("лойиҳани тузатиб бер, илтимос");
+  assert.match(anchor, /answer in Uzbek, in Cyrillic/);
+  assert.ok(!/It is in Russian/.test(anchor));
+  assert.match(languageAnchor("Ўзгаришларни сақла"), /answer in Uzbek/, "capitals too");
+});
+
+test("nor is other Cyrillic with letters Russian does not have", () => {
+  const anchor = languageAnchor("Привіт, виправ цей файл");
+  assert.match(anchor, /not Russian: answer in its own language/);
+  assert.ok(!/It is in Russian/.test(anchor));
+  // The false-positive half: Russian's own ё and Ё are Russian letters.
+  assert.match(languageAnchor("Ёлка: проверь моё хранилище"), /It is in Russian, so answer in Russian/);
+});
+
 test("a request that opens with a blank line still finds its words", () => {
   assert.match(languageAnchor("\n\n  сделай тёмную тему  "), /сделай тёмную тему/);
 });
