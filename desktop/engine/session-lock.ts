@@ -77,7 +77,15 @@ export function sessionHeldElsewhere(id: string): boolean {
 /** Atomically acquire a session lock. False means another live engine won. */
 export function claimSessionLock(id: string): boolean {
   const file = sessionLockFile(id);
-  fs.mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+  } catch {
+    // Persistence is best-effort, and this ran unguarded out of the save a
+    // turn makes before it starts: the throw escaped the turn's own handling
+    // and left the engine marked busy for good, with the queue piling up
+    // behind it. No lock is simply "not ours".
+    return false;
+  }
   for (let attempt = 0; attempt < 3; attempt++) {
     const owner: LockOwner = { pid: process.pid, at: Date.now(), token: randomUUID() };
     try {

@@ -1374,6 +1374,11 @@ export class Engine {
     );
     this.queue.push({ id: randomUUID(), text: RESUME_PROMPT, auto: true });
     this.abort.abort();
+    // An abort is only seen by a loop that comes back to look, and the hang
+    // this exists for is a `page.evaluate` that never returns — the case
+    // `FORCE_STOP_MS` documents. Without the force stop the restart was a
+    // notice and a queued word behind a turn that stayed wedged.
+    this.armForceStop();
   }
   /**
    * Carry on by ourselves after a turn died on the transport.
@@ -2203,6 +2208,12 @@ export class Engine {
     this.history = this.session.messages;
     this.archived = this.session.archived ?? [];
     this.toolState = createSessionState();
+    // A `cd` from the last session must not decide where this one's first
+    // command runs. The shell's directory is process-wide, and only a change
+    // of project folder used to reset it: after /new, `rm -rf build` ran in
+    // the old session's subfolder while the prompt told the model it was at
+    // the project root.
+    resetShellCwd();
     this.seedSystemPrompt();
     this.transport.reset();
     this.pushTranscript();
@@ -2256,6 +2267,9 @@ export class Engine {
     // A session belongs to a directory; follow it there if it still exists.
     if (path.resolve(restored.cwd) !== path.resolve(this.cwd) && fs.existsSync(restored.cwd)) {
       this.relocate(restored.cwd);
+    } else {
+      // Same folder, different session: its `cd`s are not this one's.
+      resetShellCwd();
     }
     this.adoptStoredSession(restored);
     this.seedSystemPrompt();
@@ -3003,10 +3017,18 @@ export class Engine {
       // What compaction is about to drop stays visible: it leaves the
       // context, not the conversation.
       await compactNow(this.history, this.agentOptions());
-      this.notice("Transcript compacted — earlier messages stay on screen, but are no longer sent.");
+      // A compaction stopped part-way leaves the transcript as it was, and
+      // saying it was compacted would be untrue.
+      if (!this.abort.signal.aborted) {
+        this.notice("Transcript compacted — earlier messages stay on screen, but are no longer sent.");
+      }
       this.pushTranscript();
       return { ok: true };
     } finally {
+      // Stop pressed during a compaction arms the force stop like it does
+      // for a turn; left armed, it fired five seconds into whatever ran next
+      // and closed the browser under that turn's send.
+      this.clearForceStop();
       this.peer.emit("turn", { state: "end" });
       // A message sent while this ran was queued, and is handed on here the
       // way a finished turn hands on — left in the queue it waited for the
@@ -3168,6 +3190,7 @@ export class Engine {
     this.history = this.session.messages;
     this.archived = this.session.archived ?? [];
     this.toolState = createSessionState();
+    resetShellCwd();
     this.seedSystemPrompt();
     for (const m of messages) this.history.push(newMessage(m.role, m.content));
 

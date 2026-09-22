@@ -106,7 +106,10 @@ export function expandSkillToken(text: string): string {
   if (!skill) return text;
   const rest = (text.slice(0, match.index) + text.slice(match.index + match[0].length)).trim();
   if (skill.prompt.includes("{input}")) {
-    return skill.prompt.replace("{input}", rest || "(no further details given)");
+    // A function, not a string: a string replacement expands `$&`, `$'` and
+    // `$$` in the user's own words — `printf $'a b'` lost the text and put
+    // the skill's instructions in twice.
+    return skill.prompt.replace("{input}", () => rest || "(no further details given)");
   }
   return rest ? `${skill.prompt}\n\nAdditional context from the user: ${rest}` : skill.prompt;
 }
