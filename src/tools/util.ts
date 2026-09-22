@@ -154,6 +154,11 @@ function decodesAsUtf8(sample: Buffer, truncated: boolean): boolean {
   }
 }
 
+/** Is the whole of `buf` valid UTF-8? */
+export function isUtf8(buf: Buffer): boolean {
+  return decodesAsUtf8(buf, false);
+}
+
 /**
  * Is this file binary?
  *
@@ -169,11 +174,15 @@ function decodesAsUtf8(sample: Buffer, truncated: boolean): boolean {
  * before it counts as text at all, and only then are control characters
  * worth counting.
  */
-export function isProbablyBinary(buf: Buffer): boolean {
+export function isProbablyBinary(buf: Buffer, truncated = false): boolean {
   const sample = buf.subarray(0, 8192);
   if (sample.length === 0) return false;
   if (sample.includes(0)) return true;
-  if (!decodesAsUtf8(sample, buf.length > sample.length)) return true;
+  // `truncated`: the buffer is itself only the head of a larger file, so a
+  // character can be cut at its end even when the sample is all of `buf`.
+  // Without it a 1.1 MB Cyrillic log was refused as binary, and the same
+  // file one byte longer was not.
+  if (!decodesAsUtf8(sample, truncated || buf.length > sample.length)) return true;
 
   let suspicious = 0;
   for (const byte of sample) {

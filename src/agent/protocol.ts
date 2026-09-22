@@ -74,6 +74,14 @@ export interface ParsedTurn {
    * broken call as if it were an answer.
    */
   malformed?: string;
+  /**
+   * Why a block beside the calls that did parse was left out.
+   *
+   * A reply of two edits whose second could not be read ran the first and
+   * said nothing of the second, so the model went on believing both had
+   * happened. The loop tells it which one did not.
+   */
+  dropped?: string;
 }
 
 /**
@@ -105,6 +113,8 @@ function bareToolName(value: string): string {
 export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
   const calls: ToolCall[] = [];
   const problems: string[] = [];
+  /** Blocks that were plainly calls and could not be read. */
+  const dropped: string[] = [];
   const known = toPredicate(knownTools);
   let text = raw;
 
@@ -129,12 +139,17 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
     const m = first ? /^\s*tool\s*:\s*([A-Za-z0-9_.-]+)\s*$/i.exec(first) : null;
     return Boolean(m && known(m[1]));
   };
+  const dropping = (): null => {
+    dropped.push(problems[problems.length - 1] ?? "a tool block could not be read");
+    return null;
+  };
   text = replaceFences(
     text,
     [FENCE_TAG, "onflip:tool"],
     (body) => {
+      if (!body.trim()) return null;
       const parsed = parseCallBody(body, problems);
-      if (!parsed) return null;
+      if (!parsed) return dropping();
       calls.push(...parsed);
       return "";
     },
@@ -143,8 +158,9 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
 
   // ---- 2. <onflip:tool> tags ---------------------------------------------
   text = replaceTagged(text, TOOL_OPEN, TOOL_CLOSE, (body) => {
-    const parsed = parseCallBody(body, problems);
-    if (!parsed) return null;
+    if (!body.trim()) return null;
+    const parsed = parseCallBody(stripWrappingFence(body), problems);
+    if (!parsed) return dropping();
     calls.push(...parsed);
     return "";
   });
@@ -200,7 +216,7 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
     if (attempt) return { text: tidied, calls, malformed: attempt };
   }
 
-  return { text: tidied, calls };
+  return dropped.length ? { text: tidied, calls, dropped: dropped[0] } : { text: tidied, calls };
 }
 
 // ---------------------------------------------------------------------------
@@ -219,62 +235,90 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
  * indented block that follows. Neither needs quoting or escaping, which is the
  * entire point.
  */
-export function parseBlockCall(body: string): ToolCall[] | null {
+export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | null {
   const lines = dedent(body.replace(/\r\n/g, "\n")).split("\n");
   const args: Record<string, unknown> = {};
   let toolName = "";
   let seenKey = false;
+  /** The last value was a `key: |` block, which is what a stray line cuts short. */
+  let afterBlock = false;
+  /** Does a `key:` line — at the keys' own column — come at or after `from`? */
+  const keyAhead = (from: number): boolean => lines.slice(from).some((l) => KEY_LINE.test(l));
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (!line.trim()) continue;
 
-    const match = line.match(/^([A-Za-z_][\w.-]*)\s*:\s*(.*)$/);
+    const match = line.match(KEY_LINE);
     if (!match) {
-      // Stray prose before the first key is tolerated. After it, an
-      // unparseable line ends the block rather than voiding it — a leftover
-      // fence marker or a trailing sentence should not discard a call that is
-      // otherwise complete.
+      // Stray prose before the first key is tolerated. After it, a line that
+      // is neither a key nor indented under one belongs to nothing. At the
+      // end of the block that is a trailing sentence or a leftover fence
+      // marker, and the call before it is complete. With keys still to come
+      // it is a value line that lost its indentation — and ending the block
+      // there, as this used to, dropped every argument after it without a
+      // word: an edit arrived with no `new_string` and deleted the text it
+      // was meant to change.
       if (!seenKey) continue;
+      if (afterBlock && keyAhead(i + 1)) {
+        problems?.push(
+          `a line of the call was not indented under its key (${JSON.stringify(line.trim().slice(0, 60))}), so the arguments after it could not be read — indent every line of a \`key: |\` value by two spaces`
+        );
+        return null;
+      }
       break;
     }
 
     const key = match[1].toLowerCase();
     const rest = match[2];
     seenKey = true;
+    afterBlock = false;
 
-    // Block scalar: take the indented lines that follow, verbatim.
+    // Block scalar: every following line indented past the keys' column,
+    // verbatim, until the next line back at that column.
+    //
+    // The indent stripped is the one the value's lines share, not the first
+    // line's. Code does not start at its shallowest line: `old_string` for
+    // the end of a function opens on the body and ends on the closing brace,
+    // and measuring from the first line cut the value at the brace — the
+    // brace and everything after it, `new_string` included, silently gone.
     if (/^[|>][-+]?$/.test(rest.trim())) {
       const collected: string[] = [];
       let j = i + 1;
-      let indent: number | null = null;
       for (; j < lines.length; j++) {
         const candidate = lines[j];
         if (!candidate.trim()) {
           collected.push("");
           continue;
         }
-        const leading = candidate.length - candidate.replace(/^[ \t]*/, "").length;
-        if (indent === null) {
-          // The first non-blank line sets the block's indent. A block scalar
-          // with no indented body at all is malformed.
-          if (leading === 0) break;
-          indent = leading;
-        } else if (leading < indent) {
-          break;
-        }
-        collected.push(candidate.slice(indent));
+        if (!/^[ \t]/.test(candidate)) break;
+        collected.push(candidate);
       }
+      while (collected.length && !collected[collected.length - 1].trim()) collected.pop();
+      // `key: |` with nothing indented under it is a value that lost its
+      // indentation — the renderer strips it when the fence goes — and taking
+      // it as empty is how a `write` truncated a file to nothing and reported
+      // success. An empty value is written `key: ""`.
+      if (collected.length === 0) {
+        problems?.push(
+          `\`${key}: |\` had nothing indented under it — indent every line of the value by two spaces (for an empty value write \`${key}: ""\`)`
+        );
+        return null;
+      }
+      const shared = sharedIndent(collected);
+      const value = collected.map((l) => (l.trim() ? l.slice(shared.length) : "")).join("\n");
       i = j - 1;
-      while (collected.length && collected[collected.length - 1] === "") collected.pop();
-      const value = collected.join("\n");
+      afterBlock = true;
       if (key === "tool") {
         toolName = value.trim();
       } else {
-        // Models put a JSON array inside a block scalar when an argument is
-        // structured (`todos: |` with a task list). Leaving it as text hands
-        // the tool a string where it needs an array.
-        args[key] = maybeJson(value);
+        // Text, always. A JSON-looking value used to be decoded here, which
+        // made `content` of a package.json an object the write tool refused,
+        // and an `old_string` of `["src"]` an array the edit tool turned into
+        // the text `src`. The registry decodes by schema instead
+        // (`coerceArgs`), so only a parameter declared as a list or object is
+        // ever parsed — `todos` and `edits` still arrive as structures.
+        args[key] = value;
       }
       continue;
     }
@@ -301,6 +345,32 @@ export function parseBlockCall(body: string): ToolCall[] | null {
   // `description` is documentation for the user, and every tool that takes one
   // declares it, so it is passed through untouched.
   return [{ tool: toolName, arguments: args, id: randomUUID() }];
+}
+
+/** A `key: value` line at the keys' column. */
+const KEY_LINE = /^([A-Za-z_][\w.-]*)\s*:\s*(.*)$/;
+
+/**
+ * The leading whitespace every non-blank line starts with, as text.
+ *
+ * Compared character by character rather than counted, so a value whose own
+ * content is tab-indented under the model's two spaces keeps its tabs.
+ */
+function sharedIndent(lines: string[]): string {
+  let shared: string | null = null;
+  for (const line of lines) {
+    if (!line.trim()) continue;
+    const lead = /^[ \t]*/.exec(line)?.[0] ?? "";
+    if (shared === null) {
+      shared = lead;
+      continue;
+    }
+    let n = 0;
+    while (n < shared.length && n < lead.length && shared[n] === lead[n]) n++;
+    shared = shared.slice(0, n);
+    if (!shared) break;
+  }
+  return shared ?? "";
 }
 
 /**
@@ -337,12 +407,22 @@ function parseUnfencedBlocks(
   const lines = text.split("\n");
   const fenced = fencedLineMask(lines);
   const starts: number[] = [];
+  /**
+   * The first block's `tool:` column. A later `tool:` only opens a block at
+   * that same column: indented deeper, it is a line inside a value — a doc
+   * being written that shows an example call — and opening a block there ran
+   * the example.
+   */
+  let column: string | null = null;
   lines.forEach((line, i) => {
     if (fenced[i]) return;
     // A `tool:` line naming something the registry has never heard of is a
     // line of prose, not the start of a block.
-    const start = line.match(/^[ \t]*tool[ \t]*:[ \t]*(\S.*)$/i);
-    if (start && known(bareToolName(start[1]))) starts.push(i);
+    const start = line.match(/^([ \t]*)tool[ \t]*:[ \t]*(\S.*)$/i);
+    if (!start || !known(bareToolName(start[2]))) return;
+    if (column === null) column = start[1];
+    else if (start[1] !== column) return;
+    starts.push(i);
   });
   if (starts.length === 0) return { calls: [], prose: text };
 
@@ -375,6 +455,27 @@ function parseBareJsonCalls(
   const lines = text.split("\n");
   const fenced = fencedLineMask(lines);
   const kept: string[] = [];
+  const firstLine = lines.findIndex((l) => l.trim());
+  let lastLine = lines.length - 1;
+  while (lastLine > 0 && !lines[lastLine].trim()) lastLine--;
+  /** The line that ended the last object taken as a call, so a batch follows on. */
+  let lastCallEnd = -2;
+  /**
+   * Is this object where the fence used to be?
+   *
+   * Only two shapes were ever seen live: the renderer ate the fence and left
+   * its `onflip` label on the line above, or the whole reply is the object.
+   * Anywhere else a JSON object in prose is a model showing one — "you can
+   * call a tool like this: {"tool": "bash", …}" — and running it would be
+   * running an example the model was explaining.
+   */
+  const inPlaceOfFence = (start: number, end: number): boolean => {
+    if (start === firstLine && end === lastLine) return true;
+    let prev = start - 1;
+    while (prev >= 0 && !lines[prev].trim()) prev--;
+    if (prev < 0) return false;
+    return prev === lastCallEnd || /^\s*(`{3,}\s*)?onflip(:tool)?\s*`*\s*$/i.test(lines[prev]);
+  };
 
   for (let i = 0; i < lines.length; i++) {
     if (fenced[i] || !lines[i].trimStart().startsWith("{")) {
@@ -422,11 +523,12 @@ function parseBareJsonCalls(
         (k) => typeof (parsed as Record<string, unknown>)[k] === "string"
       );
     const call = named ? toToolCall(parsed) : null;
-    if (!call || !known(call.tool)) {
+    if (!call || !known(call.tool) || !inPlaceOfFence(start, end)) {
       kept.push(lines[i]);
       continue;
     }
     calls.push(call);
+    lastCallEnd = end;
     i = end;
   }
 
@@ -472,17 +574,6 @@ function hasTopLevelFence(input: string, tags: string[]): boolean {
     }
   }
   return false;
-}
-
-/** Parse a value as JSON when it plainly is some, otherwise keep it as text. */
-function maybeJson(value: string): unknown {
-  const trimmed = value.trim();
-  if (!/^[[{]/.test(trimmed)) return value;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
-    return value;
-  }
 }
 
 /** Does an indented `- ` list start at this line? */
@@ -647,7 +738,7 @@ export function parseCollapsedBlock(text: string): ToolCall[] | null {
 function parseCallBody(body: string, problems: string[]): ToolCall[] | null {
   // Dedent before trimming: trimming alone strips the first line's indent and
   // leaves every other line indented, which is exactly the broken shape.
-  const trimmed = dedent(stripFences(body)).trim();
+  const trimmed = dedent(body).trim();
   if (!trimmed) return null;
 
   // JSON first: it is unambiguous when it parses.
@@ -657,7 +748,7 @@ function parseCallBody(body: string, problems: string[]): ToolCall[] | null {
     problems.push("the JSON in the block could not be parsed — most likely an unescaped quote or backslash inside a string");
   }
 
-  const block = parseBlockCall(trimmed);
+  const block = parseBlockCall(trimmed, problems);
   if (block) return block;
 
   // Several concatenated JSON objects.
@@ -965,8 +1056,27 @@ function replaceTaggedChunk(
   return out + rest;
 }
 
-function stripFences(s: string): string {
-  return s.replace(/^\s*(`{3,}|~{3,})[\w+#.:-]*\s*\n?/, "").replace(/\n?\s*(`{3,}|~{3,})\s*$/, "");
+/**
+ * A tagged body the model also fenced — `<onflip:tool>` then ```json … ```
+ * then `</onflip:tool>` — without the fence.
+ *
+ * Only a fence that wraps the whole body, opened and closed alike. This used
+ * to strip any fence line at the end of any body, fenced calls included, and
+ * the last line of a call is usually the last line of its last value: a
+ * README edit ending in a code block lost its closing fence, and the rest of
+ * the file rendered as code.
+ */
+function stripWrappingFence(s: string): string {
+  const lines = s.split("\n");
+  let first = 0;
+  while (first < lines.length && !lines[first].trim()) first++;
+  let last = lines.length - 1;
+  while (last > first && !lines[last].trim()) last--;
+  if (last <= first) return s;
+  const open = /^\s*(`{3,}|~{3,})[\w+#.:-]*\s*$/.exec(lines[first]);
+  const close = /^\s*(`{3,}|~{3,})\s*$/.exec(lines[last]);
+  if (!open || !close || close[1][0] !== open[1][0] || close[1].length < open[1].length) return s;
+  return lines.slice(first + 1, last).join("\n");
 }
 
 /**

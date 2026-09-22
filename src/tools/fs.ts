@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { ToolDefinition, ToolContext, FileSnapshot, FileRevision } from "../types";
-import { err, ok, denied, asNumber, asBool, asArray, resolveIn, relative, isProbablyBinary, IGNORED_DIRS } from "./util";
+import { ToolDefinition, ToolContext, ToolResult, FileSnapshot, FileRevision } from "../types";
+import { err, ok, denied, asNumber, asBool, asArray, resolveIn, relative, isProbablyBinary, isUtf8, IGNORED_DIRS } from "./util";
 import { applyPatch } from "./patch-apply";
 import { captureFileRevision, sameFileRevision } from "./revision";
 import { changedRanges, describeRanges, excerpt, splitLines } from "../agent/lines";
@@ -188,6 +188,29 @@ export function editedExcerpt(before: string, after: string): string {
     .join("\n");
 }
 
+/**
+ * Refuse to edit a file that is not UTF-8.
+ *
+ * Contents are read and written as UTF-8, so a file in a legacy code page
+ * came back with every non-ASCII byte replaced by U+FFFD — measured, a
+ * Windows-1251 `setup.bat` lost all nine Cyrillic bytes to one
+ * `PORT=3000` edit, and the snapshot kept for Undo held the already-decoded
+ * text, so Undo could not bring them back. `read` already refuses such a
+ * file; editing it is refused the same way, before anything is written.
+ */
+function notUtf8(ctx: ToolContext, file: string): ToolResult | null {
+  let bytes: Buffer;
+  try {
+    bytes = fs.readFileSync(file);
+  } catch {
+    return null;
+  }
+  if (isUtf8(bytes)) return null;
+  return err(
+    `${relative(ctx.cwd, file)} is not UTF-8 text — most likely a legacy code page such as Windows-1251 — and editing it here would replace every non-ASCII character with "�". Nothing was changed. Change it with a command that keeps its encoding (in PowerShell: Get-Content and Set-Content with -Encoding Default), or ask the user whether to convert it to UTF-8.`
+  );
+}
+
 function changedDuringApproval(file: string, before: FileRevision): boolean {
   try {
     const current = captureFileRevision(file);
@@ -267,7 +290,7 @@ export const readTool: ToolDefinition = {
       );
     }
     const buf = stat.size > MAX_READ_BYTES ? binarySample(file, stat.size) : fs.readFileSync(file);
-    if (isProbablyBinary(buf)) {
+    if (isProbablyBinary(buf, stat.size > buf.length)) {
       return err(`Cannot read binary file: ${relative(ctx.cwd, file)} (${stat.size} bytes)`);
     }
 
@@ -624,11 +647,20 @@ function replaceFirst(haystack: string, oldStr: string, newStr: string): string 
  * Returns the file's own text for the matched region, so the replacement is
  * performed against real bytes rather than the approximation of them.
  */
-export function relaxedMatch(
-  haystack: string,
-  needle: string
-): { text: string; line: number; tier: "trailing" | "indentation" } | null {
-  const wanted = needle.split("\n");
+export interface RelaxedHit {
+  /** The file's own text for the matched region. */
+  text: string;
+  /** 1-based line the match starts on. */
+  line: number;
+  tier: "trailing" | "indentation";
+  /** Where the region starts in the file, so the change lands there and nowhere else. */
+  index: number;
+  /** The matched lines end in CRLF, which the replacement must keep. */
+  crlf: boolean;
+}
+
+export function relaxedMatch(haystack: string, needle: string): RelaxedHit | null {
+  const wanted = needle.replace(/\r\n/g, "\n").split("\n");
   // A trailing newline in the needle produces an empty last element that
   // would have to match a line of its own; drop it and let the join below
   // put it back.
@@ -660,10 +692,80 @@ export function relaxedMatch(
     }
     if (hits.length !== 1) continue;
     const start = hits[0];
-    const text = lines.slice(start, start + wanted.length).join("\n");
-    return { text: trailingNewline ? `${text}\n` : text, line: start + 1, tier };
+    const matched = lines.slice(start, start + wanted.length);
+    const crlf = matched[0].endsWith("\r");
+    let text = matched.join("\n");
+    // Without a trailing newline the region ends before the last line's own
+    // terminator — including its `\r`, or replacing it would leave that line
+    // ending in a bare LF in a CRLF file.
+    if (trailingNewline) text += "\n";
+    else if (text.endsWith("\r")) text = text.slice(0, -1);
+    let index = 0;
+    for (let k = 0; k < start; k++) index += lines[k].length + 1;
+    return { text, line: start + 1, tier, index, crlf };
   }
   return null;
+}
+
+/**
+ * Put `replacement` where a relaxed match was found — at that position.
+ *
+ * The match is found by line, and it was applied by searching for its text:
+ * the first occurrence of the matched line's text anywhere, which can sit
+ * inside an earlier, longer line. Live-shaped: `x = 1` found on line 2, and
+ * `max = 10` on line 1 was the line that changed. The tool reported line 2.
+ */
+export function spliceAt(haystack: string, hit: RelaxedHit, replacement: string): string {
+  return haystack.slice(0, hit.index) + replacement + haystack.slice(hit.index + hit.text.length);
+}
+
+/**
+ * Re-indent a replacement written against the model's picture of the file.
+ *
+ * When the model's `old_string` sits at a uniform offset from the file's —
+ * every line shifted by the same whitespace, as a block value whose shared
+ * indent was stripped always is — `new_string` gets the same shift, line for
+ * line, and relative indentation inside it is untouched. That is the case the
+ * common-prefix swap below cannot do: the end of a function, body and closing
+ * brace one level apart, keeps its brace where it was. Anything less regular
+ * falls back to swapping the base indentation (tabs for spaces, say), and when
+ * even that has nothing to go on — the model dropped all indentation, but not
+ * by the same amount on every line — each line of the replacement takes the
+ * shift of the line in the same position.
+ */
+export function reindentReplacement(newStr: string, oldStr: string, matched: string): string {
+  const olds = oldStr.replace(/\r\n/g, "\n").split("\n");
+  const found = matched.replace(/\r\n/g, "\n").split("\n");
+  const lead = (s: string) => /^[ \t]*/.exec(s)?.[0] ?? "";
+  const pairs = olds
+    .map((o, i) => ({ o: lead(o), m: lead(found[i] ?? ""), blank: !o.trim() }))
+    .filter((p) => !p.blank);
+  if (pairs.length === 0) return newStr;
+
+  const lines = newStr.split("\n");
+  const added = pairs.map((p) => (p.m.endsWith(p.o) ? p.m.slice(0, p.m.length - p.o.length) : null));
+  if (added.every((a) => a !== null && a === added[0])) {
+    const shift = added[0] as string;
+    return shift ? lines.map((l) => (l.trim() ? shift + l : l)).join("\n") : newStr;
+  }
+  const removed = pairs.map((p) => (p.o.endsWith(p.m) ? p.o.slice(0, p.o.length - p.m.length) : null));
+  if (removed.every((r) => r !== null && r === removed[0])) {
+    const shift = removed[0] as string;
+    return lines.map((l) => (l.startsWith(shift) ? l.slice(shift.length) : l)).join("\n");
+  }
+
+  const from = baseIndent(oldStr);
+  const to = baseIndent(matched);
+  if (from) return reindentTo(newStr, from, to);
+  // All indentation dropped, unevenly: follow the lines by position.
+  let last = "";
+  return lines
+    .map((l, j) => {
+      const pair = j < olds.length && olds[j].trim() ? { o: lead(olds[j]), m: lead(found[j] ?? "") } : null;
+      if (pair && pair.m.endsWith(pair.o)) last = pair.m.slice(0, pair.m.length - pair.o.length);
+      return l.trim() ? last + l : l;
+    })
+    .join("\n");
 }
 
 /** The leading whitespace of the first line that has any content. */
@@ -717,6 +819,8 @@ export const editTool: ToolDefinition = {
     }
     const before = beforeRevision.contents;
     if (before === null) return err(`File not found: ${relative(ctx.cwd, file)}`);
+    const encoding = notUtf8(ctx, file);
+    if (encoding) return encoding;
 
     const rawOld = String(args.old_string ?? "");
     const rawNew = String(args.new_string ?? "");
@@ -727,11 +831,12 @@ export const editTool: ToolDefinition = {
     // Nothing matched byte for byte. Before reporting that, look again with
     // the whitespace relaxed — see `relaxedMatch` for why, and for why it
     // insists on a unique hit.
-    let relaxed: ReturnType<typeof relaxedMatch> = null;
+    let relaxed: RelaxedHit | null = null;
     if (occurrences === 0) {
       relaxed = relaxedMatch(before, oldStr);
       if (!relaxed) return err(notFoundAdvice(before, oldStr, relative(ctx.cwd, file)));
-      newStr = reindentTo(newStr, baseIndent(oldStr), baseIndent(relaxed.text));
+      newStr = reindentReplacement(newStr, oldStr, relaxed.text);
+      if (relaxed.crlf) newStr = newStr.replace(/\r?\n/g, "\r\n");
       oldStr = relaxed.text;
       occurrences = 1;
     }
@@ -740,7 +845,11 @@ export const editTool: ToolDefinition = {
       return err(ambiguousAdvice(before, oldStr, occurrences, relative(ctx.cwd, file)));
     }
 
-    const after = replaceAll ? before.split(oldStr).join(newStr) : replaceFirst(before, oldStr, newStr);
+    const after = relaxed
+      ? spliceAt(before, relaxed, newStr)
+      : replaceAll
+        ? before.split(oldStr).join(newStr)
+        : replaceFirst(before, oldStr, newStr);
 
     const decision = await ctx.requestPermission({
       kind: "write",
@@ -819,6 +928,8 @@ export const multiEditTool: ToolDefinition = {
     }
     const before = beforeRevision.contents;
     if (before === null) return err(`File not found: ${relative(ctx.cwd, file)}`);
+    const encoding = notUtf8(ctx, file);
+    if (encoding) return encoding;
     // Accepts the array written inline on the `edits:` line as well as the
     // block form — see `asArray`, and the 18-out-of-18 failures that came
     // from rejecting the former.
@@ -843,23 +954,29 @@ export const multiEditTool: ToolDefinition = {
       // earlier edit in the batch the file on disk is no longer what a line
       // number would be counted against.
       const where = `${relative(ctx.cwd, file)}${applied ? " (after the preceding edits)" : ""}`;
+      let hit: RelaxedHit | null = null;
       if (count === 0) {
         // Relaxed whitespace matching, exactly as `edit` does it — a batch is
         // more likely to hit this, not less, since every edit in it was
         // written from the same reading of the file.
-        const relaxed = relaxedMatch(working, oldStr);
-        if (!relaxed) {
+        hit = relaxedMatch(working, oldStr);
+        if (!hit) {
           return err(`edits[${i}]: ${notFoundAdvice(working, oldStr, where)} No changes were written.`);
         }
-        newStr = reindentTo(newStr, baseIndent(oldStr), baseIndent(relaxed.text));
-        oldStr = relaxed.text;
+        newStr = reindentReplacement(newStr, oldStr, hit.text);
+        if (hit.crlf) newStr = newStr.replace(/\r?\n/g, "\r\n");
+        oldStr = hit.text;
         count = 1;
         relaxedEdits++;
       }
       if (count > 1 && !asBool(e.replace_all)) {
         return err(`edits[${i}]: ${ambiguousAdvice(working, oldStr, count, where)} No changes were written.`);
       }
-      working = asBool(e.replace_all) ? working.split(oldStr).join(newStr) : replaceFirst(working, oldStr, newStr);
+      working = hit
+        ? spliceAt(working, hit, newStr)
+        : asBool(e.replace_all)
+          ? working.split(oldStr).join(newStr)
+          : replaceFirst(working, oldStr, newStr);
       applied += count;
     }
 
@@ -1244,6 +1361,8 @@ export const patchTool: ToolDefinition = {
     }
     const before = beforeRevision.contents;
     if (before === null) return err(`File not found: ${relative(ctx.cwd, file)}`);
+    const encoding = notUtf8(ctx, file);
+    if (encoding) return encoding;
 
     const patchText = String(args.patch ?? "");
     if (!patchText.trim()) return err("`patch` must be a unified diff. Use the `write` tool to create a file.");

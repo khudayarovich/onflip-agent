@@ -378,7 +378,9 @@ export async function runTurn(
 
     history.push(newMessage("assistant", raw));
 
-    let { text, calls, malformed } = parseTurn(raw, knownTool);
+    const parsedReply = parseTurn(raw, knownTool);
+    let { text, calls, malformed } = parsedReply;
+    const { dropped } = parsedReply;
 
     // A reply carrying our own instructions is the page handing back what
     // we sent. Its 'tool calls' are the worked examples out of the prompt,
@@ -532,7 +534,16 @@ export async function runTurn(
       // and making the model send it again alone is a whole round trip spent
       // on ceremony at the end of every small change. Anything that returns
       // information (a read, a command, a search) still has to be read first.
+      // A block beside these that could not be read was never run; saying so
+      // is what stops the model believing it was.
+      if (dropped) {
+        logger.warn("protocol", "a block beside the calls could not be read", { reason: dropped, reply: raw });
+        resultBlocks.push(
+          `[OnFlip] Another block in that reply could not be read and was NOT run: ${dropped.replace(/\.$/, "")}. Send it again if it is still needed.`
+        );
+      }
       const closesNow =
+        !dropped &&
         terminal !== null &&
         terminalName(terminal) === "done" &&
         onlyEditsThatLanded &&
@@ -1007,13 +1018,16 @@ async function sendWithRetry(
 }
 
 /**
- * Whether the registry would resolve a name — aliases and spelling included,
- * since `get` is what the loop itself dispatches through. A registry without
- * one (a scripted fake) falls back to the advertised names plus the closing
- * blocks, which every registry answers to.
+ * The names that make a line of *unmarked* text a call: the tools this
+ * conversation advertises, by their own names, plus the closing blocks.
+ *
+ * Deliberately not the registry's alias table. A fenced or tagged block is
+ * the model saying "this is a call", and there `read_file` or `rg` still
+ * reaches the tool through `get`. Out in prose the aliases are ordinary
+ * words — curl, find, shell, cat, search — and a checklist answer reading
+ * "Tool: shell / Command: git clean -xfd" was parsed as a call to `bash`.
  */
 function toolKnownTo(tools: ToolRegistry): (name: string) => boolean {
-  if (typeof tools.get === "function") return (name) => tools.get(name) !== undefined;
   const names = new Set([
     ...(tools.list ?? []).map((t) => t.name.toLowerCase()),
     ...TERMINAL_TOOL_NAMES,
@@ -1132,6 +1146,16 @@ function stringList(value: unknown): string[] {
   if (Array.isArray(value)) return value.map((v) => stringArgument(v).trim()).filter(Boolean);
   const text = stringArgument(value).trim();
   if (!text) return [];
+  // `options: |` with a JSON array under it arrives as text now that block
+  // values are never decoded by the parser.
+  if (text.startsWith("[")) {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      if (Array.isArray(parsed)) return stringList(parsed);
+    } catch {
+      /* one option per line, below */
+    }
+  }
   return text
     .split("\n")
     .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim())
