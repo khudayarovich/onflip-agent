@@ -80,6 +80,7 @@ import { saveConfig } from "onflip/dist/config";
 import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 import { writeJsonFile } from "./persistence";
 import { isWebUrl, openableArtifact } from "../shared/open-safety";
+import { engineRuntime, probeSystemNode } from "./engine-runtime";
 
 /**
  * The Electron main process is deliberately thin: it owns windows and their
@@ -579,10 +580,33 @@ function engineEntry(): string {
  * sqlite binding for the Electron ABI (onflip/prebuilds), so even browser
  * cookie import works there now.
  */
+let runtimeChoice: "node" | "electron" | null = null;
+
+/** Asked once per launch: the answer is a fact about the machine. */
+function engineRuntimeChoice(): "node" | "electron" {
+  if (runtimeChoice) return runtimeChoice;
+  const engineDir = path.dirname(engineEntry());
+  let onflipDir = "";
+  try {
+    onflipDir = path.dirname(require.resolve("onflip/package.json"));
+  } catch {
+    // No package to take prebuilds from; the probe then asks about the
+    // default binding alone.
+  }
+  runtimeChoice = engineRuntime(process.env.ONFLIP_NODE, () =>
+    probeSystemNode("node", engineDir, onflipDir)
+  );
+  console.log(`[desktop] engine runtime: ${runtimeChoice}`);
+  return runtimeChoice;
+}
+
 function spawnEngine(cwd: string): ChildProcess {
   const entry = engineEntry();
   const args = [entry, "--cwd", cwd];
   const nodeBin = process.env.ONFLIP_NODE || "node";
+  // A machine whose Node cannot open the sqlite binding the app ships runs
+  // the engine where one fits (see engine-runtime.ts).
+  if (engineRuntimeChoice() === "electron") return spawnEngineViaElectron(args, cwd);
   // The engine runs under plain Node, so it cannot find Electron by itself —
   // and the cookie worker needs Electron, whose ABI matches the sqlite
   // binding this app ships. Handing the path down is what makes the reader

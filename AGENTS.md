@@ -66,9 +66,13 @@ desktop/            the Electron app, a separate npm package that imports this
 
                     The engine child runs under plain Node, NOT Electron: the
                     better-sqlite3 prebuilt binding matches the Node ABI.
-                    Where no system Node exists it falls back to
+                    Where no system Node exists — or where the machine's
+                    Node cannot open the binding the installer ships, which
+                    is built on Node 22 (probed once per launch,
+                    electron/engine-runtime.ts) — it runs under
                     ELECTRON_RUN_AS_NODE, and prebuilds/ carries a second
-                    sqlite binding for that ABI.
+                    sqlite binding for that ABI. Commands the agent runs
+                    never inherit that variable (shell.ts commandEnv).
 ```
 
 ### Things that are not obvious

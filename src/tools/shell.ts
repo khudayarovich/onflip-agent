@@ -353,6 +353,22 @@ interface ExecOutcome {
   cwd: string | null;
 }
 
+/**
+ * The environment a command the agent runs is given.
+ *
+ * Without `ELECTRON_RUN_AS_NODE`. The desktop app runs the engine under
+ * Electron-as-Node when the machine's own Node cannot load the sqlite
+ * binding, and the variable is inherited by everything the engine starts:
+ * an Electron app the user asked to have built and run would come up as a
+ * bare Node process and fail with nothing on screen to say why. OnFlip's own
+ * helpers that need it set it explicitly.
+ */
+export function commandEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = { ...process.env, ONFLIP: "1" };
+  delete env.ELECTRON_RUN_AS_NODE;
+  return env;
+}
+
 function execute(
   command: string,
   cwd: string,
@@ -369,7 +385,7 @@ function execute(
       // stdin is closed so a command that waits on input fails fast instead of
       // hanging until the timeout.
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, ONFLIP: "1", TERM: process.env.TERM ?? "dumb" },
+      env: { ...commandEnv(), TERM: process.env.TERM ?? "dumb" },
     });
 
     const stdoutCapture = boundedCapture();
@@ -655,7 +671,7 @@ async function startBackground(command: string, cwd: string): Promise<ToolResult
     windowsHide: true,
     stdio: ["ignore", "pipe", "pipe"],
     detached: process.platform !== "win32",
-    env: { ...process.env, ONFLIP: "1" },
+    env: commandEnv(),
   });
   const job: BackgroundJob = {
     id,

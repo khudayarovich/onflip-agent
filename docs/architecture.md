@@ -41,7 +41,11 @@ Three reasons, all learned rather than designed:
 1. **Native ABI.** `better-sqlite3`, used to read browser cookies, ships
    bindings built for Node's ABI. Electron's differs. Running the engine under
    plain Node keeps that working, and the app carries a second binding
-   (`prebuilds/`) for the fallback case where no system Node exists.
+   (`prebuilds/`) for the fallback case where no system Node exists. The
+   installer's own binding is built on Node 22, so a machine whose Node is
+   another version cannot open it either: the shell asks that Node once per
+   launch (`electron/engine-runtime.ts`) and runs the engine under Electron
+   when it cannot.
 2. **Parity with the CLI-era core.** The engine assembles the same core the
    command line used to, so the agent behaves identically wherever it runs.
 3. **Isolation.** A crash in the agent — or a browser it drives — takes the
