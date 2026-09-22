@@ -141,13 +141,31 @@ export const CALLBACK_LIMIT = 64;
  */
 const MAX_TICKETS = 500;
 
+/**
+ * A few random characters naming one run of the table.
+ *
+ * Buttons outlive the process that made them — they sit in the chat — and
+ * tickets were plain counters from zero. Every app launch and every settings
+ * save started the count again, so a button from before landed on whatever
+ * the new run had given the same number: an old "Access" button in the
+ * history approved a pending shell command, measured, and said "always
+ * allowed". With the run in the key, an old button matches nothing and is
+ * answered as expired.
+ */
+function runPrefix(): string {
+  const bytes = new Uint8Array(6);
+  globalThis.crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => (b % 36).toString(36)).join("");
+}
+
 export class CallbackTable {
   private values = new Map<string, { action: string; value: string }>();
   private next = 0;
+  private run = runPrefix();
 
   /** A `callback_data` string for this action and value, always within limit. */
   put(action: string, value: string): string {
-    const key = (this.next++).toString(36);
+    const key = `${this.run}${(this.next++).toString(36)}`;
     this.values.set(key, { action, value });
     if (this.values.size > MAX_TICKETS) {
       // Oldest first: Map keeps insertion order.
@@ -167,6 +185,14 @@ export class CallbackTable {
   clear(): void {
     this.values.clear();
     this.next = 0;
+    this.run = runPrefix();
+  }
+
+  /** Forget every ticket carrying this value for these actions — a settled approval's buttons. */
+  forget(actions: readonly string[], value: string): void {
+    for (const [key, entry] of this.values) {
+      if (entry.value === value && actions.includes(entry.action)) this.values.delete(key);
+    }
   }
 }
 
@@ -240,4 +266,20 @@ export function isDirectChat(chatId: number | undefined, userId: number | undefi
  */
 export function directChatsOnly(saved: number[]): number[] {
   return [...new Set((saved ?? []).filter((id) => Number.isSafeInteger(id) && id > 0))];
+}
+
+/**
+ * Where the bot may send: the people allowed to drive it, and nobody else.
+ *
+ * Remembered chats were added to the allow-list's ids, so removing someone
+ * from the list stopped them *sending* commands but not *receiving*: every
+ * answer, tool line, permission prompt, delivered file and screenshot kept
+ * arriving in their chat, from a list that was never pruned. A remembered
+ * chat is a private one, whose id is the user's, so it is kept only while
+ * that user is still allowed.
+ */
+export function deliverableChats(allowed: readonly number[], remembered: Iterable<number>): number[] {
+  const out = new Set<number>(allowed);
+  for (const id of remembered) if (allowed.includes(id)) out.add(id);
+  return [...out];
 }

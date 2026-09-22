@@ -774,6 +774,8 @@ function startEngine(ws: Workspace, requested?: string): void {
         if (waiter.ws === ws) {
           approvalWaiters.delete(id);
           settleApprovalToast(id);
+          // The phone's card too, or its buttons stay live on a closed prompt.
+          telegramApprovalDone(id, "the turn was stopped");
         }
       }
     }
@@ -892,6 +894,7 @@ async function stopEngine(ws: Workspace): Promise<void> {
     if (waiter.ws === ws) {
       approvalWaiters.delete(id);
       settleApprovalToast(id);
+      telegramApprovalDone(id, "the engine restarted");
     }
   }
   // Already dead, or never started (no pid) — after a crash the renderer's

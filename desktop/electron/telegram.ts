@@ -16,6 +16,7 @@ import {
 import {
   CallbackTable,
   COMMAND_MENU,
+  deliverableChats,
   directChatsOnly,
   isDirectChat,
   thinkingChoices,
@@ -127,7 +128,13 @@ const chats = new Set<number>();
  * conversation, and no amount of bookkeeping here changes that.
  */
 function targetChats(): number[] {
-  return [...new Set([...parseAllowList(settings.allowedIds), ...chats])];
+  return deliverableChats(parseAllowList(settings.allowedIds), chats);
+}
+
+/** Someone taken off the list stops receiving too, and is not written back to disk. */
+function pruneChats(): void {
+  const allowed = parseAllowList(settings.allowedIds);
+  for (const id of [...chats]) if (!allowed.includes(id)) chats.delete(id);
 }
 /**
  * Buttons carry a ticket rather than their value.
@@ -252,6 +259,7 @@ export function telegramPublic(): TelegramPublic {
 /** Saving restarts the bot, because every field here changes who it answers. */
 export function saveTelegram(patch: Partial<TelegramSettings>): TelegramPublic {
   settings = { ...settings, ...patch };
+  pruneChats();
   persist();
   restart();
   return telegramPublic();
@@ -261,11 +269,12 @@ export function saveTelegram(patch: Partial<TelegramSettings>): TelegramPublic {
 // the wire
 // ---------------------------------------------------------------------------
 
-async function api<T = unknown>(method: string, body?: unknown): Promise<T> {
+async function api<T = unknown>(method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
   const response = await fetch(`${API}${settings.token}/${method}`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body ?? {}),
+    signal,
   });
   const json = (await response.json()) as { ok: boolean; result?: T; description?: string };
   if (!json.ok) throw new Error(json.description || `${method} failed`);
@@ -1135,6 +1144,8 @@ export function telegramAskApproval(id: number, request: unknown): void {
  * phone is never left holding live buttons for a question that is settled.
  */
 export function telegramApprovalDone(id: number, outcome: string): void {
+  // Its buttons answer nothing now, whichever way it was settled.
+  tickets.forget(["approve", "approve-always", "deny", "deny-stop"], String(id));
   const where = pendingApprovals.get(id);
   pendingApprovals.delete(id);
   if (!where) return;
@@ -1298,15 +1309,53 @@ interface Update {
   };
 }
 
-async function loop(): Promise<void> {
-  while (polling && !stopping) {
+/**
+ * Which polling loop is the live one.
+ *
+ * `restart` used to stop the old loop by setting flags and start the new one
+ * a quarter of a second later — but the old loop was asleep in a 25-second
+ * long poll, and by the time it woke the flags said "running" again, so it
+ * carried on beside the new one. Two loops cancel each other's polls with
+ * Telegram's 409 for as long as the app runs, and a message that landed in
+ * the old loop's poll was still acted on after the bot had been disabled.
+ * Each loop now owns a generation and an abort handle; anything but the
+ * current generation stops, and acts on nothing it had already fetched.
+ */
+let loopGeneration = 0;
+let loopAbort: AbortController | null = null;
+
+/**
+ * The pause after a failed poll. Ten seconds in the app; a test lowers it
+ * with ONFLIP_TELEGRAM_BACKOFF_MS so that a loop which should have stopped
+ * shows itself in seconds rather than after the backoff has run out.
+ */
+function pollBackoffMs(): number {
+  const raw = Number(process.env.ONFLIP_TELEGRAM_BACKOFF_MS);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 10_000;
+}
+
+function invalidateLoop(): number {
+  loopAbort?.abort();
+  loopAbort = null;
+  return ++loopGeneration;
+}
+
+async function loop(generation: number, signal: AbortSignal): Promise<void> {
+  const live = () => generation === loopGeneration && polling && !stopping;
+  while (live()) {
     try {
-      const updates = await api<Update[]>("getUpdates", {
-        offset,
-        timeout: POLL_SECONDS,
-        allowed_updates: ["message", "callback_query"],
-      });
+      const updates = await api<Update[]>(
+        "getUpdates",
+        {
+          offset,
+          timeout: POLL_SECONDS,
+          allowed_updates: ["message", "callback_query"],
+        },
+        signal
+      );
       for (const update of updates ?? []) {
+        // Unacknowledged, so the live loop fetches it again and acts once.
+        if (!live()) return;
         offset = Math.max(offset, update.update_id + 1);
         try {
           if (update.message && attachmentOf(update.message)) {
@@ -1335,16 +1384,16 @@ async function loop(): Promise<void> {
         host?.changed();
       }
     } catch (e) {
-      if (stopping) break;
+      if (!live()) break;
       state = "error";
       detail = e instanceof Error ? e.message : String(e);
       host?.changed();
       // Backing off matters: a wrong token fails instantly, and retrying it
       // in a tight loop is a request storm against Telegram.
-      await new Promise((r) => setTimeout(r, 10_000));
+      await new Promise((r) => setTimeout(r, pollBackoffMs()));
     }
   }
-  polling = false;
+  if (generation === loopGeneration) polling = false;
 }
 
 export function startTelegram(bot: BotHost): void {
@@ -1356,9 +1405,14 @@ export function startTelegram(bot: BotHost): void {
 function restart(): void {
   stopping = true;
   polling = false;
+  const generation = invalidateLoop();
+  // A turn cut short by the restart never sends its turn-end, and the
+  // indicator would say "typing…" every four seconds for good.
+  stopTyping();
   tickets.clear();
   offset = 0;
   activity = null;
+  pruneChats();
 
   if (!settings.enabled || !settings.token) {
     state = "off";
@@ -1373,6 +1427,8 @@ function restart(): void {
   void (async () => {
     // A moment for the previous loop's long poll to notice it should stop.
     await new Promise((r) => setTimeout(r, 250));
+    // A newer restart or a stop has happened since; it owns what comes next.
+    if (generation !== loopGeneration) return;
     stopping = false;
     try {
       const me = await api<{ username?: string }>("getMe");
@@ -1416,14 +1472,17 @@ function restart(): void {
       detail = "No Telegram ids allowed yet — the bot will answer /id and nothing else.";
     }
     host?.changed();
+    if (generation !== loopGeneration) return;
     polling = true;
-    void loop();
+    loopAbort = new AbortController();
+    void loop(generation, loopAbort.signal);
   })();
 }
 
 export function stopTelegram(): void {
   stopping = true;
   polling = false;
+  invalidateLoop();
   stopTyping();
   state = "off";
 }
