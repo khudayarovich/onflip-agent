@@ -546,9 +546,10 @@ export interface EngineMethods {
   sessionDiff: { params: Record<string, never>; result: FileDiff[] };
   undoPreview: {
     params: Record<string, never>;
-    result: { rel: string; existedBefore: boolean; unavailable?: boolean } | null;
+    /** `token` names the change shown; `undo` refuses if it is no longer last. */
+    result: { rel: string; existedBefore: boolean; unavailable?: boolean; token: string } | null;
   };
-  undo: { params: Record<string, never>; result: { ok: boolean; message: string } };
+  undo: { params: { expect?: string }; result: { ok: boolean; message: string } };
   exportTranscript: { params: Record<string, never>; result: ExportResult };
 
   listChats: {

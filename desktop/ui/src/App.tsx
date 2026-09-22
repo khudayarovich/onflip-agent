@@ -786,8 +786,9 @@ export function App(): React.ReactElement {
           ? `Revert ${preview.rel} to its state before the last change?`
           : `Delete ${preview.rel}? It did not exist before this session.`,
         danger: true,
+        // The token pins the Undo to the change this dialog names.
         action: () =>
-          void api.undo().then((r) => {
+          void api.undo(preview.token).then((r) => {
             if (!r.ok) notifyError(r.message);
           }),
       });

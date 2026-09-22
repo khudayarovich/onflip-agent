@@ -93,8 +93,10 @@ export const api = {
   compact: () => call<{ ok: boolean }>("compact"),
   sessionDiff: () => call<FileDiff[]>("sessionDiff"),
   undoPreview: () =>
-    call<{ rel: string; existedBefore: boolean; unavailable?: boolean } | null>("undoPreview"),
-  undo: () => call<{ ok: boolean; message: string }>("undo"),
+    call<{ rel: string; existedBefore: boolean; unavailable?: boolean; token: string } | null>(
+      "undoPreview"
+    ),
+  undo: (expect: string) => call<{ ok: boolean; message: string }>("undo", { expect }),
   exportTranscript: () => call<ExportResult>("exportTranscript"),
 
   listChats: (scope: "project" | "all", query?: string) =>

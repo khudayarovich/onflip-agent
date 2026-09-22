@@ -79,6 +79,57 @@ const waitIdle = async (engine) => {
   while (engine.busy);
 };
 
+test("Undo acts on the change its dialog named, or not at all", { skip: needsBuild }, () => {
+  // The confirmation is built from one change and Undo used to land on
+  // whatever was last at the click: a turn that wrote a report while the
+  // dialog asked about styles.css had the report deleted instead.
+  const { engine, work } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+  const { captureFileRevision } = require(path.join(ROOT, "dist", "tools", "revision.js"));
+  const write = (file, after) => {
+    const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+    fs.writeFileSync(file, after, "utf8");
+    const { contents: _c, ...afterRevision } = captureFileRevision(file);
+    engine.toolState.snapshots.push({ path: file, before, after, afterRevision, tool: "write", at: Date.now() });
+  };
+  const styles = path.join(work, "styles.css");
+  const report = path.join(work, "report.md");
+  fs.writeFileSync(styles, "body{}");
+  write(styles, "body{color:red}");
+  const preview = engine.undoPreview();
+  assert.equal(preview.rel, "styles.css");
+
+  write(report, "# the report the agent just wrote\n");
+  const refused = engine.undoLast(preview.token);
+  assert.equal(refused.ok, false);
+  assert.match(refused.message, /report\.md/);
+  assert.equal(fs.existsSync(report), true, "the report was deleted");
+  assert.equal(fs.readFileSync(styles, "utf8"), "body{color:red}");
+
+  const again = engine.undoPreview();
+  assert.equal(again.rel, "report.md");
+  assert.equal(engine.undoLast(again.token).ok, true);
+  assert.equal(fs.existsSync(report), false);
+});
+
+test("the engine's Undo steps back through one file's edits", { skip: needsBuild }, () => {
+  const { engine, work } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+  const { captureFileRevision } = require(path.join(ROOT, "dist", "tools", "revision.js"));
+  const tick = () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 30);
+  const file = path.join(work, "app.ts");
+  fs.writeFileSync(file, "v0");
+  for (const [before, after] of [["v0", "v1"], ["v1", "v2"]]) {
+    fs.writeFileSync(file, after, "utf8");
+    const { contents: _c, ...afterRevision } = captureFileRevision(file);
+    engine.toolState.snapshots.push({ path: file, before, after, afterRevision, tool: "edit", at: Date.now() });
+    tick();
+  }
+  assert.equal(engine.undoLast(engine.undoPreview().token).ok, true);
+  tick();
+  const second = engine.undoLast(engine.undoPreview().token);
+  assert.equal(second.ok, true, second.message);
+  assert.equal(fs.readFileSync(file, "utf8"), "v0");
+});
+
 test("a setting named after Object.prototype is not a setting", { skip: needsBuild }, () => {
   // The table of settings answered for "constructor" with the Object
   // function, which ran on the value and saved whatever it made.

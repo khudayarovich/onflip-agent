@@ -86,7 +86,7 @@ import {
   BrowserUserInput,
 } from "onflip/dist/tools/browser";
 import { recordSend, usageSummary, associateAccount, closeUsageStore, UNKNOWN_ACCOUNT } from "./usage";
-import { restoreSnapshot, snapshotStillCurrent } from "./undo";
+import { adoptRestoredRevision, restoreSnapshot, snapshotStillCurrent, snapshotToken } from "./undo";
 import { claimSessionLock, releaseSessionLock } from "./session-lock";
 import {
   createToolRegistry,
@@ -3074,7 +3074,7 @@ export class Engine {
     return out;
   }
 
-  undoPreview(): { rel: string; existedBefore: boolean; unavailable?: boolean } | null {
+  undoPreview(): { rel: string; existedBefore: boolean; unavailable?: boolean; token: string } | null {
     const snapshot = this.toolState.snapshots[this.toolState.snapshots.length - 1];
     if (!snapshot) return null;
     const rel = path.relative(this.cwd, snapshot.path).replace(/\\/g, "/") || snapshot.path;
@@ -3082,13 +3082,21 @@ export class Engine {
       rel,
       existedBefore: snapshot.before !== null,
       unavailable: !snapshotContentsAvailable(snapshot) || undefined,
+      token: snapshotToken(this.toolState.snapshots)!,
     };
   }
 
-  undoLast(): { ok: boolean; message: string } {
+  /** `expect` is the preview's token: the change the person confirmed. */
+  undoLast(expect?: string): { ok: boolean; message: string } {
     const snapshot = this.toolState.snapshots[this.toolState.snapshots.length - 1];
     if (!snapshot) return { ok: false, message: "Nothing to undo." };
     const rel = path.relative(this.cwd, snapshot.path).replace(/\\/g, "/") || snapshot.path;
+    if (expect !== undefined && expect !== snapshotToken(this.toolState.snapshots)) {
+      return {
+        ok: false,
+        message: `Nothing was undone: another change landed while you were confirming, and the last change is now to ${rel}. Press Undo again to see it.`,
+      };
+    }
     if (!snapshotContentsAvailable(snapshot)) {
       return {
         ok: false,
@@ -3104,6 +3112,7 @@ export class Engine {
     try {
       restoreSnapshot(snapshot);
       this.toolState.snapshots.pop();
+      adoptRestoredRevision(this.toolState.snapshots, snapshot);
       // The model still believes its edit stands; tell it otherwise.
       this.history.push(
         newMessage(

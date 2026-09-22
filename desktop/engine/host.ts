@@ -178,7 +178,7 @@ peer.onRequest = async (method, rawParams) => {
     case "undoPreview":
       return engine.undoPreview();
     case "undo":
-      return engine.undoLast();
+      return engine.undoLast(typeof params?.expect === "string" ? params.expect : undefined);
     case "exportTranscript":
       return engine.exportTranscript();
 
