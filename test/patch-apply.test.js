@@ -151,6 +151,69 @@ test("a blank context line without its leading space still counts", () => {
   assert.equal(r.text, "alpha\n\nBETA\n");
 });
 
+test("a patch that ends with a newline applies, as every real diff does", () => {
+  // The terminating newline was read as one more (empty) context line, so a
+  // diff straight out of `git diff` - or any patch the model ended cleanly -
+  // failed to match a file that plainly had the lines it named.
+  const file = "a\nb\nc\n";
+  const middle = applyPatch(file, "@@ -1,2 +1,2 @@\n a\n-b\n+B\n");
+  assert.equal(middle.ok, true, middle.error);
+  assert.equal(middle.text, "a\nB\nc\n");
+  const last = applyPatch(file, "@@ -2,2 +2,2 @@\n b\n-c\n+C\n");
+  assert.equal(last.ok, true, last.error);
+  assert.equal(last.text, "a\nb\nC\n");
+  // Even when the header over-counts, which models do.
+  const overcounted = applyPatch(file, "@@ -2,3 +2,3 @@\n b\n-c\n+C\n");
+  assert.equal(overcounted.ok, true, overcounted.error);
+});
+
+test("a blank line between hunks is a gap, not a line of context", () => {
+  const file = ["one", "two", "three", "four", "five", "six", ""].join("\n");
+  const patch = [
+    "@@ -1,2 +1,2 @@",
+    " one",
+    "-two",
+    "+TWO",
+    "",
+    "@@ -5,2 +5,2 @@",
+    " five",
+    "-six",
+    "+SIX",
+    "",
+  ].join("\n");
+  const r = applyPatch(file, patch);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.text, ["one", "TWO", "three", "four", "five", "SIX", ""].join("\n"));
+});
+
+test("a trailing blank context line the header counts is still context", () => {
+  // The false-positive half: a genuinely empty line at the end of a hunk,
+  // its leading space dropped, is content when the header says so.
+  const file = "alpha\nbeta\n\ngamma\n";
+  const patch = ["@@ -1,3 +1,3 @@", " alpha", "-beta", "+BETA", "", ""].join("\n");
+  const p = parsePatch(patch);
+  assert.deepEqual(p.hunks[0].body, [" alpha", "-beta", "+BETA", " "]);
+  const r = applyPatch(file, patch);
+  assert.equal(r.ok, true, r.error);
+  assert.equal(r.text, "alpha\nBETA\n\ngamma\n");
+});
+
+test("a zero-context insertion lands after the line it names", () => {
+  // `@@ -2,0 +3 @@` is "after line 2", as `diff -U0` writes it. Read like
+  // any other start it went in after line 1: a wrong edit, reported as fine.
+  const file = "a\nb\nc\n";
+  const after = applyPatch(file, "@@ -2,0 +3 @@\n+NEW");
+  assert.equal(after.ok, true);
+  assert.equal(after.text, "a\nb\nNEW\nc\n");
+  // `-0,0` is the top of the file.
+  const top = applyPatch(file, "@@ -0,0 +1 @@\n+FIRST");
+  assert.equal(top.text, "FIRST\na\nb\nc\n");
+  // And one after another, each shifted by the ones before it.
+  const both = applyPatch(file, "@@ -0,0 +1,2 @@\n+x\n+y\n@@ -2,0 +5 @@\n+NEW\n");
+  assert.equal(both.ok, true, both.error);
+  assert.equal(both.text, "x\ny\na\nb\nNEW\nc\n");
+});
+
 test("a patch with no hunks is refused with advice", () => {
   const r = applyPatch(FILE, "please change three to THREE");
   assert.equal(r.ok, false);

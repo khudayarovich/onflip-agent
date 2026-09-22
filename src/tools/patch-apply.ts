@@ -67,12 +67,32 @@ const HUNK_HEADER = /^@@+\s+-(\d+)(?:,(\d+))?\s+\+(\d+)(?:,(\d+))?\s+@@/;
  */
 export function parsePatch(patch: string): { hunks: Hunk[] } | { error: string } {
   const lines = patch.replace(/\r\n/g, "\n").split("\n");
+  // The newline a patch ends with is syntax, not a line: split leaves it as
+  // a final empty element.
+  if (lines.length > 1 && lines[lines.length - 1] === "") lines.pop();
   const hunks: Hunk[] = [];
   let current: Hunk | null = null;
+  // Bare empty lines not yet known to be content. Inside a hunk one is a
+  // context line whose leading space was dropped (some tools do, and most
+  // models); at the end of a hunk it is as likely to be the gap a model
+  // leaves before the next hunk. Counted as context there — as the
+  // terminating newline was, before it was dropped above — the hunk
+  // expected one more (empty) line than the file had, and every real diff
+  // failed to match.
+  let blanks = 0;
+  const settle = (hunk: Hunk | null, more: boolean) => {
+    if (!hunk) return;
+    // Mid-hunk they are content. At the end, only as many as the header
+    // says the hunk still needs.
+    const keep = more ? blanks : Math.min(blanks, Math.max(0, hunk.oldLines - oldCount(hunk)));
+    for (let i = 0; i < keep; i++) hunk.body.push(" ");
+    blanks = 0;
+  };
 
   for (const line of lines) {
     const header = HUNK_HEADER.exec(line);
     if (header) {
+      settle(current, false);
       current = {
         oldStart: Number(header[1]),
         oldLines: header[2] === undefined ? 1 : Number(header[2]),
@@ -86,20 +106,21 @@ export function parsePatch(patch: string): { hunks: Hunk[] } | { error: string }
     if (!current) continue; // preamble: diff --git, ---, +++, index, prose
     if (line.startsWith("\\")) continue; // "\ No newline at end of file"
     if (line === "") {
-      // A bare empty line inside a hunk is a context line whose single
-      // leading space some tools (and most models) drop.
-      current.body.push(" ");
+      blanks++;
       continue;
     }
     const marker = line[0];
     if (marker === " " || marker === "-" || marker === "+") {
+      settle(current, true);
       current.body.push(line);
       continue;
     }
     // Anything else ends the hunk: trailing prose, a new file header, a
     // signature line. Stop consuming rather than treating it as content.
+    settle(current, false);
     current = null;
   }
+  settle(current, false);
 
   if (hunks.length === 0) {
     return {
@@ -109,6 +130,11 @@ export function parsePatch(patch: string): { hunks: Hunk[] } | { error: string }
     };
   }
   return { hunks };
+}
+
+/** How many lines of the original a hunk's body covers. */
+function oldCount(hunk: Hunk): number {
+  return hunk.body.filter((raw) => raw[0] === " " || raw[0] === "-").length;
 }
 
 /** The lines a hunk expects to find, and what it puts in their place. */
@@ -232,7 +258,12 @@ export function applyPatch(text: string, patch: string): PatchResult {
   for (let index = 0; index < parsed.hunks.length; index++) {
     const hunk = parsed.hunks[index];
     const { expected, replacement } = hunkSides(hunk);
-    const preferred = Math.max(0, hunk.oldStart - 1 + drift);
+    // A range of zero lines names the line the insertion goes *after*:
+    // `@@ -2,0 +3 @@` is "after line 2", as `diff -U0` writes it, and
+    // `-0,0` is the top of the file. Read like any other start, it landed
+    // one line early — a wrong edit with nothing to say so.
+    const start = hunk.oldLines === 0 && expected.length === 0 ? hunk.oldStart : hunk.oldStart - 1;
+    const preferred = Math.max(0, start + drift);
 
     const found = locate(lines, expected, preferred);
     if (!found) {
