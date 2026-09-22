@@ -966,7 +966,12 @@ async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
   );
   if (decision.inject) {
     await injectCookies(context, cookies);
-    if (decision.consumesPending) saveConfig({ sessionCookiesPending: undefined });
+    if (decision.consumesPending) {
+      saveConfig({ sessionCookiesPending: undefined });
+      // A session the user has just signed in or imported is not the jar
+      // that failed before; it gets its own chance to recover a page.
+      storedJarSpent = false;
+    }
   }
 
   await context.addInitScript(() => {
@@ -2557,6 +2562,18 @@ export interface BrowserSendOptions {
    * stream that started for *this* message counts as evidence about it.
    */
   streamSeqBefore?: number;
+  /**
+   * The newest assistant message's text before this send.
+   *
+   * For layouts that reuse the last node rather than add one, the wait read
+   * that node as soon as any generation had been seen — and before anything
+   * new was written there, what it holds is the *previous* reply. A send
+   * refused with only a toast, or a first token slower than the quiet
+   * window, then settled on that text: the previous reply returned as the
+   * new one, and its tool calls ran a second time. Text equal to this is
+   * not an answer yet.
+   */
+  lastBefore?: string;
 }
 
 /**
@@ -2994,8 +3011,12 @@ export async function sendViaBrowser(
   // work with rather than the same rejected copy.
   if (sessionSuspect && context && cookies.length > 0) {
     sessionSuspect = false;
-    logger.warn("browser", "putting the session back after a refused request");
-    await injectCookies(context, cookies);
+    // A jar that has already been put back and lost would only replace the
+    // profile's session with the same dead one again.
+    if (!storedJarSpent) {
+      logger.warn("browser", "putting the session back after a refused request");
+      await injectCookies(context, cookies);
+    }
   }
   if (!inConversation) {
     await openNewChat(p, normalizeModel(opts?.model), opts?.signal);
@@ -3024,7 +3045,10 @@ async function sendOn(
   logger.debug("browser", "outgoing payload", { payload });
 
   lastReplyMeta = null;
-  priorTurnCount = (await assistantTurns(p)).count;
+  const priorTurns = await assistantTurns(p);
+  priorTurnCount = priorTurns.count;
+  // The newest reply as it reads before this send: see `lastBefore`.
+  const lastBefore = priorTurns.last;
   const userTurnsBefore = await userTurnCount(p).catch(() => 0);
   const streamSeqBefore = streamSeq();
 
@@ -3095,6 +3119,7 @@ async function sendOn(
       sent: payload,
       userTurnsBefore,
       streamSeqBefore,
+      lastBefore,
     });
   } catch (e) {
     // A page that swallowed a message cannot be trusted with the retry:
@@ -3144,6 +3169,9 @@ async function sendOn(
       sent: payload,
       userTurnsBefore,
       streamSeqBefore: seqBefore,
+      // Continuing writes into the same node; until it grows, it is still
+      // the reply already in hand.
+      lastBefore: reply,
     });
     reply = joinContinuation(reply, more);
     view = streamView(seqBefore);
@@ -3366,8 +3394,9 @@ export async function waitForReply(
     let candidate = text;
     if (turns.count > before) {
       candidate = turns.last;
-    } else if (turns.count === before && before > 0 && sawGeneration) {
-      // Some layouts reuse the last node rather than appending one.
+    } else if (turns.count === before && before > 0 && sawGeneration && turns.last !== opts?.lastBefore) {
+      // Some layouts reuse the last node rather than appending one — but
+      // only what has changed in it is this reply: see `lastBefore`.
       candidate = turns.last;
     }
 
@@ -3634,23 +3663,42 @@ export async function waitForReply(
  * the stated interval, and anything else — a server error — retries, and
  * moves to a fresh chat on the second attempt via "reached the model".
  */
-function refusedRequestError(refused: { url: string; status: number }): ChatGPTBrowserError {
+export function refusedRequestError(refused: { url: string; status: number }): ChatGPTBrowserError {
   const { url, status } = refused;
-  if (status === 401 || status === 403) {
+  // Coded, so the classifier never reads this sentence. Uncoded, "status
+  // 403" matched none of its 403 wording and was retried — and each retry
+  // opened a new chat and overwrote the profile's session with the stored
+  // one: up to a dozen sends into an "unusual activity" flag with auto-resume
+  // on, which is the one thing this app promises never to do.
+  if (status === 401) {
+    // The session itself was refused: one go with the stored copy, unless
+    // that copy has already been tried and lost (`storedJarSpent`).
     sessionSuspect = true;
-    dropChat("a request came back 401/403");
+    dropChat("a request came back 401");
     return new ChatGPTBrowserError(
-      `ChatGPT rejected the message (status ${status} on ${url}) — the page's copy of the session was refused. Putting the session back and retrying in a fresh chat.`
+      `ChatGPT rejected the message (status 401 on ${url}) — the page's copy of the session was refused. Putting the session back and retrying in a fresh chat.`,
+      "anonymous"
+    );
+  }
+  if (status === 403) {
+    // Forbidden is not a stale session: it is the abuse check, a challenge or
+    // a block, and none of those clear by sending again.
+    dropChat("a request came back 403");
+    return new ChatGPTBrowserError(
+      `ChatGPT refused the message (status 403 on ${url}). That is its abuse check or a challenge, not a lost session, and sending again would only deepen it — pausing before the next try.`,
+      "refused"
     );
   }
   if (status === 429) {
     return new ChatGPTBrowserError(
-      `ChatGPT is throttling this account (too many requests: status 429 on ${url}, retry-after 180). Waiting before sending again; retrying now would extend the block.`
+      `ChatGPT is throttling this account (too many requests: status 429 on ${url}). Waiting before sending again; retrying now would extend the block.`,
+      "throttled"
     );
   }
   dropChat("a backend request failed");
   return new ChatGPTBrowserError(
-    `ChatGPT's server answered status ${status} on ${url}, so the message never reached the model. Retrying.`
+    `ChatGPT's server answered status ${status} on ${url}, so the message never reached the model. Retrying.`,
+    "service-error"
   );
 }
 
@@ -4984,6 +5032,8 @@ export async function closeBrowser(): Promise<void> {
     browser = null;
     inConversation = false;
     cachedToken = null;
+    // Suspicion about the old page's session goes with the old page.
+    sessionSuspect = false;
     forgetChat();
   }
 }
