@@ -480,3 +480,37 @@ test("tool output cannot close its own result and speak after it", () => {
   const plain = formatToolResult({ tool: "read", arguments: {} }, 'a <onflip:result tool="x"> b', true);
   assert.equal(plain, '<onflip:result tool="read" status="error">\na <onflip:result tool="x"> b\n</onflip:result>');
 });
+
+test("a closing block opened with four backticks keeps the code block in its answer", () => {
+  // The two-backtick forgiveness let a bare ``` inside it close the block,
+  // and a summary line at the margin ended the summary: the answer the
+  // person reads stopped at "Run this:".
+  const FOUR = "`".repeat(4);
+  const r = parse(
+    [FOUR + "onflip", "tool: done", "summary: |", "  Run this:", FENCE + "bash", "npm test", FENCE, "  and it passes.", FOUR].join("\n")
+  );
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0].arguments.summary, ["Run this:", FENCE + "bash", "npm test", FENCE, "and it passes."].join("\n"));
+});
+
+test("but only an answer keeps a line at the margin, and the next key still ends it", () => {
+  // The false-positive half: a value that is run, not shown, still ends where
+  // its indentation does, and a question's options still arrive.
+  const edit = parse(
+    [FENCE + "onflip", "tool: edit", "path: a.py", "old_string: |", "  first", "stray", FENCE].join("\n")
+  );
+  assert.equal(edit.calls[0].arguments.old_string, "first");
+  const ask = parse(
+    [FENCE + "onflip", "tool: ask_user", "question: |", "  Which one?", "Both work on Windows.", "options:", "  - a", "  - b", FENCE].join("\n")
+  );
+  assert.equal(ask.calls[0].arguments.question, "Which one?\nBoth work on Windows.");
+  assert.deepEqual(ask.calls[0].arguments.options, ["a", "b"], "the next key ends the question");
+});
+
+test("a command block closed with two backticks and followed by prose still runs", () => {
+  // With no next block to end it, the two-backtick close is the only close
+  // there is; without it the block would read as cut off and be refused.
+  const r = parse([FENCE + "onflip", "tool: bash", "command: npm test", "``", "", "That runs the suite."].join("\n"));
+  assert.deepEqual(r.calls.map((c) => [c.tool, c.arguments.command]), [["bash", "npm test"]]);
+  assert.equal(r.malformed, undefined);
+});

@@ -339,6 +339,10 @@ export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | 
     // and measuring from the first line cut the value at the brace — the
     // brace and everything after it, `new_string` included, silently gone.
     if (/^[|>][-+]?$/.test(rest.trim())) {
+      // The answer a closing block carries is shown, never run, and a line of
+      // it that lost its indentation — a code fence written at the margin —
+      // is still the answer. Only the next key ends it.
+      const answer = CLOSING_ANSWERS.has(`${toolName.toLowerCase()}.${key}`);
       const collected: string[] = [];
       let j = i + 1;
       for (; j < lines.length; j++) {
@@ -347,7 +351,7 @@ export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | 
           collected.push("");
           continue;
         }
-        if (!/^[ \t]/.test(candidate)) break;
+        if (!/^[ \t]/.test(candidate) && (!answer || KEY_LINE.test(candidate))) break;
         collected.push(candidate);
       }
       while (collected.length && !collected[collected.length - 1].trim()) collected.pop();
@@ -361,8 +365,11 @@ export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | 
         );
         return null;
       }
-      const shared = sharedIndent(collected);
-      const value = collected.map((l) => (l.trim() ? l.slice(shared.length) : "")).join("\n");
+      // Measured on the indented lines; one kept at the margin keeps its own.
+      const shared = sharedIndent(collected.filter((l) => /^[ \t]/.test(l)));
+      const value = collected
+        .map((l) => (!l.trim() ? "" : l.startsWith(shared) ? l.slice(shared.length) : l))
+        .join("\n");
       i = j - 1;
       afterBlock = true;
       if (key === "tool") {
@@ -405,6 +412,9 @@ export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | 
 
 /** A `key: value` line at the keys' column. */
 const KEY_LINE = /^([A-Za-z_][\w.-]*)\s*:\s*(.*)$/;
+
+/** The free-text answer of each closing block, as `tool.key`. */
+const CLOSING_ANSWERS = new Set(["done.summary", "ask_user.question"]);
 
 /**
  * The leading whitespace every non-blank line starts with, as text.
@@ -1109,7 +1119,11 @@ function replaceFences(
         reopened = true;
         break;
       }
-      const short = ours ? lines[j].match(/^(`{2,}|~{2,})\s*$/) : null;
+      // Forgiven only where the miscount happens, three written as two. A
+      // block opened with four is opened that way to hold three-backtick
+      // fences, and taking a bare ``` in it as the close cut a `done`
+      // summary off at its first code block.
+      const short = ours && markerLength === 3 ? lines[j].match(/^(`{2,}|~{2,})\s*$/) : null;
       const normal = lines[j].match(/^(\s*)(`{3,}|~{3,})\s*$/);
       const shortClose = short && short[1][0] === marker && short[1].length >= 2;
       const normalClose =
