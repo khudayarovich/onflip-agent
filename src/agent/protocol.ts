@@ -321,6 +321,11 @@ export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | 
     }
 
     const key = match[1].toLowerCase();
+    // A key the call already has is not a second value for it: it is the
+    // prose after the block. With no fence to end a call, a closing sentence
+    // — "Path: C:\Windows\...\hosts is where I would look next." — became the
+    // write's path, and a "Command:" line would have become the command.
+    if (Object.hasOwn(args, key)) break;
     const rest = match[2];
     seenKey = true;
     afterBlock = false;
@@ -590,23 +595,34 @@ function fencedLineMask(lines: string[]): boolean[] {
   const mask = lines.map(() => false);
   let marker: "`" | "~" | null = null;
   let markerLength = 0;
+  let openIndent = 0;
   for (let i = 0; i < lines.length; i++) {
     if (!marker) {
-      const open = lines[i].match(/^\s*(`{3,}|~{3,})/);
+      const open = lines[i].match(/^(\s*)(`{3,}|~{3,})/);
       if (!open) continue;
-      marker = open[1][0] as "`" | "~";
-      markerLength = open[1].length;
+      marker = open[2][0] as "`" | "~";
+      markerLength = open[2].length;
+      openIndent = open[1].length;
       mask[i] = true;
       continue;
     }
     mask[i] = true;
-    const close = lines[i].match(/^\s*(`{3,}|~{3,})\s*$/);
-    if (close && close[1][0] === marker && close[1].length >= markerLength) {
+    if (closesFence(lines[i], marker, markerLength, openIndent)) {
       marker = null;
       markerLength = 0;
     }
   }
   return mask;
+}
+
+/**
+ * Does this line close a fence opened with `marker` × `length` at
+ * `openIndent`? At least as long, bare, and at most three spaces deeper than
+ * the opener — a deeper fence line is the fence's own content.
+ */
+function closesFence(line: string, marker: string, length: number, openIndent: number): boolean {
+  const close = line.match(/^(\s*)(`{3,}|~{3,})\s*$/);
+  return Boolean(close && close[2][0] === marker && close[2].length >= length && close[1].length <= openIndent + 3);
 }
 
 /**
@@ -653,15 +669,15 @@ function hasTopLevelFence(input: string, tags: string[]): boolean {
   const wanted = new Set(tags.map((tag) => tag.toLowerCase()));
   const lines = input.split("\n");
   for (let i = 0; i < lines.length; i++) {
-    const open = lines[i].match(/^\s*(`{3,}|~{3,})([^\r\n]*)$/);
+    const open = lines[i].match(/^(\s*)(`{3,}|~{3,})([^\r\n]*)$/);
     if (!open) continue;
-    const info = open[2].trim().split(/\s+/, 1)[0].toLowerCase();
+    const info = open[3].trim().split(/\s+/, 1)[0].toLowerCase();
     if (wanted.has(info)) return true;
-    const marker = open[1][0];
-    const markerLength = open[1].length;
+    const marker = open[2][0];
+    const markerLength = open[2].length;
+    const openIndent = open[1].length;
     for (i++; i < lines.length; i++) {
-      const close = lines[i].match(/^\s*(`{3,}|~{3,})\s*$/);
-      if (close && close[1][0] === marker && close[1].length >= markerLength) break;
+      if (closesFence(lines[i], marker, markerLength, openIndent)) break;
     }
   }
   return false;
@@ -1102,7 +1118,11 @@ function replaceFences(
         normal[2].length >= markerLength &&
         // An inner Markdown fence belongs to a `key: |` scalar and is
         // indented deeper than the onflip opener. It must not close the call.
-        (!ours || normal[1].length <= openIndent);
+        // An ordinary fence closes as Markdown has it, at most three spaces
+        // in: deeper, the line is the fence's content, and taking it as the
+        // close put what followed — an onflip example the model was showing —
+        // outside the fence, where it ran.
+        (ours ? normal[1].length <= openIndent : normal[1].length <= openIndent + 3);
       if (shortClose || normalClose) {
         closed = true;
         break;

@@ -405,3 +405,61 @@ test("but an indented opener inside a value is content", () => {
   assert.equal(r.calls[0].tool, "edit");
   assert.match(r.calls[0].arguments.new_string, /tool: read/);
 });
+
+test("prose after a block does not rewrite its arguments", () => {
+  // With no fence to end the call, a closing sentence that happened to start
+  // with a key became that argument: here, the file being written.
+  const r = parse(
+    "tool: edit\npath: notes.txt\nold_string: draft\nnew_string: final\n\nPath: the hosts file is where I would look next."
+  );
+  assert.equal(r.calls.length, 1);
+  assert.deepEqual(r.calls[0].arguments, { path: "notes.txt", old_string: "draft", new_string: "final" });
+  // The false-positive half: a block's own keys, each once, all arrive.
+  const edit = parse(FENCE + "onflip\ntool: edit\npath: a.py\nold_string: one\nnew_string: two\n" + FENCE);
+  assert.deepEqual(edit.calls[0].arguments, { path: "a.py", old_string: "one", new_string: "two" });
+});
+
+test("a fence line indented four spaces is the code block's content, not its close", () => {
+  // Taken as the close, it put the onflip example after it outside the
+  // fence, and the example ran.
+  const shown = parse(
+    [
+      "A block inside a text example:",
+      FENCE + "text",
+      "Some example:",
+      "    " + FENCE,
+      FENCE + "onflip",
+      "tool: bash",
+      "command: git push --force",
+      FENCE,
+      "That was an example.",
+      FENCE,
+    ].join("\n")
+  );
+  assert.equal(shown.calls.length, 0, "the push is not run");
+  assert.match(shown.text, /git push --force/, "the example stays in the answer");
+  // The same through the unfenced path: a bare block inside the example.
+  const bare = parse(
+    ["Example:", FENCE + "text", "    " + FENCE, "tool: bash", "command: git push --force", FENCE].join("\n")
+  );
+  assert.equal(bare.calls.length, 0);
+});
+
+test("while a code block in a list item still closes, and a call after it runs", () => {
+  // The false-positive half: three spaces in is still a close.
+  const r = parse(
+    [
+      "1. Install first:",
+      "   " + FENCE + "bash",
+      "   npm install",
+      "   " + FENCE,
+      "",
+      FENCE + "onflip",
+      "tool: read",
+      "path: package.json",
+      FENCE,
+    ].join("\n")
+  );
+  assert.deepEqual(r.calls.map((c) => [c.tool, c.arguments.path]), [["read", "package.json"]]);
+  assert.match(r.text, /npm install/);
+});
