@@ -156,8 +156,11 @@ export function shellHost(): ShellHost {
       // Without `exit` the script ends normally, the formatter drains, and
       // the marker is the last line written. Verified against a failing
       // cmdlet (1), a native `exit 3` (3) and success (0).
+      //
+      // On a line of its own, not after `; `: appended to the command's last
+      // line, a trailing `# comment` swallowed the whole probe.
       cwdProbe:
-        "; $__ok = $?; $__rc = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($__ok) { 0 } else { 1 }" +
+        "\n$__ok = $?; $__rc = if ($LASTEXITCODE -ne $null) { $LASTEXITCODE } elseif ($__ok) { 0 } else { 1 }" +
         `; Write-Output ("${CWD_MARKER}:" + $__rc + ":" + (Get-Location).Path)`,
     };
   }
@@ -170,7 +173,13 @@ export function shellHost(): ShellHost {
     // the directory, then exit with what the command exited with.
     // Same marker shape as Windows so one parser reads both. `exit` is kept
     // here because a POSIX shell has no deferred formatter to lose.
-    cwdProbe: `; __rc=$?; printf '${CWD_MARKER}:%s:%s\\n' "$__rc" "$PWD"; exit $__rc`,
+    //
+    // On a line of its own. Appended with `; ` to the command's last line it
+    // broke the three shapes a last line most often has: a here-document
+    // (`EOF; __rc=…` never closes it, so the probe was written into the file
+    // and exit 0 reported), a trailing `&` (a syntax error, nothing ran) and
+    // a `# comment` (the probe commented out, and a `cd` in it lost).
+    cwdProbe: `\n__rc=$?; printf '${CWD_MARKER}:%s:%s\\n' "$__rc" "$PWD"; exit $__rc`,
   };
 }
 
@@ -363,11 +372,12 @@ function execute(
       env: { ...process.env, ONFLIP: "1", TERM: process.env.TERM ?? "dumb" },
     });
 
-    let stdout = "";
-    let stderr = "";
+    const stdoutCapture = boundedCapture();
+    const stderrCapture = boundedCapture();
     let finished = false;
     let timedOut = false;
     let aborted = false;
+    let exitGrace: NodeJS.Timeout | null = null;
 
     const timer = setTimeout(() => {
       timedOut = true;
@@ -382,12 +392,12 @@ function execute(
 
     child.stdout?.on("data", (buf: Buffer) => {
       const text = buf.toString("utf8");
-      stdout += text;
+      stdoutCapture.add(text);
       onProgress?.(text);
     });
     child.stderr?.on("data", (buf: Buffer) => {
       const text = buf.toString("utf8");
-      stderr += text;
+      stderrCapture.add(text);
       onProgress?.(text);
     });
 
@@ -395,12 +405,18 @@ function execute(
       if (finished) return;
       finished = true;
       clearTimeout(timer);
+      if (exitGrace) clearTimeout(exitGrace);
       signal.removeEventListener("abort", onAbort);
+      // A grandchild may still hold the pipes open; nothing more is read.
+      child.stdout?.destroy();
+      child.stderr?.destroy();
 
       // Pull the trailing probe out of stdout. It carries both the working
       // directory and the command's real exit code — see `cwdProbe`, where
       // the code travels this way because `exit` would discard PowerShell's
       // pending object output.
+      const stdout = stdoutCapture.value();
+      const stderr = stderrCapture.value();
       const probe = parseProbe(stdout);
       resolve({
         stdout: probe.stdout,
@@ -417,11 +433,65 @@ function execute(
     };
 
     child.on("error", (e) => {
-      stderr += `\nFailed to start ${host.file}: ${e.message}`;
+      stderrCapture.add(`\nFailed to start ${host.file}: ${e.message}`);
       done(127);
     });
     child.on("close", (code) => done(code));
+    // "close" waits for every holder of the pipes, and a process the command
+    // started and left running holds them: `Start-Process -NoNewWindow npm
+    // run dev`, `start /b`, a daemon that inherited stdout. The shell had
+    // exited, the timeout and Stop both killed its tree — and the orphan,
+    // reparented out of that tree, kept the turn waiting until it exited on
+    // its own, which a server never does. Measured: a 3-second timeout and a
+    // Stop pressed at 8 seconds, returning at 25.2 — the moment the
+    // grandchild happened to finish. Once the shell itself has exited, the
+    // output still in flight gets a moment to land and then the turn moves on.
+    child.on("exit", (code) => {
+      if (finished || exitGrace) return;
+      exitGrace = setTimeout(() => done(code), EXIT_GRACE_MS);
+    });
   });
+}
+
+/** How long output may keep arriving after the shell itself has exited. */
+const EXIT_GRACE_MS = 1_500;
+
+/** Characters kept from each end of a stream; the middle of more is dropped. */
+const CAPTURE_END_CHARS = 1_000_000;
+
+/**
+ * A stream's output, bounded, keeping its head and its tail.
+ *
+ * It was one string grown by `+=` for as long as the command wrote, which
+ * throws `RangeError: Invalid string length` a little past half a gigabyte —
+ * 0.6 seconds of a fast writer, measured — and took the process with it.
+ * The transcript only ever shows a clip, so what matters is the start, the
+ * end (where the error and the probe marker live) and saying what was cut.
+ */
+export function boundedCapture(endChars = CAPTURE_END_CHARS): { add(text: string): void; value(): string } {
+  let head = "";
+  let tail = "";
+  let dropped = 0;
+  return {
+    add(text: string) {
+      if (head.length < endChars) {
+        const room = endChars - head.length;
+        head += text.slice(0, room);
+        text = text.slice(room);
+      }
+      if (!text) return;
+      tail += text;
+      if (tail.length > 2 * endChars) {
+        dropped += tail.length - endChars;
+        tail = tail.slice(-endChars);
+      }
+    },
+    value() {
+      return dropped
+        ? `${head}\n… [${dropped.toLocaleString("en-US")} characters of output were not kept] …\n${tail}`
+        : head + tail;
+    },
+  };
 }
 
 export const bashTool: ToolDefinition = {
