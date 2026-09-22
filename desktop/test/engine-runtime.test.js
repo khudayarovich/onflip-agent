@@ -128,6 +128,6 @@ test("main spawns through the decision", { skip: needsBuild }, () => {
   const main = fs.readFileSync(path.join(__dirname, "..", "electron", "main.ts"), "utf8");
   assert.match(
     main,
-    /function spawnEngine\(cwd: string\): ChildProcess \{[\s\S]{0,400}if \(engineRuntimeChoice\(\) === "electron"\) return spawnEngineViaElectron\(args, cwd\);/
+    /function spawnEngine\(cwd: string, win: BrowserWindow\): ChildProcess \{[\s\S]{0,400}if \(engineRuntimeChoice\(\) === "electron"\) return spawnEngineViaElectron\(args, cwd, win\);/
   );
 });
