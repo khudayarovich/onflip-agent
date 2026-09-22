@@ -40,6 +40,17 @@ export interface UpdateProgress {
   message?: string;
 }
 
+/**
+ * How long a download may go without a byte before it is called stalled.
+ *
+ * There was no limit at all: a connection that stopped answering left the
+ * modal on "downloading" for ever, with the button disabled behind it and
+ * no way out but quitting. Overridable so a test can see it fire.
+ */
+function stallMs(): number {
+  return Number(process.env.ONFLIP_UPDATE_STALL_MS) || 60_000;
+}
+
 /** Where a downloaded update waits. Cleared on the way in, not on the way out. */
 function stagingDir(): string {
   const dir = path.join(app.getPath("temp"), "onflip-update");
@@ -66,14 +77,33 @@ export function downloadUpdate(
     let received = 0;
     let total = 0;
     let settled = false;
+    let stall: NodeJS.Timeout | null = null;
+    const request = net.request({ url, method: "GET" });
     const fail = (e: Error) => {
       if (settled) return;
       settled = true;
+      if (stall) clearTimeout(stall);
+      try {
+        request.abort();
+      } catch {
+        /* already finished */
+      }
       out.destroy();
       reject(e);
     };
+    const armStall = () => {
+      if (stall) clearTimeout(stall);
+      stall = setTimeout(
+        () => fail(new Error(`the download stalled: nothing arrived for ${Math.round(stallMs() / 1000)} seconds`)),
+        stallMs()
+      );
+    };
+    // A full disk, an antivirus lock, a folder that vanished: the stream
+    // says so with an `error` event, and with no listener that was an
+    // uncaught exception in the main process and a promise that never
+    // settled.
+    out.on("error", (e) => fail(e));
 
-    const request = net.request({ url, method: "GET" });
     request.setHeader("User-Agent", `OnFlip/${app.getVersion()}`);
     // GitHub answers with a 302 to a signed asset URL. Electron follows that
     // itself and emits `response` only for the final hop — but if it ever
@@ -92,8 +122,19 @@ export function downloadUpdate(
       }
       total = Number(response.headers["content-length"] ?? 0) || 0;
       response.on("data", (chunk: Buffer) => {
+        if (settled) return;
+        armStall();
         received += chunk.length;
-        out.write(chunk);
+        // Held to the disk's pace rather than buffered: an installer is
+        // large, and a slow disk behind a fast line would hold all of it in
+        // memory.
+        if (!out.write(chunk)) {
+          // A Readable at runtime; Electron's typings leave the flow
+          // control off.
+          const flow = response as unknown as { pause?: () => void; resume?: () => void };
+          flow.pause?.();
+          out.once("drain", () => flow.resume?.());
+        }
         onProgress({
           phase: "downloading",
           receivedBytes: received,
@@ -104,7 +145,11 @@ export function downloadUpdate(
       response.on("error", (e: Error) => fail(e));
       response.on("aborted", () => fail(new Error("the download was interrupted")));
       response.on("end", () => {
-        out.end(() => {
+        if (stall) clearTimeout(stall);
+        // The callback is where a failed write reports first — before the
+        // stream's own `error` event — so its argument is read, not ignored.
+        out.end((err?: Error | null) => {
+          if (err) fail(err);
           if (settled) return;
           // A truncated installer is worse than none: it would run and fail
           // halfway. The length GitHub promised is the only check available
@@ -121,6 +166,7 @@ export function downloadUpdate(
     });
     request.on("error", (e) => fail(e));
     request.end();
+    armStall();
   });
 }
 
@@ -157,8 +203,11 @@ function macSwapScript(file: string, staging: string, bundle: string, pid: numbe
  * Hand the downloaded artifact to something that outlives this process.
  *
  * Windows runs the NSIS installer silently. `/S` is what the assisted
- * installer this project builds accepts, and electron-builder's NSIS starts
- * the app again when it finishes — which is why nothing here relaunches it.
+ * installer this project builds accepts. A silent electron-builder install
+ * starts the app again only when told to with `--force-run` — without it
+ * the update installed and nothing came back, which read as the update
+ * having closed the app — and `--updated` marks it as an update rather than
+ * a fresh install, as electron-updater passes both.
  *
  * macOS gets a shell script rather than a disk image: the release publishes a
  * `.zip` holding the `.app` directly, so no image has to be mounted and no
@@ -168,11 +217,13 @@ function macSwapScript(file: string, staging: string, bundle: string, pid: numbe
  * caller knows whether to say "reopening" or "install it from the window
  * that opens".
  */
+export const WINDOWS_INSTALLER_ARGS = ["--updated", "/S", "--force-run"];
+
 export function applyUpdate(file: string): { relaunches: boolean } {
   if (process.platform === "win32") {
     // Detached with stdio ignored, or the installer dies with its parent the
     // moment the app quits — which is the very next thing that happens.
-    spawn(file, ["/S"], { detached: true, stdio: "ignore", windowsHide: true }).unref();
+    spawn(file, WINDOWS_INSTALLER_ARGS, { detached: true, stdio: "ignore", windowsHide: true }).unref();
     return { relaunches: true };
   }
 
@@ -276,10 +327,19 @@ export function sha256File(file: string): Promise<string> {
 function fetchText(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
     const request = net.request({ url, redirect: "follow" });
+    // A listing is a few hundred bytes; a minute without one is a stall.
+    const timer = setTimeout(() => {
+      fail(new Error("the checksum list did not arrive"));
+      request.abort();
+    }, stallMs());
+    const fail = (e: Error) => {
+      clearTimeout(timer);
+      reject(e);
+    };
     request.on("response", (response) => {
       const status = response.statusCode ?? 0;
       if (status < 200 || status >= 300) {
-        reject(new Error(`the checksum list answered ${status}`));
+        fail(new Error(`the checksum list answered ${status}`));
         return;
       }
       let text = "";
@@ -288,14 +348,17 @@ function fetchText(url: string): Promise<string> {
         // A checksum listing is a few hundred bytes. Anything large is not
         // one, and is not going to be read into memory to find out.
         if (text.length > 64_000) {
-          reject(new Error("the checksum list was far larger than one should be"));
+          fail(new Error("the checksum list was far larger than one should be"));
           request.abort();
         }
       });
-      response.on("end", () => resolve(text));
-      response.on("error", reject);
+      response.on("end", () => {
+        clearTimeout(timer);
+        resolve(text);
+      });
+      response.on("error", fail);
     });
-    request.on("error", reject);
+    request.on("error", fail);
     request.end();
   });
 }
@@ -303,10 +366,15 @@ function fetchText(url: string): Promise<string> {
 /**
  * Hold a downloaded artifact against the checksum the release published.
  *
- * Throws when they disagree, which is the only outcome that must stop an
- * install. A release with no listing, or no entry for this file, is reported
- * and allowed: those are older releases, and refusing them would strand
- * anyone on one rather than protect them.
+ * Throws when they disagree. A release with no listing, or no entry for
+ * this file, is reported and allowed: those are older releases, and refusing
+ * them would strand anyone on one rather than protect them.
+ *
+ * A listing the release *did* publish but that cannot be fetched also stops
+ * the install. It used to be noted and waved through — so anything able to
+ * block one small request (a proxy, a captive portal, a 503) turned the
+ * check off, exactly when a substituted download is likeliest. Nothing is
+ * lost by refusing: the next attempt fetches it again.
  */
 export async function verifyDownload(
   file: string,
@@ -328,8 +396,10 @@ export async function verifyDownload(
   try {
     listing = await fetcher(sumsUrl);
   } catch (e) {
-    note(`the checksum list could not be fetched (${e instanceof Error ? e.message : String(e)})`);
-    return;
+    throw new Error(
+      `the checksum list this release published could not be fetched ` +
+        `(${e instanceof Error ? e.message : String(e)}). Nothing was installed; try again in a moment.`
+    );
   }
   const expected = sumFor(listing, name);
   if (!expected) {

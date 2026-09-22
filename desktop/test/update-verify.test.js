@@ -148,6 +148,29 @@ test("a file that does not match the published digest is refused", { skip: needs
   }
 });
 
+test("a published listing that cannot be fetched stops the install", { skip: needsBuild }, async () => {
+  // It was noted and waved through, so anything able to block one small
+  // request — a proxy, a captive portal, a 503 — turned the check off.
+  const { verifyDownload } = load();
+  const tmp = path.join(require("node:os").tmpdir(), `onflip-unfetched-${process.pid}`);
+  fs.writeFileSync(tmp, "whatever arrived");
+  try {
+    await assert.rejects(
+      () =>
+        verifyDownload(tmp, "thing.zip", "about:listing", () => {}, async () => {
+          throw new Error("the checksum list answered 503");
+        }),
+      /could not be fetched[\s\S]*Nothing was installed/
+    );
+    // Older releases, which published no listing, still install.
+    const notes = [];
+    await verifyDownload(tmp, "thing.zip", undefined, (l) => notes.push(l));
+    assert.ok(notes.some((l) => /no checksum list/.test(l)), notes.join(" | "));
+  } finally {
+    fs.rmSync(tmp, { force: true });
+  }
+});
+
 test("a matching file is allowed through", { skip: needsBuild }, async () => {
   const { verifyDownload, sha256File } = load();
   const tmp = path.join(require("node:os").tmpdir(), `onflip-good-${process.pid}`);
