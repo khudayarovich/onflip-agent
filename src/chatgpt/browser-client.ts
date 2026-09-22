@@ -3099,8 +3099,32 @@ export async function sendViaBrowser(
   return sendOn(p, message, opts);
 }
 
+/**
+ * What the attachment queue should hold after a send failed.
+ *
+ * The queue is spent at the start of a send so a retyped message never
+ * uploads twice. But a send whose chat was dropped — it never landed, it
+ * stalled, it was refused — is replayed into a fresh chat, and the replay
+ * carried "[Attached to this message: …]" with no file behind it. Those
+ * files go back in the queue. A chat that was kept already has them.
+ */
+export function attachmentsAfterFailure(queued: string[], pending: string[], chatKept: boolean): string[] {
+  if (chatKept || pending.length > 0 || queued.length === 0) return pending;
+  return queued.filter((f) => fs.existsSync(f));
+}
+
 /** Everything after the page is open and pointed at a chat. */
-async function sendOn(
+async function sendOn(p: Page, message: string, opts?: BrowserSendOptions): Promise<string> {
+  const queued = pendingAttachments;
+  try {
+    return await sendOnce(p, message, opts);
+  } catch (e) {
+    pendingAttachments = attachmentsAfterFailure(queued, pendingAttachments, inConversation);
+    throw e;
+  }
+}
+
+async function sendOnce(
   p: Page,
   message: string,
   opts?: BrowserSendOptions
