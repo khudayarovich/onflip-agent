@@ -29,7 +29,8 @@ export interface SendOptions {
   deviceId?: string;
   /** Reasoning effort for thinking-capable models: off | low | medium | high. */
   thinking?: string;
-  onDelta?: (text: string) => void;
+  /** Called with the reply so far — the whole of it, not the new piece — each time it grows. */
+  onProgress?: (text: string) => void;
   /** Aborts the in-flight request when the user interrupts the turn. */
   signal?: AbortSignal;
 }
@@ -43,8 +44,13 @@ export interface StreamEvent {
 }
 
 interface StreamHandlers {
-  onDelta?: (text: string) => void;
-  onMessageId?: (id: string) => void;
+  /**
+   * One frame of a message. `text` is the whole message so far: this stream
+   * repeats the message in every frame rather than sending the new piece,
+   * and adding each frame to the last turned "Hello, world" into
+   * "HelHello, woHello, world" — the reply the parser then read.
+   */
+  onMessage?: (frame: { id?: string; role?: string; text: string | null }) => void;
   onConversationId?: (id: string) => void;
 }
 
@@ -98,21 +104,27 @@ async function consumeStream(response: Response, handlers: StreamHandlers): Prom
       throw new Error(`ChatGPT backend error: ${err.message ?? JSON.stringify(json.error)}`);
     }
     const message = json.message as
-      | { id?: string; conversation_id?: string; content?: { parts?: unknown[] } }
+      | {
+          id?: string;
+          conversation_id?: string;
+          author?: { role?: unknown };
+          content?: { parts?: unknown[] };
+        }
       | undefined;
     if (message) {
-      if (message.id) handlers.onMessageId?.(message.id);
       if (message.conversation_id) handlers.onConversationId?.(message.conversation_id);
       const parts = message.content?.parts;
-      if (Array.isArray(parts)) {
-        for (const part of parts) {
-          if (typeof part === "string") handlers.onDelta?.(part);
-          else if (part && typeof part === "object") {
-            const obj = part as { text?: unknown; content_type?: string };
-            if (typeof obj.text === "string") handlers.onDelta?.(obj.text);
-          }
-        }
-      }
+      const text = Array.isArray(parts)
+        ? parts
+            .map((part) => {
+              if (typeof part === "string") return part;
+              const obj = part && typeof part === "object" ? (part as { text?: unknown }) : null;
+              return typeof obj?.text === "string" ? obj.text : "";
+            })
+            .join("")
+        : null;
+      const role = typeof message.author?.role === "string" ? message.author.role : undefined;
+      handlers.onMessage?.({ id: message.id, role, text });
     }
   };
 
@@ -206,11 +218,15 @@ export async function sendTurn(
   let messageId = "";
   let conversationId = opts.conversationId ?? "";
   await consumeStream(res, {
-    onDelta: (d) => {
-      text += d;
-      opts.onDelta?.(d);
+    onMessage: (frame) => {
+      // The reply is the assistant's message; a tool's arriving on the same
+      // stream is not. A frame that names no author is taken as the reply.
+      if (frame.role && frame.role !== "assistant") return;
+      if (frame.id) messageId = frame.id;
+      if (frame.text === null || frame.text === text) return;
+      text = frame.text;
+      opts.onProgress?.(text);
     },
-    onMessageId: (id) => (messageId = id),
     onConversationId: (id) => (conversationId = id),
   });
 

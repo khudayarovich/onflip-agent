@@ -559,7 +559,6 @@ export class ApiTransport implements Transport {
         )
       : history;
 
-    let accumulated = "";
     const result = await sendTurn(messages, {
       accessToken: this.accessToken,
       model: opts.model,
@@ -568,12 +567,8 @@ export class ApiTransport implements Transport {
       cookies: this.cookies,
       deviceId: this.deviceId,
       signal: opts.signal,
-      onDelta: opts.onDelta
-        ? (chunk) => {
-            accumulated += chunk;
-            opts.onDelta!(accumulated);
-          }
-        : undefined,
+      // Already the reply so far, which is what onDelta takes.
+      onProgress: opts.onDelta ? (text) => opts.onDelta!(text) : undefined,
     });
     this.conversationId = result.conversationId || this.conversationId;
     return { content: result.content, conversationId: this.conversationId };
