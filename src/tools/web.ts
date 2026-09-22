@@ -397,6 +397,18 @@ export const downloadFileTool: ToolDefinition = {
     // home directory rather than in a folder literally named `~`.
     const target = resolveIn(ctx.cwd, rawPath);
 
+    // A download is a request first: the URL goes out, query string and all,
+    // before anything is written. Asked only as a write, it slipped past the
+    // network check that `web_fetch` of the same URL meets — so under
+    // auto-edit, anything could be sent anywhere in a URL with no prompt.
+    const reach = await ctx.requestPermission({
+      kind: "network",
+      tool: "download_file",
+      subject: `GET ${url.href}`,
+      detail: [`host: ${url.host}`],
+    });
+    if (!reach.allow) return denied("Download", reach.reason);
+
     const decision = await ctx.requestPermission({
       kind: "write",
       tool: "download_file",

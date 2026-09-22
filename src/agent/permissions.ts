@@ -529,6 +529,17 @@ export function realPath(target: string): string {
     try {
       return path.join(fs.realpathSync(current), ...tail);
     } catch {
+      // A link whose target does not exist yet cannot be resolved either,
+      // and taking it for a new file kept its in-workspace name — while a
+      // write through it lands wherever it points. Follow the link itself.
+      try {
+        if (fs.lstatSync(current).isSymbolicLink()) {
+          current = path.resolve(path.dirname(current), fs.readlinkSync(current));
+          continue;
+        }
+      } catch {
+        /* not there at all: an ordinary new path, handled below */
+      }
       const parent = path.dirname(current);
       // The root does not exist either: nothing to canonicalise, so the
       // lexical answer is the only one available.

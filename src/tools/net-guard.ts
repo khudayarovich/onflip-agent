@@ -49,18 +49,51 @@ export function blockedReason(ip: string): string | null {
   }
 
   if (net.isIPv6(ip)) {
-    const low = ip.toLowerCase();
-    if (low === "::1") return "a loopback address";
-    if (low === "::") return "an unspecified address";
-    const head = Number.parseInt(low.split(":")[0] || "", 16);
-    if (Number.isFinite(head)) {
-      if ((head & 0xfe00) === 0xfc00) return "a unique-local address";
-      if ((head & 0xffc0) === 0xfe80) return "a link-local address";
-    }
+    const h = ipv6Groups(ip);
+    if (!h) return "an address that could not be read";
+    const zeros = (from: number, to: number) => h.slice(from, to).every((g) => g === 0);
+    const v4 = (hi: number, lo: number) => `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+    if (zeros(0, 8)) return "an unspecified address";
+    if (zeros(0, 7) && h[7] === 1) return "a loopback address";
+    // IPv6 forms that carry an IPv4 address, and reach it. The URL parser
+    // rewrites `[::ffff:127.0.0.1]` to `[::ffff:7f00:1]`, so a check that
+    // only knew the dotted spelling let loopback, and 169.254.169.254, in.
+    if (zeros(0, 5) && h[5] === 0xffff) return blockedReason(v4(h[6], h[7]));
+    if (zeros(0, 6)) return blockedReason(v4(h[6], h[7]));
+    if (h[0] === 0x64 && h[1] === 0xff9b && zeros(2, 6)) return blockedReason(v4(h[6], h[7]));
+    if (h[0] === 0x64 && h[1] === 0xff9b && h[2] === 1) return "a local translation address";
+    if (h[0] === 0x2002) return blockedReason(v4(h[1], h[2]));
+    if ((h[0] & 0xfe00) === 0xfc00) return "a unique-local address";
+    if ((h[0] & 0xffc0) === 0xfe80) return "a link-local address";
+    if ((h[0] & 0xffc0) === 0xfec0) return "a site-local address";
+    if ((h[0] & 0xff00) === 0xff00) return "a multicast address";
     return null;
   }
 
   return null;
+}
+
+/**
+ * The eight 16-bit groups of an IPv6 address, with `::` expanded and a
+ * dotted IPv4 tail folded into the last two. Null when it does not read.
+ */
+function ipv6Groups(ip: string): number[] | null {
+  let text = ip.toLowerCase().replace(/%.*$/, "");
+  const dotted = /(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(text);
+  if (dotted) {
+    const b = dotted.slice(1).map(Number);
+    if (b.some((x) => x > 255)) return null;
+    text = `${text.slice(0, dotted.index)}${((b[0] << 8) | b[1]).toString(16)}:${((b[2] << 8) | b[3]).toString(16)}`;
+  }
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const parse = (part: string) => (part ? part.split(":").map((g) => Number.parseInt(g, 16)) : []);
+  const head = parse(halves[0]);
+  const tail = halves.length === 2 ? parse(halves[1]) : [];
+  const missing = 8 - head.length - tail.length;
+  if (halves.length === 1 ? missing !== 0 : missing < 0) return null;
+  const groups = [...head, ...new Array<number>(Math.max(0, missing)).fill(0), ...tail];
+  return groups.length === 8 && groups.every((g) => Number.isInteger(g) && g >= 0 && g <= 0xffff) ? groups : null;
 }
 
 /** Set to allow private and loopback destinations, for driving a local server. */
@@ -109,6 +142,17 @@ export class BlockedAddressError extends Error {
 
 const REDIRECT_STATUS = new Set([301, 302, 303, 307, 308]);
 
+const CREDENTIAL_HEADERS = new Set(["authorization", "cookie", "proxy-authorization"]);
+
+/** The same headers, less the ones that identify the caller to a host. */
+export function withoutCredentials(headers: RequestInit["headers"]): Record<string, string> {
+  const out: Record<string, string> = {};
+  new Headers(headers ?? {}).forEach((value, key) => {
+    if (!CREDENTIAL_HEADERS.has(key.toLowerCase())) out[key] = value;
+  });
+  return out;
+}
+
 /**
  * Fetch, checking every hop rather than only the one the model named.
  *
@@ -156,6 +200,9 @@ export async function fetchPublic(
     if (res.status !== 307 && res.status !== 308 && method !== "GET" && method !== "HEAD") {
       options = { ...options, method: "GET", body: undefined };
     }
+    // Credentials the model set were meant for the host it named. A browser
+    // drops them when a redirect leaves that origin, and so does this.
+    if (next.origin !== current.origin) options = { ...options, headers: withoutCredentials(options.headers) };
     current = next;
   }
 }
