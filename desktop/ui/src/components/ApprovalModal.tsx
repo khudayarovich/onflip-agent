@@ -1,14 +1,14 @@
 import React, { useEffect } from "react";
 import type { ApprovalDecisionDTO, ApprovalRequestDTO } from "../../../shared/protocol";
 import { DiffView } from "./DiffView";
-import { useT } from "../i18n";
+import { useT, type StringKey } from "../i18n";
 import { HOTKEY_ARM_MS, isApprovalHotkey, type ApprovalKey } from "../../../shared/approval";
 
-const KIND_LABELS: Record<ApprovalRequestDTO["kind"], string> = {
-  read: "Read",
-  write: "File write",
-  command: "Shell command",
-  network: "Network",
+const KIND_LABELS: Record<ApprovalRequestDTO["kind"], StringKey> = {
+  read: "kindRead",
+  write: "kindWrite",
+  command: "kindCommand",
+  network: "kindNetwork",
 };
 
 /**
@@ -53,13 +53,13 @@ export function ApprovalModal({
     <div className="modal-backdrop">
       <div className="modal approval">
         <div className="modal-head">
-          <h2>Approval needed</h2>
+          <h2>{t("approvalNeeded")}</h2>
         </div>
         <div className="modal-body">
           <div className="kind-row">
             <span className={`kind-badge${request.dangerous ? " danger" : ""}`}>
               {request.dangerous ? "⚠ " : ""}
-              {KIND_LABELS[request.kind]}
+              {t(KIND_LABELS[request.kind])}
             </span>
             <span className="reason">{request.reason}</span>
           </div>

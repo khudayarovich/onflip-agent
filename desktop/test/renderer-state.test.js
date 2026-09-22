@@ -15,10 +15,12 @@
  * - The Telegram settings refreshed on every bot status change and wrote the
  *   saved IDs over the ones being typed: the check read a `dirty` flag frozen
  *   at the first render.
+ * - The approval prompt's heading and request kind, and every confirmation
+ *   the window asks, were English whatever language the app was set to.
  *
- * The first two run the real renderer, bundled with the esbuild Vite already
- * brings and rendered with react-dom/server. The last two are call sites in
- * components that need a live window, so they are checked in the source.
+ * Where it can, this runs the real renderer, bundled with the esbuild Vite
+ * already brings and rendered with react-dom/server. Call sites in
+ * components that need a live window are checked in the source.
  */
 
 const test = require("node:test");
@@ -47,10 +49,13 @@ function renderer() {
       contents: [
         'import React from "react";',
         'import { renderToStaticMarkup } from "react-dom/server";',
-        'import { translate } from "./i18n";',
+        'import { translate, LangContext } from "./i18n";',
         'import { Sidebar } from "./components/Sidebar";',
+        'import { ApprovalModal } from "./components/ApprovalModal";',
         "export { translate };",
         "export const sidebar = (props) => renderToStaticMarkup(React.createElement(Sidebar, props));",
+        "export const approval = (lang, props) =>",
+        "  renderToStaticMarkup(React.createElement(LangContext.Provider, { value: lang }, React.createElement(ApprovalModal, props)));",
       ].join("\n"),
       resolveDir: UI,
       loader: "tsx",
@@ -166,4 +171,44 @@ test("the Telegram IDs being typed survive a status refresh", { skip: needsBuild
   assert.match(refresh, /if \(!dirtyRef\.current\) setIds\(next\.allowedIds\);/, "refresh reads the live flag");
   assert.doesNotMatch(refresh, /if \(!dirty\)/, "not the one frozen at the first render");
   assert.match(section, /const setDirty = \(value: boolean\) => \{\s*dirtyRef\.current = value;\s*setDirtyState\(value\);/);
+});
+
+test("the approval prompt speaks the app's language", { skip: needsBuild }, () => {
+  // Its heading and the kind of request were English in every language,
+  // on the one dialog that decides whether a command runs.
+  const { approval } = renderer();
+  const request = { kind: "command", tool: "bash", subject: "npm run build", reason: "runs a command", dangerous: false };
+  const ru = approval("ru", { request, onDecision: () => {} });
+  assert.match(ru, /Нужно подтверждение/);
+  assert.match(ru, /Команда шелла/);
+  assert.doesNotMatch(ru, /Approval needed|Shell command/);
+  const uz = approval("uz", { request: { ...request, kind: "write" }, onDecision: () => {} });
+  assert.match(uz, /Tasdiq kerak/);
+  assert.match(uz, /Faylga yozish/);
+  // The false-positive half: English stays English.
+  assert.match(approval("en", { request, onDecision: () => {} }), /Approval needed[\s\S]*Shell command/);
+});
+
+test("every confirmation is asked in the app's language", { skip: needsBuild }, () => {
+  const { translate } = renderer();
+  const keys = [
+    "approvalNeeded", "kindRead", "kindWrite", "kindCommand", "kindNetwork",
+    "confirmTitle", "editEarlierConfirm", "undoRevertConfirm", "undoDeleteConfirm", "yoloConfirm",
+  ];
+  for (const key of keys) {
+    const en = translate("en", key);
+    assert.notEqual(en, key, `${key} has English text`);
+    for (const lang of ["ru", "uz"]) {
+      assert.notEqual(translate(lang, key), en, `${key} is translated for ${lang}`);
+    }
+  }
+  assert.equal(translate("ru", "undoDeleteConfirm", { file: "app.ts" }), "Удалить app.ts? До этой сессии его не было.");
+  // And no confirmation in the window is a bare English literal any more.
+  const app = fs.readFileSync(path.join(UI, "App.tsx"), "utf8");
+  const messages = [...app.matchAll(/setConfirm\(\{\s*message:\s*([^\n]+)/g)].map((m) => m[1].trim());
+  assert.ok(messages.length >= 5, `found ${messages.length} confirmations`);
+  for (const message of messages) {
+    assert.match(message, /^(?:t|translate)\(/, `an untranslated confirmation: ${message}`);
+  }
+  assert.match(app, /title=\{t\("confirmTitle"\)\}/);
 });

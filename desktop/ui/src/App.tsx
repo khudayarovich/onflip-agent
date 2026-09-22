@@ -727,8 +727,7 @@ export function App(): React.ReactElement {
       if (id === lastUserId) run();
       else {
         setConfirm({
-          message:
-            "This message is not the latest — editing it removes it and everything after it from the conversation. Continue?",
+          message: translate(loadLang(), "editEarlierConfirm"),
           action: run,
           danger: true,
         });
@@ -797,9 +796,9 @@ export function App(): React.ReactElement {
         return;
       }
       setConfirm({
-        message: preview.existedBefore
-          ? `Revert ${preview.rel} to its state before the last change?`
-          : `Delete ${preview.rel}? It did not exist before this session.`,
+        message: translate(loadLang(), preview.existedBefore ? "undoRevertConfirm" : "undoDeleteConfirm", {
+          file: preview.rel,
+        }),
         danger: true,
         // The token pins the Undo to the change this dialog names.
         action: () =>
@@ -860,8 +859,7 @@ export function App(): React.ReactElement {
           if (["read-only", "ask", "auto-edit", "full-auto", "yolo"].includes(arg)) {
             if (arg === "yolo") {
               setConfirm({
-                message:
-                  "yolo runs everything without asking, including destructive commands. Turn it on?",
+                message: translate(loadLang(), "yoloConfirm"),
                 danger: true,
                 action: () => guard(api.setApproval("yolo")),
               });
@@ -1342,8 +1340,7 @@ export function App(): React.ReactElement {
           onSetApproval={(mode) => {
             if (mode === "yolo") {
               setConfirm({
-                message:
-                  "yolo runs everything without asking, including destructive commands. Turn it on?",
+                message: t("yoloConfirm"),
                 danger: true,
                 action: () => guard(api.setApproval("yolo")),
               });
@@ -1501,7 +1498,7 @@ export function App(): React.ReactElement {
 
       {confirm && (
         <Modal
-          title="Are you sure?"
+          title={t("confirmTitle")}
           onClose={() => setConfirm(null)}
           footer={
             <>
