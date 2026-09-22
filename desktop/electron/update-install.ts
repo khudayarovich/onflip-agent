@@ -285,15 +285,28 @@ let firstTimer: NodeJS.Timeout | null = null;
 /** The version already announced, so a six-hourly timer nags once, not forever. */
 let announced: string | null = null;
 
-export function startUpdateWatch(onAvailable: (info: UpdateInfo) => void): void {
+/**
+ * Offer `info` unless it has been offered already, and remember it only
+ * once someone was told.
+ *
+ * `deliver` answers whether a window took the offer. The version used to be
+ * marked before delivery, so a check that found no window open — the app
+ * living in the tray — spent the announcement on nobody, while the log line
+ * beside it promised to offer it again later.
+ */
+export function announce(info: UpdateInfo, deliver: (info: UpdateInfo) => boolean): boolean {
+  if (!info.available || !info.latest) return false;
+  if (announced === info.latest) return false;
+  if (!deliver(info)) return false;
+  announced = info.latest;
+  return true;
+}
+
+export function startUpdateWatch(onAvailable: (info: UpdateInfo) => boolean): void {
   if (watchTimer) return;
   const tick = async () => {
     try {
-      const info = await checkForUpdate();
-      if (!info.available || !info.latest) return;
-      if (announced === info.latest) return;
-      announced = info.latest;
-      onAvailable(info);
+      announce(await checkForUpdate(), onAvailable);
     } catch {
       // A failed check is the network's problem, and the next tick retries.
     }

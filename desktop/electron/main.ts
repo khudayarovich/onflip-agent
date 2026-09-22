@@ -1996,8 +1996,12 @@ if (!singleInstance) {
           `installable: ${info.installable ? info.installable.name : "no"}`
       );
       const ws = frontWorkspace();
-      if (ws) sendTo(ws, "update-available", info);
-      else console.log("[desktop] no window to show the update banner; will offer again later");
+      if (ws && !ws.win.isDestroyed()) {
+        sendTo(ws, "update-available", info);
+        return true;
+      }
+      console.log("[desktop] no window to show the update banner; will offer again later");
+      return false;
     });
   });
 

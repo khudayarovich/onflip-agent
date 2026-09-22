@@ -8,17 +8,23 @@ import { app, net } from "electron";
  * nobody — the version that fixed sign-in on a second machine was invisible
  * to exactly the person it was written for.
  *
- * This checks and tells; it does not install. Installing in place needs a
- * signed application, and OnFlip is not signed on either platform yet: an
- * unsigned in-place update on macOS is refused outright by the OS updater,
- * and on Windows it would put the same SmartScreen warning in front of the
- * user that the download page does, only without the context that they asked
- * for it. So the offer is one click to the release, which is honest about
- * what happens next.
+ * This finds the release and says what it holds for this machine; fetching
+ * and applying it is `update-install.ts`, which does what the person would
+ * have done by hand rather than going through an OS updater an unsigned app
+ * cannot use (see AGENTS.md, "Being unsigned rules out the OS updaters").
  */
 
-const RELEASES_API = "https://api.github.com/repos/khudayarovich/onflip-agent/releases/latest";
-const RELEASES_PAGE = "https://github.com/khudayarovich/onflip-agent/releases/latest";
+/**
+ * The list, not `/releases/latest`. This repository publishes the CLI's
+ * releases too (`v0.2.0`), and "latest" is whichever release came last: the
+ * next CLI release would have been the only one the app ever saw, older
+ * than every desktop version, and no desktop update would have been offered
+ * until another desktop release happened to follow it.
+ */
+const RELEASES_API = "https://api.github.com/repos/khudayarovich/onflip-agent/releases?per_page=15";
+const RELEASES_PAGE = "https://github.com/khudayarovich/onflip-agent/releases";
+/** The desktop app's tags; everything else in the repository is not ours to offer. */
+const DESKTOP_TAG = /^desktop-v\d/;
 
 export interface UpdateInfo {
   current: string;
@@ -87,21 +93,61 @@ function versionOf(tag: string): string {
  * Is `candidate` a later version than `current`?
  *
  * Numeric per segment, so 0.7.10 sorts after 0.7.9 — which string comparison
- * gets wrong, and which this project will reach.
+ * gets wrong, and which this project will reach. A pre-release sorts before
+ * its release, as semver has it: splitting "0.10.51-rc.1" on dots and dashes
+ * made it 0.10.51.0.1, newer than 0.10.51, so anyone running a release
+ * candidate was never offered the release itself.
  */
 export function isNewer(candidate: string, current: string): boolean {
-  const parse = (v: string) => v.split(/[.-]/).map((n) => Number.parseInt(n, 10) || 0);
-  const a = parse(candidate);
-  const b = parse(current);
-  for (let i = 0; i < Math.max(a.length, b.length); i++) {
-    const x = a[i] ?? 0;
-    const y = b[i] ?? 0;
+  const split = (v: string) => {
+    const [core, ...pre] = v.trim().replace(/\+.*$/, "").split("-");
+    return {
+      core: core.split(".").map((n) => Number.parseInt(n, 10) || 0),
+      pre: pre.length ? pre.join("-").split(".") : [],
+    };
+  };
+  const a = split(candidate);
+  const b = split(current);
+  for (let i = 0; i < Math.max(a.core.length, b.core.length); i++) {
+    const x = a.core[i] ?? 0;
+    const y = b.core[i] ?? 0;
     if (x !== y) return x > y;
+  }
+  // Same release: none beats any pre-release, and two pre-releases compare
+  // identifier by identifier, numbers numerically and before words.
+  if (!a.pre.length || !b.pre.length) return !a.pre.length && b.pre.length > 0;
+  for (let i = 0; i < Math.max(a.pre.length, b.pre.length); i++) {
+    const x = a.pre[i];
+    const y = b.pre[i];
+    if (x === undefined || y === undefined) return y === undefined;
+    if (x === y) continue;
+    const nx = /^\d+$/.test(x) ? Number(x) : null;
+    const ny = /^\d+$/.test(y) ? Number(y) : null;
+    if (nx !== null && ny !== null) return nx > ny;
+    if (nx !== null || ny !== null) return ny !== null;
+    return x > y;
   }
   return false;
 }
 
-interface GitHubRelease {
+/**
+ * The desktop release to offer out of a page of the repository's releases:
+ * the highest `desktop-v` version that is neither a draft nor a pre-release.
+ * Chosen by version rather than by position, so the order GitHub lists them
+ * in — creation time — cannot put an older release first.
+ */
+export function pickDesktopRelease(releases: unknown): GitHubRelease | undefined {
+  if (!Array.isArray(releases)) return undefined;
+  let best: GitHubRelease | undefined;
+  for (const release of releases as GitHubRelease[]) {
+    if (!release || typeof release.tag_name !== "string" || !DESKTOP_TAG.test(release.tag_name)) continue;
+    if (release.draft || release.prerelease) continue;
+    if (!best || isNewer(versionOf(release.tag_name), versionOf(best.tag_name ?? ""))) best = release;
+  }
+  return best;
+}
+
+export interface GitHubRelease {
   tag_name?: string;
   html_url?: string;
   draft?: boolean;
@@ -233,9 +279,11 @@ export async function checkForUpdate(): Promise<UpdateInfo> {
       request.end();
     });
 
-    const release = JSON.parse(body) as GitHubRelease;
+    const listed: unknown = JSON.parse(body);
+    if (!Array.isArray(listed)) throw new Error("GitHub did not answer with a list of releases");
+    const release: GitHubRelease = pickDesktopRelease(listed) ?? {};
     const latest = release.tag_name ? versionOf(release.tag_name) : undefined;
-    const newer = Boolean(latest && !release.draft && !release.prerelease && isNewer(latest, current));
+    const newer = Boolean(latest && isNewer(latest, current));
     const installable = installableAssetFor(release);
     const complete = releaseReadyFor(installable);
     return {
