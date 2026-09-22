@@ -88,3 +88,19 @@ test("the view keeps popups to itself, and main spawns each engine with its wind
   assert.match(main, /let child = spawnEngine\(cwd, ws\.win\);/);
   assert.match(main, /if \(ws\.engine !== c\) return;\s*ws\.engineExited = true;\s*sendTo\(ws, "engine-exit", \{ code \}\);/);
 });
+
+test("a replaced engine no longer speaks for the window", { skip: needsBuild }, () => {
+  // Closing the wire stops writes, not dispatch: the old engine's shutdown
+  // output set the window's folder back to the project being left and could
+  // open an approval prompt whose answer went nowhere. Main-process code,
+  // checked in the source.
+  const main = fs.readFileSync(path.join(__dirname, "..", "electron", "main.ts"), "utf8");
+  const start = main.slice(main.indexOf("function startEngine("), main.indexOf("function askRendererForApproval("));
+  assert.match(start, /const current = \(\): boolean => ws\.peer === wire;/);
+  assert.match(start, /wire\.onEvent = \(event, data\) => \{\s*if \(!current\(\)\) return;/);
+  assert.match(start, /wire\.onRequest = async \(method, params\) => \{\s*if \(!current\(\)\) throw new Error/);
+  assert.match(start, /wire\.onNoise = \(line\) => \{\s*if \(current\(\)\) sendTo/);
+  // And the wire stops being current exactly when the engine is replaced.
+  const stop = main.slice(main.indexOf("async function stopEngine("));
+  assert.match(stop, /ws\.engine = null;\s*const wire = ws\.peer;\s*ws\.peer = null;/);
+});

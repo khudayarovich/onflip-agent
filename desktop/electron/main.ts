@@ -773,8 +773,21 @@ function startEngine(ws: Workspace, requested?: string): void {
   attach(child);
   ws.engine = child;
 
+  /**
+   * Whether this engine still speaks for the window — the exit handler's
+   * rule, for everything else it says. `stopEngine` closes the wire, but
+   * closing only stops writes: the old engine spends up to four seconds
+   * shutting down, and what it prints meanwhile was still dispatched. Its
+   * last `status` set the window's folder and the saved last project to
+   * the one being left, and an approval it asked for opened a prompt whose
+   * answer went nowhere. After a crash the wire is left current, so the
+   * engine's last words still arrive.
+   */
+  const current = (): boolean => ws.peer === wire;
+
   let explainedMissing = false;
   wire.onEvent = (event, data) => {
+    if (!current()) return;
     if (event === "status") {
       const status = data as EngineStatus;
       ws.lastStatus = status;
@@ -841,6 +854,7 @@ function startEngine(ws: Workspace, requested?: string): void {
 
   // The engine's own requests — approvals — go to this window and wait there.
   wire.onRequest = async (method, params) => {
+    if (!current()) throw new Error("This engine has been replaced.");
     if (method === "approval") {
       return await askRendererForApproval(ws, params);
     }
@@ -852,7 +866,7 @@ function startEngine(ws: Workspace, requested?: string): void {
   };
 
   wire.onNoise = (line) => {
-    sendTo(ws, "engine-event", { event: "log", data: { line } });
+    if (current()) sendTo(ws, "engine-event", { event: "log", data: { line } });
   };
 }
 
