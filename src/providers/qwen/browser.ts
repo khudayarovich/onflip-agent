@@ -1096,6 +1096,23 @@ async function isGenerating(page: Page): Promise<boolean> {
 }
 
 /**
+ * How many of my own messages the page shows.
+ *
+ * `$$eval`, which hands the callback every match. `$eval` hands it the first
+ * match alone, so `els.length` was `undefined` whenever the conversation
+ * already had a message: "my message appeared" could then never confirm a
+ * send, only the composer emptying could, and a send that landed without
+ * that was taken for a refusal and tried again.
+ */
+export async function countMine(page: Pick<Page, "$$eval">): Promise<number> {
+  const count = await withTimeout(
+    page.$$eval(USER_MESSAGE, (els) => els.length),
+    "counting my messages"
+  ).catch(() => 0);
+  return typeof count === "number" && Number.isFinite(count) ? count : 0;
+}
+
+/**
  * Make sure a new turn does not begin behind the last one's answer.
  *
  * The page is shared between turns, and between a parent and its sub-agents,
@@ -1247,10 +1264,7 @@ export async function sendTurn(
     // go", and the page answers that plainly: Qwen empties the composer and
     // mounts the message. Asking that after each attempt turns a silent
     // no-op into either a send or an honest failure in seconds.
-    const minesBefore = (await withTimeout(
-      page.$eval(USER_MESSAGE, (els) => els.length),
-      "counting my messages"
-    ).catch(() => 0)) as number;
+    const minesBefore = await countMine(page);
     const landed = async (): Promise<boolean> =>
       page
         .waitForFunction(
