@@ -1143,6 +1143,35 @@ function escapeRe(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
+/**
+ * A pattern as the matcher sees paths: relative to the search root.
+ *
+ * Paths are matched relative to the root, so `./src/**\/*.ts` — the way
+ * models most often write one — and an absolute pattern into the project
+ * both matched nothing, and the answer "No files match" sent the model off
+ * to conclude the files did not exist. A leading `./` is dropped, and an
+ * absolute pattern whose fixed part lies under the root is made relative
+ * to it. One that points elsewhere is refused with the way to say it.
+ */
+export function rootedPattern(pattern: string, root: string): { pattern: string } | { error: string } {
+  let p = pattern.replace(/\\/g, "/");
+  while (p.startsWith("./")) p = p.slice(2);
+  if (!path.isAbsolute(p) && !/^[A-Za-z]:\//.test(p)) return { pattern: p };
+  const parts = p.split("/");
+  const firstGlob = parts.findIndex((s) => /[*?{[]/.test(s));
+  const fixed = (firstGlob === -1 ? parts : parts.slice(0, firstGlob)).join("/") || "/";
+  const rest = firstGlob === -1 ? "" : parts.slice(firstGlob).join("/");
+  const rel = path.relative(root, fixed).replace(/\\/g, "/");
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return {
+      error:
+        `The pattern points outside the search root (${root}). ` +
+        "Pass that directory as `path` and a pattern relative to it.",
+    };
+  }
+  return { pattern: [rel, rest].filter(Boolean).join("/") };
+}
+
 export const globTool: ToolDefinition = {
   name: "glob",
   description:
@@ -1160,10 +1189,12 @@ export const globTool: ToolDefinition = {
     const pattern = String(args.pattern ?? "").trim();
     if (!pattern) return err("`pattern` must be non-empty");
     if (!fs.existsSync(root)) return err(`Directory not found: ${relative(ctx.cwd, root)}`);
+    const rooted = rootedPattern(pattern, root);
+    if ("error" in rooted) return err(rooted.error);
 
     let re: RegExp;
     try {
-      re = globToRegExp(pattern);
+      re = globToRegExp(rooted.pattern);
     } catch (e) {
       return err(`Invalid pattern: ${e instanceof Error ? e.message : String(e)}`);
     }
@@ -1242,7 +1273,10 @@ export const grepTool: ToolDefinition = {
 
     let includeRe: RegExp | null = null;
     if (typeof args.include === "string" && args.include.trim()) {
-      const inc = args.include.trim();
+      const searchRoot = fs.statSync(target).isDirectory() ? target : path.dirname(target);
+      const rooted = rootedPattern(args.include.trim(), searchRoot);
+      if ("error" in rooted) return err(rooted.error.replace("The pattern", "`include`"));
+      const inc = rooted.pattern;
       // A bare "*.ts" should match at any depth.
       includeRe = globToRegExp(inc.includes("/") ? inc : `**/${inc}`);
     }

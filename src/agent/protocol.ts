@@ -333,7 +333,7 @@ export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | 
       continue;
     }
 
-    const value = coerce(rest.trim());
+    const value = coerce(rest.trim(), key);
     if (key === "tool" || key === "tool_name" || key === "name") {
       if (!toolName) toolName = String(value).trim();
     } else {
@@ -610,7 +610,7 @@ function parseList(lines: string[], from: number): { items: unknown[]; next: num
       const body = bullet[1];
       const pair = body.match(/^([A-Za-z_][\w.-]*)\s*:\s*(.*)$/);
       if (pair) {
-        current = { [pair[1].toLowerCase()]: coerce(pair[2].trim()) };
+        current = { [pair[1].toLowerCase()]: coerce(pair[2].trim(), pair[1].toLowerCase()) };
         items.push(current);
       } else {
         current = null;
@@ -622,7 +622,7 @@ function parseList(lines: string[], from: number): { items: unknown[]; next: num
     // A continuation line for the item currently being built.
     const pair = line.match(/^\s+([A-Za-z_][\w.-]*)\s*:\s*(.*)$/);
     if (pair && current) {
-      current[pair[1].toLowerCase()] = coerce(pair[2].trim());
+      current[pair[1].toLowerCase()] = coerce(pair[2].trim(), pair[1].toLowerCase());
       continue;
     }
     break;
@@ -640,7 +640,14 @@ function parseList(lines: string[], from: number): { items: unknown[]; next: num
  * the tools coerce what they actually need (see `asNumber` in tools/util).
  * Booleans are unambiguous enough to convert here.
  */
-function coerce(raw: string): unknown {
+/**
+ * Keys whose values name a place or a command: a path, a glob, a regex, a
+ * URL, a shell line. None of them ever holds a control character, which is
+ * what makes a JSON decode of one checkable.
+ */
+const LITERAL_KEYS = new Set(["path", "cwd", "include", "pattern", "url", "command"]);
+
+function coerce(raw: string, key?: string): unknown {
   if (raw === "") return "";
   if (raw === "true") return true;
   if (raw === "false") return false;
@@ -655,12 +662,23 @@ function coerce(raw: string): unknown {
   // retry each time. The backslash escapes are the tell. A value that merely
   // happens to be wrapped in quotes has none and must keep them, and a
   // Windows path like "C:\Users\me" fails to parse and falls through.
+  //
+  // Not every Windows path fails, though: "C:\temp\new\build.txt" is valid
+  // JSON — \t, \n and \b are all escapes — and decoded into a tab, a newline
+  // and a backspace, so the write went to a name no one could type. A quoted
+  // regex fared the same: "\bTODO\b" lost its word boundaries to two
+  // backspaces. For a value that names a place or a command, a decode that
+  // yields a control character was not JSON, and a drive letter followed by
+  // a single backslash is a path as written (encoded, it would be "C:\\").
   if (raw.length >= 2 && raw[0] === '"' && raw[raw.length - 1] === '"' && raw.includes("\\")) {
-    try {
-      const decoded: unknown = JSON.parse(raw);
-      if (typeof decoded === "string") return decoded;
-    } catch {
-      /* not JSON after all — the plain-quote handling below still applies */
+    const literal = key !== undefined && LITERAL_KEYS.has(key);
+    if (!(literal && /^"[A-Za-z]:\\(?!\\)/.test(raw))) {
+      try {
+        const decoded: unknown = JSON.parse(raw);
+        if (typeof decoded === "string" && !(literal && /[\u0000-\u001f]/.test(decoded))) return decoded;
+      } catch {
+        /* not JSON after all — the plain-quote handling below still applies */
+      }
     }
   }
 
@@ -702,8 +720,10 @@ export function parseCollapsedBlock(text: string): ToolCall[] | null {
   let toolName = "";
 
   // Split the head at each `key:` boundary; the value is whatever precedes the
-  // next one.
-  const keyRe = /\b([A-Za-z_][\w.-]*)\s*:\s*/g;
+  // next one. A key's colon is followed by a space: the drive in "C:\temp"
+  // and the scheme in "https://x" are not keys, and split there a path came
+  // back as `path: "` with the rest filed under a key called `c`.
+  const keyRe = /\b([A-Za-z_][\w.-]*)\s*:(?=\s|$)\s*/g;
   const marks: { key: string; from: number; to: number }[] = [];
   let m: RegExpExecArray | null;
   while ((m = keyRe.exec(head)) !== null) {
@@ -717,7 +737,7 @@ export function parseCollapsedBlock(text: string): ToolCall[] | null {
     if (mark.key === "tool" || mark.key === "tool_name" || mark.key === "name") {
       if (!toolName) toolName = value;
     } else if (value) {
-      args[mark.key] = coerce(value);
+      args[mark.key] = coerce(value, mark.key);
     }
   });
 
