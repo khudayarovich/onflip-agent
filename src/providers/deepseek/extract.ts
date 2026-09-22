@@ -48,10 +48,84 @@ export const EXTRACT_REPLY = `(() => {
       else if (tag === "STRONG" || tag === "B") out += "**" + inline(n) + "**";
       else if (tag === "EM" || tag === "I") out += "*" + inline(n) + "*";
       else if (tag === "BR") out += "\\n";
-      else if (tag === "A") out += "[" + inline(n) + "](" + (n.getAttribute("href") || "") + ")";
+      else if (tag === "A") out += link(n);
       else out += inline(n);
     }
     return out;
+  };
+
+  // A link the renderer made out of a bare URL is the URL the model wrote.
+  // As "[url](url)" it reached web_fetch literally, brackets and all.
+  const link = (a) => {
+    const text = inline(a);
+    const href = a.getAttribute("href") || "";
+    const bare = (s) => {
+      try { s = decodeURI(s); } catch (e) { /* keep it as it came */ }
+      return s.replace(/^(https?:\\/\\/|mailto:)/i, "").replace(/\\/$/, "");
+    };
+    return bare(text) === bare(href) ? text : "[" + text + "](" + href + ")";
+  };
+
+  const isCode = (n) => n.tagName === "PRE" || (n.classList && n.classList.contains("md-code-block"));
+  const HOLDS_BLOCK = "pre, .md-code-block, ul, ol";
+  const codeNode = (block) => {
+    const pre = block.tagName === "PRE" ? block : block.querySelector("pre");
+    return { kind: "code", lang: block.tagName === "PRE" ? "" : langOf(block), body: pre ? pre.innerText : "" };
+  };
+
+  // A list, item by item. An item's own words stay a list item; a code block
+  // or a list nested inside it comes out as a node of its own, at column 0,
+  // and the numbering carries on after it. Flattened into the item's text —
+  // which is what reading the item as inline text did — an onflip block came
+  // back as one line, "onflipCopyDownloadtool: read…", and the call was lost
+  // without a word.
+  const pushList = (list, ordered, out) => {
+    const first = parseInt(list.getAttribute("start"), 10);
+    let number = (ordered && Number.isFinite(first) ? first : 1) - 1;
+    let items = [];
+    let start = number + 1;
+    const flush = () => {
+      if (items.length) out.push({ kind: "list", ordered, items, start });
+      items = [];
+    };
+    for (const li of list.children) {
+      if (li.tagName !== "LI") continue;
+      number++;
+      if (!items.length) start = number;
+      let text = "";
+      // Once something has been lifted out of this item, the words after it
+      // are a paragraph of their own: numbering them would invent an item.
+      let lifted = false;
+      const settle = () => {
+        const t = text.trim();
+        text = "";
+        if (t && lifted) out.push({ kind: "text", text: t });
+        else if (t) items.push(t);
+      };
+      const walk = (node) => {
+        for (const n of node.childNodes) {
+          if (n.nodeType === 3) { text += n.nodeValue; continue; }
+          if (n.nodeType !== 1) continue;
+          const nested = n.tagName === "UL" || n.tagName === "OL";
+          if (nested || isCode(n)) {
+            settle();
+            flush();
+            lifted = true;
+            if (nested) pushList(n, n.tagName === "OL", out);
+            else out.push(codeNode(n));
+          } else {
+            if ((n.tagName === "P" || n.tagName === "DIV") && text.trim()) text += " ";
+            // Formatting is read as it is anywhere else — through inline(),
+            // which handles the element itself and not only its children.
+            if (n.querySelector(HOLDS_BLOCK)) walk(n);
+            else text += inline({ childNodes: [n] });
+          }
+        }
+      };
+      walk(li);
+      settle();
+    }
+    flush();
   };
 
   // The language sits in a banner above the code, as its first line; the
@@ -73,11 +147,7 @@ export const EXTRACT_REPLY = `(() => {
       const t = inline(el).trim();
       if (t) out.push({ kind: "text", text: t });
     } else if (tag === "UL" || tag === "OL") {
-      const items = [...el.children]
-        .filter((li) => li.tagName === "LI")
-        .map((li) => inline(li).trim())
-        .filter(Boolean);
-      if (items.length) out.push({ kind: "list", ordered: tag === "OL", items });
+      pushList(el, tag === "OL", out);
     } else if (/^H[1-6]$/.test(tag)) {
       const t = inline(el).trim();
       if (t) out.push({ kind: "heading", level: Number(tag.slice(1)), text: t });

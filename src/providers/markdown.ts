@@ -22,7 +22,11 @@
 
 export type ReplyNode =
   | { kind: "text"; text: string }
-  | { kind: "list"; ordered: boolean; items: string[] }
+  /**
+   * `start` numbers an ordered list that picks up after a code block or a
+   * nested list was lifted out of the item before it.
+   */
+  | { kind: "list"; ordered: boolean; items: string[]; start?: number }
   | { kind: "code"; lang: string; body: string }
   | { kind: "heading"; level: number; text: string };
 
@@ -94,7 +98,9 @@ export function toMarkdown(nodes: ReplyNode[]): string {
     else if (node.kind === "heading") parts.push(`${"#".repeat(node.level)} ${node.text}`);
     else if (node.kind === "list")
       parts.push(
-        node.items.map((it, n) => (node.ordered ? `${n + 1}. ${it}` : `- ${it}`)).join("\n")
+        node.items
+          .map((it, n) => (node.ordered ? `${(node.start ?? 1) + n}. ${it}` : `- ${it}`))
+          .join("\n")
       );
     else {
       // The provider discarded the source fence. Rebuild it longer than any
