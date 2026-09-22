@@ -42,11 +42,46 @@ test("and the composer asks it, with the backdrops the layers really use", { ski
   const composer = ui(path.join("components", "Composer.tsx"));
   assert.match(composer, /if \(escapeInterrupts\(e, busy, Boolean\(document\.querySelector\(LAYER_QUERY\)\)\)\)/);
   assert.doesNotMatch(composer, /e\.key === "Escape" && busy\)/, "the unconditional check is gone");
-  const common = ui(path.join("components", "common.tsx"));
-  const approval = ui(path.join("components", "ApprovalModal.tsx"));
+  const layers = [
+    ui(path.join("components", "common.tsx")),
+    ui(path.join("components", "ApprovalModal.tsx")),
+    ui(path.join("components", "Sidebar.tsx")),
+    ui("App.tsx"),
+  ];
   for (const cls of LAYER_QUERY.split(",").map((s) => s.trim().slice(1))) {
-    assert.ok(common.includes(`"${cls}"`) || approval.includes(`"${cls}"`), `${cls} is a class a layer renders`);
+    assert.ok(layers.some((source) => source.includes(`"${cls}"`)), `${cls} is a class a layer renders`);
   }
+});
+
+test("and every backdrop the window renders is one of them", { skip: needsBuild }, () => {
+  // The update dialog built its own backdrop, so Escape in the composer
+  // still stopped the turn underneath it.
+  const { LAYER_QUERY } = require(ESCAPE);
+  const listed = LAYER_QUERY.split(",").map((s) => s.trim().slice(1));
+  // Not a layer: the highlight drawn behind the composer's own text, there
+  // whenever the composer is. Listing it would mean Escape never stops a turn.
+  const behindText = new Set(["input-backdrop"]);
+  const dir = path.join(__dirname, "..", "ui", "src");
+  const files = ["App.tsx", ...fs.readdirSync(path.join(dir, "components")).map((f) => path.join("components", f))];
+  let found = 0;
+  for (const file of files.filter((f) => f.endsWith(".tsx"))) {
+    for (const [, cls] of ui(file).matchAll(/className="([\w-]*backdrop)"/g)) {
+      found++;
+      if (behindText.has(cls)) continue;
+      assert.ok(listed.includes(cls), `${file} renders .${cls}, which Escape does not know is a layer`);
+    }
+  }
+  assert.ok(found >= 5, `the scan still finds the backdrops (${found})`);
+  assert.ok(!listed.some((cls) => behindText.has(cls)), "the composer's own highlight is not a layer");
+});
+
+test("the account popover closes on Escape, like every other menu", { skip: needsBuild }, () => {
+  const sidebar = ui(path.join("components", "Sidebar.tsx"));
+  const bar = sidebar.slice(sidebar.indexOf("function AccountBar("));
+  assert.match(
+    bar,
+    /if \(!open\) return;\s*const onKey = \(e: KeyboardEvent\) => \{\s*if \(e\.key === "Escape" && !e\.defaultPrevented\) setOpen\(false\);/
+  );
 });
 
 test("a send the engine refuses puts the message back", { skip: needsBuild }, () => {

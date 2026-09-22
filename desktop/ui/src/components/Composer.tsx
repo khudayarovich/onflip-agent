@@ -9,7 +9,7 @@ import { Menu, useMenu } from "./common";
 import { useT, StringKey, LangContext } from "../i18n";
 import { SKILLS, canonicaliseSkillMentions, findSkillMention } from "../../../shared/skills";
 import { isOffered } from "../../../shared/approval";
-import { LAYER_QUERY, escapeInterrupts } from "../../../shared/escape";
+import { LAYER_QUERY, composing, escapeInterrupts } from "../../../shared/escape";
 import { ChevronDown, Close, fileGlyph } from "./icons";
 
 export { SLASH_COMMANDS, slashCommands } from "../../../shared/commands";
@@ -333,9 +333,8 @@ export function Composer({
 
   const onKeyDown = (e: React.KeyboardEvent) => {
     // Enter during IME composition (Japanese, Chinese, Korean input) commits
-    // the candidate, not the message; 229 is the keyCode Chromium reports
-    // for every key while composing.
-    if (e.nativeEvent.isComposing || e.keyCode === 229) return;
+    // the candidate, not the message.
+    if (composing(e)) return;
     if (atOpen) {
       if (e.key === "ArrowDown") {
         e.preventDefault();

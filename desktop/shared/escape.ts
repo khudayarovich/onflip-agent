@@ -18,5 +18,22 @@ export function escapeInterrupts(
   return event.key === "Escape" && busy && !event.defaultPrevented && !layerOpen;
 }
 
-/** What marks an open layer in the DOM: the dialog and menu backdrops. */
-export const LAYER_QUERY = ".modal-backdrop, .popover-backdrop";
+/**
+ * What marks an open layer in the DOM: the dialog and menu backdrops, and
+ * the two built by hand rather than on Modal and Menu — the update dialog's
+ * and the account popover's.
+ */
+export const LAYER_QUERY = ".modal-backdrop, .popover-backdrop, .update-modal-backdrop, .pop-backdrop";
+
+/**
+ * Whether a key belongs to an input method mid-composition.
+ *
+ * While a Chinese, Japanese or Korean candidate is being chosen, Enter
+ * commits the candidate, not the line. The composer knew; the terminal, the
+ * skill inputs and the browser's address bar ran the command, used the
+ * skill or navigated on the keystroke meant for the IME. 229 is the key
+ * code Chromium reports for every key while composing.
+ */
+export function composing(event: { nativeEvent?: { isComposing?: boolean }; keyCode?: number }): boolean {
+  return Boolean(event.nativeEvent?.isComposing) || event.keyCode === 229;
+}

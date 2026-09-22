@@ -2,6 +2,7 @@ import React, { useContext, useState } from "react";
 import { Modal } from "./common";
 import { LangContext, useT } from "../i18n";
 import { SKILLS, SkillDef } from "../../../shared/skills";
+import { composing } from "../../../shared/escape";
 
 /**
  * The Skill Hub: a gallery of built-in, well-shaped prompts for the jobs a
@@ -54,7 +55,7 @@ export function SkillsModal({
                     setInputs((prev) => ({ ...prev, [skill.id]: e.target.value }))
                   }
                   onKeyDown={(e) => {
-                    if (e.key === "Enter") use(skill);
+                    if (e.key === "Enter" && !composing(e)) use(skill);
                   }}
                 />
               )}

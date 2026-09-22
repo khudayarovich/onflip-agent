@@ -109,10 +109,16 @@ export function Sidebar({
     for (const [key] of byRecency) {
       if (!order.has(key)) order.set(key, firstFill ? position++ : -(order.size + 1));
     }
-    return byRecency
+    const placed = byRecency
       .sort((a, b) => (order.get(a[0]) ?? 0) - (order.get(b[0]) ?? 0))
-      .map(([, group]) => group)
-      .slice(0, 8);
+      .map(([, group]) => group);
+    const shown = placed.slice(0, 8);
+    // The project in use is always shown. Positions are fixed at the first
+    // render, so reopening an older project from "Recent projects" left it
+    // at its old place — ninth, and cut — while it was the one open.
+    const current = status ? placed.find((g) => samePath(g.dir, status.cwd)) : undefined;
+    if (current && !shown.includes(current)) shown[shown.length - 1] = current;
+    return shown;
   })();
 
   const connLabel =
@@ -552,6 +558,16 @@ function AccountBar({
 }): React.ReactElement {
   const t = useT();
   const [open, setOpen] = useState(false);
+  // Escape closes it, as it closes every other menu (common.tsx), and by the
+  // same rule: an Escape a layer above has claimed stays claimed.
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !e.defaultPrevented) setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open]);
   const provider = useProvider();
   // providerGet answers over IPC and the engine's status arrives sooner, so
   // the status is the better first source. Neither is guessed at: "ChatGPT"

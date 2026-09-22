@@ -1284,7 +1284,10 @@ export function translate(
   let text = STRINGS[lang][key] ?? en[key] ?? key;
   if (params) {
     for (const [name, value] of Object.entries(params)) {
-      text = text.replace(`{${name}}`, String(value));
+      // A function, so a `$&` or `$'` in the value (a path, a command, a
+      // regex) is inserted as written instead of being expanded by
+      // String.replace — a string replacement treats both as patterns.
+      text = text.replace(`{${name}}`, () => String(value));
     }
   }
   return text;

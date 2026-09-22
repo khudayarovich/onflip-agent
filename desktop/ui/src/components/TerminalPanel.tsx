@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useT } from "../i18n";
 import { Close, Eraser, Stop, Terminal as TerminalIcon } from "./icons";
 import { parseAnsi, isPlain, type AnsiSpan, type AnsiStyle } from "../../../shared/ansi";
+import { composing } from "../../../shared/escape";
 
 /**
  * The built-in terminal: a docked panel for running commands without leaving
@@ -157,6 +158,7 @@ export function TerminalPanel({
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (composing(e)) return;
     if (e.key === "Enter") {
       e.preventDefault();
       run();

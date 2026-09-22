@@ -1400,7 +1400,10 @@ export function App(): React.ReactElement {
         // The docked browser is a native view composited above the page, so
         // nothing drawn in HTML can cover it — it has to be taken off screen
         // by hand while anything is over it.
-        covered={modal !== null || approval !== null || confirm !== null}
+        // Every dialog, not most of them: the session preview's Switch
+        // button sat under the view on common window widths, and the update
+        // dialog could be hidden behind it.
+        covered={modal !== null || approval !== null || confirm !== null || peek !== null || updateRun !== null}
         frame={browserFrame}
         onClose={() => setBrowserOpen(false)}
       />

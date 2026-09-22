@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import type {
   ConfigView,
   EngineStatus,
@@ -387,14 +387,23 @@ function TelegramSection(): React.ReactElement {
   const [info, setInfo] = useState<TelegramState | null>(null);
   const [token, setToken] = useState("");
   const [ids, setIds] = useState("");
-  const [dirty, setDirty] = useState(false);
+  const [dirty, setDirtyState] = useState(false);
+  // Read by `refresh`, which is subscribed once and would otherwise see the
+  // first render's `false` for ever: every status change — every ten
+  // seconds while the bot is in an error state — overwrote the IDs being
+  // typed.
+  const dirtyRef = useRef(false);
+  const setDirty = (value: boolean) => {
+    dirtyRef.current = value;
+    setDirtyState(value);
+  };
 
   const refresh = () => {
     void window.onflip
       .telegramGet?.()
       .then((next) => {
         setInfo(next);
-        if (!dirty) setIds(next.allowedIds);
+        if (!dirtyRef.current) setIds(next.allowedIds);
       })
       .catch(() => setInfo(null));
   };

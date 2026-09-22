@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { useT } from "../i18n";
 import { ArrowLeft, ArrowRight, Close, Reload, StopCircle } from "./icons";
+import { composing } from "../../../shared/escape";
 
 /**
  * The browser the agent drives.
@@ -335,7 +336,7 @@ export function BrowserPanel({
             onChange={(e) => setTyped(e.target.value)}
             onFocus={(e) => e.currentTarget.select()}
             onKeyDown={(e) => {
-              if (e.key === "Enter") {
+              if (e.key === "Enter" && !composing(e)) {
                 const target = (typed ?? chrome?.url ?? "").trim();
                 if (target) void window.onflip.browserViewGo?.(target);
                 e.currentTarget.blur();

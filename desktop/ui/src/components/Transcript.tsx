@@ -7,6 +7,7 @@ import { LangContext, useT } from "../i18n";
 import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/skills";
 import { ChevronDown, Close, Info, Pencil, Reload, fileGlyph } from "./icons";
 import { CopyButton } from "./CopyButton";
+import { composing } from "../../../shared/escape";
 
 /**
  * One item that cannot be drawn must not take the window with it.
@@ -263,6 +264,7 @@ export function Transcript({
               spellCheck={false}
               onChange={(e) => setQuery(e.target.value)}
               onKeyDown={(e) => {
+                if (composing(e)) return;
                 if (e.key === "Enter") step(e.shiftKey ? -1 : 1);
                 else if (e.key === "Escape") closeSearch();
               }}
