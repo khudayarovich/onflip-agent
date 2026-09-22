@@ -196,8 +196,13 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
     // session and worked on the next start.
     timeout: 30_000,
   });
-  context.on("close", () => {
+  const opened = context;
+  opened.on("close", () => {
+    // Only for the browser this handler belongs to: a replacement may
+    // already be open by the time an old one finishes closing.
+    if (context !== opened && context !== null) return;
     context = null;
+    forgetConversation();
   });
   return context;
 }
@@ -205,6 +210,9 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
 export async function closeBrowser(): Promise<void> {
   const open = context;
   context = null;
+  // The thread went with the browser: a reopened one starts at the chat
+  // root, so the next send must carry the whole transcript, not a delta.
+  forgetConversation();
   if (!open) return;
   try {
     await open.close();
@@ -676,8 +684,14 @@ export async function sendTurn(
       logger.warn("deepseek", "the page died mid-answer; reopening to read the reply", {
         error: message.slice(0, 120),
       });
+      const answering = page.url();
       await closeBrowser();
       page = await chatPage(opts);
+      // The reply is in the conversation, not at the chat root a reopened
+      // browser lands on.
+      if (/\/chat\/s\//.test(answering)) {
+        await page.goto(answering, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+      }
       await page.waitForTimeout(4_000);
       quiet = 0;
     }
@@ -710,6 +724,34 @@ export function currentConversationId(): string | null {
   return conversationId;
 }
 
+function forgetConversation(): void {
+  conversationId = null;
+}
+
+/**
+ * The conversation, but only if the page is actually on it.
+ *
+ * The transport decides from this whether it may send just the new
+ * messages. The id alone was not enough: it outlived the browser — Stop
+ * closes it after five seconds, a crash reopens it — and the reopened page
+ * sits at the chat root, so "continue" went out as the entire content of a
+ * fresh chat with no system prompt and no history, and the model answered
+ * like the plain web app from then on.
+ */
+export function confirmConversation(): string | null {
+  if (!conversationId) return null;
+  const page = context?.pages()[0];
+  if (!page || !page.url().includes(conversationId)) {
+    logger.info("deepseek", "the page is not on the conversation any more; replaying", {
+      conversation: conversationId,
+      url: page ? page.url() : null,
+    });
+    forgetConversation();
+    return null;
+  }
+  return conversationId;
+}
+
 /** Abandon the current thread; the next send starts a new one. */
 export function newChat(): void {
   conversationId = null;
@@ -719,7 +761,8 @@ export function newChat(): void {
 let pendingNewChat = false;
 
 /** Note the conversation from the page's URL, e.g. /a/chat/s/<id>. */
-function noteConversation(url: string): void {
+/** Exported for the tests of this bookkeeping; the driver calls it after every answer. */
+export function noteConversation(url: string): void {
   const m = /\/a\/chat\/s\/([0-9a-f-]{8,})/i.exec(url) || /\/chat\/s\/([0-9a-f-]{8,})/i.exec(url);
   conversationId = m ? m[1] : conversationId;
 }

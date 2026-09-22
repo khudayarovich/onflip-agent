@@ -446,8 +446,13 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
     timeout: 30_000,
   });
   watchApi(context);
-  context.on("close", () => {
+  const opened = context;
+  opened.on("close", () => {
+    // Only for the browser this handler belongs to: a replacement may
+    // already be open by the time an old one finishes closing.
+    if (context !== opened && context !== null) return;
     context = null;
+    forgetConversation();
   });
   return context;
 }
@@ -455,6 +460,9 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
 export async function closeBrowser(): Promise<void> {
   const open = context;
   context = null;
+  // The thread went with the browser: a reopened one starts at the chat
+  // root, so the next send must carry the whole transcript, not a delta.
+  forgetConversation();
   if (!open) return;
   try {
     await open.close();
@@ -1024,10 +1032,21 @@ async function settlePage(page: Page): Promise<void> {
   if (await stopGenerating(page)) return;
   // It would not stop. A reload always does, and losing a half-written
   // answer nobody is waiting for costs nothing.
+  const continuing = conversationId;
   await gotoChat(page);
   await page
     .waitForSelector(COMPOSER, { timeout: 20_000 })
     .catch(() => logger.warn("qwen", "the composer did not come back after settling the page"));
+  // The reload went to a new chat, and the turn about to be typed was built
+  // to append to the old one. Sent here it would be all the new chat ever
+  // hears — no system prompt, no history. Hand it back to be rebuilt whole.
+  if (continuing) {
+    forgetConversation();
+    throw new QwenError(
+      "The page had to be reloaded to stop a stuck answer, which left the conversation. Sending the whole session again in a new one.",
+      "chat-lost"
+    );
+  }
 }
 
 async function pressStop(page: Page, attempt: number): Promise<void> {
@@ -1093,6 +1112,8 @@ export async function sendTurn(
   // turns and with any sub-agent, so a Stop control left behind by an
   // interrupted one would be read as this turn working.
   await settlePage(page);
+  /** This turn's text appends to a live conversation rather than starting one. */
+  const continuing = conversationId !== null;
   const before = await readLast(page);
 
   /**
@@ -1236,6 +1257,16 @@ export async function sendTurn(
   const recoverAndResend = async (why: string, detail: Record<string, unknown>) => {
     resent = true;
     logger.warn("qwen", why, detail);
+    // A reload lands on a new chat. Resending there is right for a turn that
+    // was already the whole transcript; one built to append to a live
+    // conversation would arrive as the only thing the new chat ever hears.
+    if (continuing) {
+      forgetConversation();
+      throw new QwenError(
+        "Qwen had to be reloaded, which left the conversation. Sending the whole session again in a new one.",
+        "chat-lost"
+      );
+    }
     await gotoChat(page);
     await page
       .waitForSelector(COMPOSER, { timeout: 20_000 })
@@ -1508,8 +1539,14 @@ export async function sendTurn(
       logger.warn("qwen", "the page died mid-answer; reopening to read the reply", {
         error: message.slice(0, 120),
       });
+      const answering = page.url();
       await closeBrowser();
       page = await chatPage(opts);
+      // The reply is in the conversation, not at the chat root a reopened
+      // browser lands on.
+      if (conversationIdFrom(answering)) {
+        await page.goto(answering, { waitUntil: "domcontentloaded", timeout: 60_000 }).catch(() => {});
+      }
       await page.waitForTimeout(4_000);
       quiet = 0;
     }
@@ -1538,13 +1575,41 @@ export function currentConversationId(): string | null {
   return conversationId;
 }
 
+function forgetConversation(): void {
+  conversationId = null;
+}
+
+/**
+ * The conversation, but only if the page is actually on it.
+ *
+ * The transport decides from this whether it may send just the new
+ * messages. The id alone was not enough: it outlived the browser — Stop
+ * closes it after five seconds, a crash reopens it — and the reopened page
+ * sits at the chat root, so "continue" went out as the entire content of a
+ * fresh chat with no system prompt and no history.
+ */
+export function confirmConversation(): string | null {
+  if (!conversationId) return null;
+  const page = context?.pages()[0];
+  if (!page || conversationIdFrom(page.url()) !== conversationId) {
+    logger.info("qwen", "the page is not on the conversation any more; replaying", {
+      conversation: conversationId,
+      url: page ? page.url() : null,
+    });
+    forgetConversation();
+    return null;
+  }
+  return conversationId;
+}
+
 /** Abandon the current thread; the next send starts a new one. */
 export function newChat(): void {
   conversationId = null;
   pendingNewChat = true;
 }
 
-function noteConversation(url: string): void {
+/** Exported for the tests of this bookkeeping; the driver calls it after every answer. */
+export function noteConversation(url: string): void {
   const id = conversationIdFrom(url);
   if (id && id !== conversationId) {
     conversationId = id;

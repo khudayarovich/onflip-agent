@@ -6,6 +6,7 @@ import {
   newChat,
   sendTurn,
   currentConversationId,
+  confirmConversation,
   setModel,
   labelFor,
   checkSelectors,
@@ -43,7 +44,9 @@ export class QwenTransport implements Transport {
   async send(history: ChatMessage[], opts: SendOptions): Promise<TransportReply> {
     // A thread that went away — a crash, a reset, a first run — has seen
     // nothing, so the whole transcript goes out again.
-    if (!currentConversationId()) this.sentThrough = 0;
+    // Asked of the page itself, not of a remembered id: see
+    // `confirmConversation`.
+    if (!confirmConversation()) this.sentThrough = 0;
 
     const turn = buildTurnPrompt(history, this.sentThrough, {
       includeSystem: this.sentThrough === 0,
