@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { loadConfig, configDir } from "../config";
 import { cooldownRemainingMs, describeWait } from "./backoff";
 import { logger } from "../log";
+import { openCookieDb, readWithCopy } from "../auth/session";
 
 /**
  * Checks that are *run*, not printed.
@@ -256,15 +257,56 @@ export function inspectEnvironment(): DoctorEnvironment {
   };
 }
 
+const SESSION_COOKIE = "__Secure-next-auth.session-token";
+
+/**
+ * How many live ChatGPT session cookies a Chromium cookie database holds,
+ * or null when it cannot be opened as one.
+ *
+ * Asked of the database rather than read out of the file's bytes. SQLite
+ * keeps the bytes of rows it deletes, so after a sign-out the name was
+ * still in the file and the doctor reported a signed-in profile; and a
+ * session written moments ago can still be in the `-wal` file, which a scan
+ * of the main file never sees. Read from a copy, so a running browser's
+ * lock is no obstacle and nothing of the browser's is ever written.
+ */
+export function liveSessionCookies(db: string, now = Date.now()): number | null {
+  let copy: { file: string; cleanup: () => void } | null = null;
+  try {
+    copy = readWithCopy(db);
+    const database = openCookieDb(copy.file);
+    try {
+      // Chromium keeps time as microseconds since 1601; 0 is a session cookie.
+      const chromeNow = (BigInt(now) + 11_644_473_600_000n) * 1000n;
+      const row = database
+        .prepare(
+          `SELECT COUNT(*) AS n FROM cookies
+           WHERE (name = ? OR name GLOB ?) AND host_key LIKE '%chatgpt.com'
+             AND length(encrypted_value) + length(value) > 0
+             AND (expires_utc = 0 OR expires_utc > ?)`
+        )
+        .get(SESSION_COOKIE, `${SESSION_COOKIE}.*`, chromeNow) as { n: number } | undefined;
+      return Number(row?.n ?? 0);
+    } finally {
+      database.close();
+    }
+  } catch {
+    return null;
+  } finally {
+    copy?.cleanup();
+  }
+}
+
 /**
  * Whether the browser profile on disk holds a ChatGPT session.
  *
- * Read from the profile's cookie database file rather than by launching a
+ * Read from the profile's cookie database rather than by launching a
  * browser: the point of a health check is to be cheap enough to run often.
- * Chromium encrypts the *values*, but the cookie names are stored in plain
- * text in the SQLite file, and a name is all this needs.
+ * When the database cannot be opened here — no sqlite binding for this
+ * runtime, say — the cookie's name in the file's bytes is the fallback:
+ * Chromium encrypts the values, not the names.
  */
-function profileHasSession(): boolean {
+export function profileHasSession(): boolean {
   const profile = path.join(configDir(), "browser-profile");
   // Chromium moved the cookie store under `Network/` around v96, and the
   // layout is otherwise identical on Windows, macOS and Linux. Both are
@@ -278,8 +320,12 @@ function profileHasSession(): boolean {
   for (const db of candidates) {
     try {
       if (!fs.existsSync(db)) continue;
-      // The values are encrypted; the names are not, which is all this needs.
-      if (fs.readFileSync(db).includes("__Secure-next-auth.session-token")) return true;
+      const live = liveSessionCookies(db);
+      if (live !== null) {
+        if (live > 0) return true;
+        continue;
+      }
+      if (fs.readFileSync(db).includes(SESSION_COOKIE)) return true;
     } catch (e) {
       logger.debug("doctor", "could not read a profile cookie store", {
         db,

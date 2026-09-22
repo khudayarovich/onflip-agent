@@ -25,7 +25,7 @@ import { chatGptCookiesFromBinaryCookies, SAFARI_ACCESS_HINT } from "./safari";
  * back to the binding that matches `process.versions.modules`. Node and
  * Electron ABI numbers never collide, so the number alone picks the file.
  */
-function openCookieDb(file: string): Database.Database {
+export function openCookieDb(file: string): Database.Database {
   try {
     return new Database(file, { readonly: true, fileMustExist: true });
   } catch (e) {
@@ -65,7 +65,7 @@ export interface ExtractedToken {
   source: string;
 }
 
-function readWithCopy(dbPath: string): { file: string; cleanup: () => void } {
+export function readWithCopy(dbPath: string): { file: string; cleanup: () => void } {
   const tmp = path.join(
     os.tmpdir(),
     `onflip-cookies-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}.sqlite`
