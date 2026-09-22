@@ -162,3 +162,43 @@ test("real git output keeps its colours and all of its text", { skip: needsBuild
   assert.equal(spans[0].fg, "green");
   assert.equal(spans.find((s) => s.text.includes("deleted")).fg, "red");
 });
+
+test("an escape split between two chunks is held for the second", { skip: needsBuild }, () => {
+  // Output arrives in whatever pieces the pipe hands over: "\x1b[3" ending
+  // one chunk and "1mFAIL" starting the next showed both halves as text and
+  // lost the red.
+  const { parseAnsi } = load();
+  const first = parseAnsi(`ok ${ESC}[3`);
+  assert.equal(text(first.spans), "ok ");
+  assert.equal(first.pending, `${ESC}[3`);
+  const second = parseAnsi(`${first.pending}1mFAIL${ESC}[0m`, first.style);
+  assert.equal(text(second.spans), "FAIL");
+  assert.equal(second.spans[0].fg, "red");
+  assert.equal(second.pending, "");
+
+  // A lone ESC, and a title sequence whose terminator is split, wait too.
+  assert.equal(parseAnsi(`a${ESC}`).pending, ESC);
+  const title = parseAnsi(`b${ESC}]0;build${ESC}`);
+  assert.equal(text(title.spans), "b");
+  assert.equal(text(parseAnsi(`${title.pending}\\c`).spans), "c");
+});
+
+test("but a sequence that never finishes does not swallow what follows", { skip: needsBuild }, () => {
+  // The false-positive half: holding back has a limit.
+  const { parseAnsi } = load();
+  const out = parseAnsi(`${ESC}]0;` + "x".repeat(600));
+  assert.equal(out.pending, "");
+  assert.equal(parseAnsi("plain output").pending, "");
+  assert.equal(parseAnsi(`done ${ESC}[0m`).pending, "");
+});
+
+test("the terminal carries half an escape over, and follows output only from the bottom", { skip: needsBuild }, () => {
+  // The panel is bundled and cannot be driven here; its two call sites are
+  // checked in the source. The scroll effect ran after every render and
+  // pulled someone reading further up back to the bottom.
+  const panel = fs.readFileSync(path.join(__dirname, "..", "ui", "src", "components", "TerminalPanel.tsx"), "utf8");
+  assert.match(panel, /parseAnsi\(clean, styleRef\.current\);[\s\S]{0,200}pendingRef\.current = pending;/);
+  assert.match(panel, /const clean = \(pendingRef\.current \+ d\.text\)/);
+  assert.match(panel, /if \(el && pinnedRef\.current\) el\.scrollTop = el\.scrollHeight;/);
+  assert.match(panel, /onScroll=\{onScroll\}/);
+});

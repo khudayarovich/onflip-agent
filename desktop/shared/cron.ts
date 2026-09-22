@@ -161,12 +161,18 @@ const HORIZON_DAYS = 366 * 4;
  * after it rather than the same one again.
  */
 export function nextRun(fields: CronFields, from: Date = new Date()): Date | null {
-  const at = new Date(from.getTime());
-  at.setSeconds(0, 0);
-  at.setMinutes(at.getMinutes() + 1);
+  // Stepped in epoch time, read in local time. Setting a local minute or
+  // hour during the hour that repeats when summer time ends resolves to the
+  // first of the two, an hour earlier — so "the next run" came out before
+  // `from`, and a schedule could fire twice or at once. Every step below
+  // moves strictly forward, whatever the clock on the wall does.
+  const MINUTE = 60_000;
+  let t = Math.floor(from.getTime() / MINUTE) * MINUTE + MINUTE;
+  const limit = from.getTime() + HORIZON_DAYS * 24 * 60 * MINUTE;
+  const forward = (next: number) => (next > t ? next : t + MINUTE);
 
-  const limit = new Date(from.getTime() + HORIZON_DAYS * 24 * 60 * 60 * 1000);
-  while (at <= limit) {
+  while (t <= limit) {
+    const at = new Date(t);
     // Skipping a whole day at a time when the date cannot match keeps the
     // worst case — a once-a-year schedule — to a few hundred steps instead
     // of half a million.
@@ -174,16 +180,17 @@ export function nextRun(fields: CronFields, from: Date = new Date()): Date | nul
     const dow = fields.dayOfWeek.includes(at.getDay());
     const dayOk = fields.bothDayFields ? dom || dow : dom && dow;
     if (!dayOk || !fields.month.includes(at.getMonth() + 1)) {
-      at.setDate(at.getDate() + 1);
-      at.setHours(0, 0, 0, 0);
+      at.setHours(24, 0, 0, 0);
+      t = forward(at.getTime());
       continue;
     }
     if (!fields.hour.includes(at.getHours())) {
-      at.setHours(at.getHours() + 1, 0, 0, 0);
+      at.setMinutes(60, 0, 0);
+      t = forward(at.getTime());
       continue;
     }
     if (!fields.minute.includes(at.getMinutes())) {
-      at.setMinutes(at.getMinutes() + 1, 0, 0);
+      t += MINUTE;
       continue;
     }
     return at;

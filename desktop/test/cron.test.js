@@ -197,3 +197,27 @@ test("a schedule named after Object.prototype is an ordinary bad schedule", { sk
   }
   assert.deepEqual(parseCron("@daily").hour, [0], "the real shorthands still expand");
 });
+
+test("the next run comes after 'from', even in the hour that repeats in autumn", { skip: needsBuild }, () => {
+  // Setting a local minute during the repeated hour resolves to the first
+  // of the two: "* * * * *" from 01:10:30 EST came back 59.5 minutes earlier.
+  const { parseCron, nextRun } = load();
+  const saved = process.env.TZ;
+  process.env.TZ = "America/New_York";
+  try {
+    // 2026-11-01: 01:00-01:59 happens twice; 06:10:30Z is the second 01:10:30.
+    for (const [expr, iso] of [
+      ["* * * * *", "2026-11-01T06:10:30Z"],
+      ["*/15 * * * *", "2026-11-01T06:10:00Z"],
+      ["5 * * * *", "2026-11-01T06:10:00Z"],
+    ]) {
+      const from = new Date(iso);
+      const next = nextRun(parseCron(expr), from);
+      assert.ok(next > from, `${expr}: ${next?.toISOString()} is not after ${iso}`);
+    }
+    assert.equal(nextRun(parseCron("* * * * *"), new Date("2026-11-01T06:10:30Z")).toISOString(), "2026-11-01T06:11:00.000Z");
+  } finally {
+    if (saved === undefined) delete process.env.TZ;
+    else process.env.TZ = saved;
+  }
+});

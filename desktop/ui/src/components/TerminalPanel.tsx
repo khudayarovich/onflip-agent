@@ -73,6 +73,10 @@ export function TerminalPanel({
   const inputRef = useRef<HTMLInputElement>(null);
   /** Colour left open by the previous chunk of output. */
   const styleRef = useRef<AnsiStyle>({});
+  /** An escape sequence the previous chunk ended in the middle of. */
+  const pendingRef = useRef("");
+  /** Whether the view is at the bottom, and so should follow new output. */
+  const pinnedRef = useRef(true);
 
   const append = useCallback(
     (kind: TermLine["kind"], text: string, spans?: AnsiSpan[]) => {
@@ -91,9 +95,11 @@ export function TerminalPanel({
       // would drop the colour from every line but the first.
       // A bare carriage return is a progress bar redrawing its line; without
       // a newline after it there is nothing here to redraw, so it goes.
-      const clean = d.text.replace(/\r(?!\n)/g, "");
-      const { spans, style } = parseAnsi(clean, styleRef.current);
+      const clean = (pendingRef.current + d.text).replace(/\r(?!\n)/g, "");
+      const { spans, style, pending } = parseAnsi(clean, styleRef.current);
       styleRef.current = style;
+      // Half an escape sequence waits for the chunk that finishes it.
+      pendingRef.current = pending;
       append(d.kind === "err" ? "err" : "out", spans.map((x) => x.text).join(""), spans);
     });
     const offExit = window.onflip.onTermExit((d) => {
@@ -107,11 +113,17 @@ export function TerminalPanel({
     };
   }, [append]);
 
-  // Follow output; focus the input whenever the panel opens.
+  // Follow output — but only from the bottom. This ran after every render,
+  // so any output (or a keystroke in the input) yanked someone reading
+  // further up straight back down.
   useEffect(() => {
     const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
+    if (el && pinnedRef.current) el.scrollTop = el.scrollHeight;
   });
+  const onScroll = () => {
+    const el = scrollRef.current;
+    if (el) pinnedRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+  };
   useEffect(() => {
     if (open) inputRef.current?.focus();
   }, [open]);
@@ -128,8 +140,12 @@ export function TerminalPanel({
     if (command === "clear" || command === "cls") {
       setLines([]);
       styleRef.current = {};
+      pendingRef.current = "";
+      pinnedRef.current = true;
       return;
     }
+    // Running something is asking to see what it prints.
+    pinnedRef.current = true;
     append("cmd", command);
     setRunning(true);
     void window.onflip.termRun(command, cwd).then((r) => {
@@ -183,7 +199,7 @@ export function TerminalPanel({
           <Close size={13} />
         </button>
       </div>
-      <div className="term-out" ref={scrollRef} onClick={() => inputRef.current?.focus()}>
+      <div className="term-out" ref={scrollRef} onScroll={onScroll} onClick={() => inputRef.current?.focus()}>
         {lines.length === 0 && <div className="term-hint">{t("termHint")}</div>}
         {lines.map((line) => (
           <pre key={line.id} className={`term-line ${line.kind}`}>

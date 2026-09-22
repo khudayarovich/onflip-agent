@@ -158,8 +158,14 @@ const OSC = /\u001b\][^\u0007\u001b]*(?:\u0007|\u001b\\)/g;
 export function parseAnsi(
   text: string,
   initial: AnsiStyle = {}
-): { spans: AnsiSpan[]; style: AnsiStyle } {
-  const cleaned = text.replace(OSC, "");
+): { spans: AnsiSpan[]; style: AnsiStyle; pending: string } {
+  // An escape the chunk ends in the middle of belongs to the next chunk.
+  // Output arrives in whatever pieces the pipe hands over, and "\x1b[3" at
+  // the end of one with "1mFAIL" at the start of the next showed both halves
+  // as text and lost the red.
+  const cut = unfinishedEscape(text);
+  const pending = cut === -1 ? "" : text.slice(cut);
+  const cleaned = (cut === -1 ? text : text.slice(0, cut)).replace(OSC, "");
   const spans: AnsiSpan[] = [];
   let style: AnsiStyle = { ...initial };
   let at = 0;
@@ -187,7 +193,23 @@ export function parseAnsi(
   // Any escape this does not understand is removed rather than shown: a
   // stray "[2J" in the middle of a sentence is worse than nothing.
   for (const span of spans) span.text = span.text.replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "");
-  return { spans: spans.filter((s) => s.text !== ""), style };
+  return { spans: spans.filter((s) => s.text !== ""), style, pending };
+}
+
+/**
+ * Where an escape sequence the text ends in the middle of begins, or -1.
+ *
+ * An OSC still waiting for its terminator (BEL, or ESC \ — which can itself
+ * be split), or an ESC alone or with CSI parameters and no final byte. Held
+ * back at most a few hundred characters: a stray ESC ] that is never closed
+ * must not swallow everything a program prints after it.
+ */
+function unfinishedEscape(text: string): number {
+  const osc = text.lastIndexOf("\u001b]");
+  if (osc !== -1 && text.length - osc <= 512 && !/\u0007|\u001b\\/.test(text.slice(osc))) return osc;
+  const esc = text.lastIndexOf("\u001b");
+  if (esc !== -1 && /^\u001b(\[[0-9;?]*[ -/]*)?$/.test(text.slice(esc))) return esc;
+  return -1;
 }
 
 function sameStyle(a: AnsiStyle, b: AnsiStyle): boolean {
