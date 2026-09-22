@@ -23,6 +23,7 @@ import {
   SEND_QUERY,
   FILE_INPUT_QUERY,
   ANY_MESSAGE_QUERY,
+  HISTORY_QUERY,
   TOAST_QUERY,
   joined,
 } from "./selectors";
@@ -1128,12 +1129,28 @@ async function capturePageState(p: Page): Promise<PageState | null> {
     fileInput: FILE_INPUT_QUERY,
     message: ANY_MESSAGE_QUERY,
     toast: TOAST_QUERY,
+    history: HISTORY_QUERY,
   };
   try {
     return (await p.evaluate(PAGE_CENSUS, groups)) as PageState;
   } catch {
     return null;
   }
+}
+
+/**
+ * Does the census show ChatGPT's login wall?
+ *
+ * The words alone are not enough: the sample is the start of the page's
+ * text, and on a signed-in page that is the sidebar's chat titles. A chat
+ * called "Log in and sign up flow" failed a send as "signed out" — the one
+ * failure a retry is never attempted for — on an account that was fine.
+ * Only a signed-in page links to conversations of its own, so a page with
+ * any such link is not the wall, whatever its titles say.
+ */
+export function looksSignedOut(state: Pick<PageState, "text" | "matches">): boolean {
+  if ((state.matches?.history ?? 0) > 0) return false;
+  return /\bLog in\b[\s\S]{0,120}\bSign up\b/i.test(state.text);
 }
 
 /** The census, without the page's own words, for a log line. */
@@ -1178,6 +1195,25 @@ export class ChatGPTBrowserError extends Error {
 const SIGNED_OUT_MESSAGE =
   "No ChatGPT session. Sign in from the account menu in OnFlip, or sign in to ChatGPT in Firefox and OnFlip will pick that session up.";
 
+/**
+ * Is this page Cloudflare's interstitial rather than ChatGPT?
+ *
+ * Cloudflare's page is served in the browser's own language, so the wording
+ * is matched in several — an English-only pattern missed it for anybody not
+ * browsing in English, and the turn then failed with a timeout instead of
+ * the one sentence that explains what to do. But the first 400 characters
+ * of a signed-in ChatGPT page are the sidebar's chat titles, and a chat
+ * called "Cloudflare 'Verify you are human' loop" failed every turn with a
+ * challenge that was not there. The interstitial replaces the app, so the
+ * wording counts only on a page without ChatGPT's own shell.
+ */
+export const CHALLENGE_PROBE = `(() => {
+  const text = ((document.body && document.body.innerText) || "").slice(0, 400);
+  const worded = /just a moment|checking your browser|verify you are human|проверка браузера|подтвердите, что вы человек|минуточку/i.test(text);
+  const app = document.querySelector("nav, #prompt-textarea, [data-message-author-role]");
+  return worded && !app;
+})()`;
+
 async function assertLoggedIn(p: Page): Promise<void> {
   const url = p.url();
   if (/\/auth\/login|\/auth\/signin|openai\.com\/auth/.test(url)) {
@@ -1185,16 +1221,7 @@ async function assertLoggedIn(p: Page): Promise<void> {
       "ChatGPT is asking you to log in — the stored session has expired. Sign in from the account menu in OnFlip, or sign in to ChatGPT in Firefox and OnFlip will pick that session up."
     );
   }
-  const body = await p.locator("body").innerText().catch(() => "");
-  // Cloudflare's interstitial is served in the browser's own language, so an
-  // English-only pattern misses it for anybody not browsing in English - and
-  // the turn then fails with a timeout instead of the one sentence that
-  // explains what to do about it.
-  if (
-    /just a moment|checking your browser|verify you are human|проверка браузера|подтвердите, что вы человек|минуточку/i.test(
-      body.slice(0, 400)
-    )
-  ) {
+  if (await p.evaluate(CHALLENGE_PROBE).catch(() => false)) {
     throw new ChatGPTBrowserError(
       "Cloudflare is challenging the browser OnFlip drives. It usually clears on its own within a few minutes; if it does not, sign out and back in from the account menu."
     );
@@ -2742,24 +2769,37 @@ async function submitMessage(
  * it is the one send failure that a retry makes worse. Read from the alert
  * region first, then the visible page, and returned trimmed for the log.
  */
-const THROTTLE_NOTICE =
+export const THROTTLE_NOTICE =
   /too many requests|sending (?:messages|requests) too (?:quickly|fast|often)|slow down|rate.?limit|слишком (?:часто|много запросов)|подождите несколько минут|временно ограничен|juda (?:tez|ko'p so'rov)|bir necha daqiqa kutib/i;
+
+/**
+ * The page's own words — without the parts of the page that are the user's.
+ *
+ * The body's text begins with the sidebar's chat titles and carries the
+ * conversation and the composer, so a chat once titled "Express rate
+ * limiting middleware", a reply about a rate limiter, or the unsent message
+ * "add rate limiting to the API" still sitting in the composer read as
+ * ChatGPT saying "rate limit" — and a submit stumble became a throttle and a
+ * three-minute cooldown. Those regions are left out; notices are what is
+ * left.
+ */
+export const PAGE_NOTICE_TEXT = `(() => {
+  const mine = "nav, aside, form, textarea, [contenteditable], [data-message-author-role]";
+  const alerts = [...document.querySelectorAll("[role='alert'], [role='status'], [data-sonner-toast], .toast")]
+    .filter((el) => !el.closest(mine))
+    .map((el) => (el.innerText || "").trim())
+    .filter(Boolean);
+  const copy = document.body ? document.body.cloneNode(true) : null;
+  if (copy) copy.querySelectorAll(mine).forEach((el) => el.remove());
+  const body = copy ? (copy.innerText || copy.textContent || "").slice(0, 6000) : "";
+  return alerts.join("\\n") + "\\n" + body;
+})()`;
 
 async function throttleNotice(p: Page): Promise<string | null> {
   if (lastThrottle && Date.now() - lastThrottle.at < 90_000) {
     return `HTTP 429 from ${lastThrottle.url}`;
   }
-  const text = (await p
-    .evaluate(
-      `(() => {
-        const alerts = [...document.querySelectorAll("[role='alert'], [role='status'], [data-sonner-toast], .toast")]
-          .map((el) => (el.innerText || "").trim())
-          .filter(Boolean);
-        const body = ((document.body && document.body.innerText) || "").slice(0, 6000);
-        return alerts.join("\\n") + "\\n" + body;
-      })()`
-    )
-    .catch(() => "")) as string;
+  const text = (await p.evaluate(PAGE_NOTICE_TEXT).catch(() => "")) as string;
   const match = THROTTLE_NOTICE.exec(text);
   if (!match) return null;
   const at = Math.max(0, (match.index ?? 0) - 80);
@@ -3634,7 +3674,7 @@ export async function waitForReply(
     // Retrying into that is pointless; only signing in fixes it.
     if (
       pageState &&
-      (/\/uc\//.test(pageState.url) || /\bLog in\b[\s\S]{0,80}\bSign up\b/i.test(pageState.text))
+      (/\/uc\//.test(pageState.url) || looksSignedOut(pageState))
     ) {
       throw new ChatGPTBrowserError(
         "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. Sign in from the account menu (or sign in again from the account menu), then send again.",
@@ -4342,7 +4382,7 @@ export async function checkSelectorsLive(
     const missing: string[] = [];
     if (!state.matches.composer) missing.push("the message box");
     if (!state.matches.send && !state.matches.stop) missing.push("the send control");
-    const signedOut = /\bLog in\b[\s\S]{0,120}\bSign up\b/i.test(state.text);
+    const signedOut = looksSignedOut(state);
 
     logger.info("browser", "checked the selectors against the live page", {
       matches: state.matches,

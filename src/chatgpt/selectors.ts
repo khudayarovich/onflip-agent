@@ -119,3 +119,10 @@ export const TOAST_QUERY = "[role='alert'], [role='status'], [data-sonner-toast]
 
 /** A message node of either role, used to tell a thread from a login wall. */
 export const ANY_MESSAGE_QUERY = "[data-message-author-role]";
+
+/**
+ * A link to one of the account's own conversations. Only a signed-in page
+ * has any, so it tells a login wall from a sidebar that merely holds a chat
+ * whose title says "Log in … Sign up".
+ */
+export const HISTORY_QUERY = "a[href*='/c/']";
