@@ -16,6 +16,7 @@ import {
 } from "./system";
 import { logger } from "../log";
 import { pruneToolResults } from "./prune";
+import { recentWorkingSet, workingSetExcerpts, workingSetHint } from "./working-set";
 import {
   classifyFailure,
   failureCodeOf,
@@ -108,6 +109,11 @@ export interface AgentOptions {
    * reported exactly that way.
    */
   remote?: boolean;
+  /**
+   * The working directory, so the files a session has worked on can be named
+   * the way the model names them. Absolute paths are used without it.
+   */
+  cwd?: string;
 }
 
 /** Why a turn stopped, for the log and for the stats over it. */
@@ -146,6 +152,19 @@ const MAX_NO_BLOCK_NUDGES = 2;
 const MAX_NUDGES_PER_TURN = 6;
 /** Replies ChatGPT reported as cut off that are re-requested before being used as they are. */
 const MAX_TRUNCATION_NUDGES = 2;
+
+/**
+ * The message count at which a transcript is compacted whatever its size.
+ *
+ * A backstop against a runaway of tiny messages, never the normal trigger:
+ * the character budget is sized per service and plan, and it is what should
+ * decide. At 60 — the default from before there was a character budget — it
+ * decided instead. Measured on a real session, six of seven compactions fired
+ * at exactly 60–61 messages, about thirty tool steps, with the character
+ * budget far from spent; each one replaced everything the model had read
+ * with a paragraph, so the next request started by reading it all again.
+ */
+export const COMPACT_AFTER_MESSAGES_BACKSTOP = 240;
 
 /** Steps granted past the budget when the tail of the turn was productive. */
 export const STEP_EXTENSION = 20;
@@ -420,11 +439,18 @@ export async function runTurn(
       }
       if (text.trim()) events.onNarration?.(text.trim());
 
+      // Before any `read` runs: a whole file the model can no longer see
+      // must be sent whole again, not as a difference from it.
+      syncFullReads(opts.session, history, opts.compactAfterChars ?? COMPOSER_CEILING_CHARS);
+
       const resultBlocks: string[] = [];
       // For the step log: did anything land, and did anything repeat a
       // failure it had already been shown?
       let anyLanded = false;
       let sawRepeat = false;
+      /** Every call was a file edit, and every one of them applied. */
+      let onlyEditsThatLanded = true;
+      const fullReadPaths: string[] = [];
       for (const call of realCalls) {
         if (opts.signal.aborted) {
           // Keep whatever already ran so the transcript stays truthful.
@@ -463,6 +489,10 @@ export async function runTurn(
         executedCalls++;
         if (result.denied) deniedCalls++;
         if (!result.error && !result.denied) anyLanded = true;
+        if (result.fullRead) fullReadPaths.push(result.fullRead);
+        if (!CLOSES_WITH_EDITS.has(canonicalName(opts.tools, call.tool)) || result.error || result.denied) {
+          onlyEditsThatLanded = false;
+        }
 
         // Watching a model send the same failing call four times in a row is
         // watching it spend the step budget on a result it has already been
@@ -494,10 +524,20 @@ export async function runTurn(
         resultBlocks.push(formatToolResult(call, output, Boolean(result.error)));
       }
 
-      // A closing block beside tool calls closes nothing: the model wrote
-      // its summary before seeing what the calls returned. The calls ran;
-      // the block is named so it is sent again, alone, once they are in.
-      if (terminal) {
+      // A closing block beside tool calls usually closes nothing: the model
+      // wrote its summary before seeing what the calls returned. One shape is
+      // the exception, because there is nothing left to see — a `done` after
+      // file edits that all applied. An edit either lands or fails; if every
+      // one landed, the summary written before the results is still true,
+      // and making the model send it again alone is a whole round trip spent
+      // on ceremony at the end of every small change. Anything that returns
+      // information (a read, a command, a search) still has to be read first.
+      const closesNow =
+        terminal !== null &&
+        terminalName(terminal) === "done" &&
+        onlyEditsThatLanded &&
+        openTodoCount(opts.session.todos) === 0;
+      if (terminal && !closesNow) {
         const name = terminalName(terminal);
         logger.info("protocol", "closing block ignored beside tool calls", { block: name });
         resultBlocks.push(
@@ -506,9 +546,24 @@ export async function runTurn(
         );
       }
 
-      history.push(
-        newMessage("user", resultBlocks.join("\n\n"), { toolName: realCalls[0].tool })
-      );
+      const results = newMessage("user", resultBlocks.join("\n\n"), { toolName: realCalls[0].tool });
+      history.push(results);
+      // The message now carrying each whole-file read, so a later read of
+      // the same file can be answered with what changed since.
+      for (const file of fullReadPaths) {
+        const read = opts.session.fullReads?.get(file);
+        if (read && !read.messageId) read.messageId = results.id;
+      }
+
+      if (closesNow && terminal) {
+        const summary = stringArgument(terminal.arguments.summary);
+        const final = composeFinal(summary) || "Done.";
+        logger.info("protocol", "done accepted beside edits that all applied", {
+          calls: realCalls.map((c) => c.tool),
+        });
+        events.onFinal?.(final, { kind: "done", openTodos: 0 });
+        return finish("done", final, iteration);
+      }
       // A sub-agent takes the conversation with it: it runs in a chat of its
       // own and leaves this one abandoned, so the next send opens a fresh
       // thread that has never heard the protocol. The system prompt goes
@@ -862,7 +917,8 @@ async function sendWithRetry(
       opts.tools.list.map((t) => t.name),
       listJobs(),
       lastUserRequest(history, 200),
-      opts.remote
+      opts.remote,
+      workingSetLine(opts)
     );
   const sendOptions: SendOptions = {
     model: opts.model,
@@ -980,6 +1036,78 @@ function terminalNameOf(tools: ToolRegistry, name: string): TerminalToolName | n
       ? tools.canonical(name)
       : name.trim().toLowerCase().replace(/[-\s]/g, "_");
   return isTerminalTool(canon) ? canon : null;
+}
+
+/**
+ * The calls a `done` in the same reply may follow.
+ *
+ * File changes whose whole outcome is "applied" or an error, plus the task
+ * list, which a model finishing up marks complete in the same breath. Nothing
+ * here returns information the summary could have needed to see first.
+ */
+const CLOSES_WITH_EDITS = new Set(["edit", "multi_edit", "patch", "write", "todo_write"]);
+
+/** The registry's own name for a tool, or the spelling folded without one. */
+function canonicalName(tools: ToolRegistry, name: string): string {
+  return typeof tools.canonical === "function"
+    ? tools.canonical(name)
+    : name.trim().toLowerCase().replace(/[-\s]/g, "_");
+}
+
+/**
+ * Forget whole-file reads the model can no longer see.
+ *
+ * A second read of a file is answered with what changed since the first
+ * (`rereadDelta` in the fs tools), which is only honest while that first
+ * read is actually in front of the model. It stops being so when its message
+ * is trimmed, compacted away or rewound out of the history — and, before any
+ * of that, when enough has been said since that a conversation running near
+ * its window may have let it fall off the front. That distance is measured
+ * with trimmed results at their original size, because trimming shortens
+ * what OnFlip would replay, not what the live conversation already holds.
+ *
+ * An entry with no message yet is from a step that never filed its results
+ * (it was interrupted), and is dropped too.
+ */
+export function syncFullReads(
+  session: SessionState | undefined,
+  history: ChatMessage[],
+  maxDistance: number
+): void {
+  const reads = session?.fullReads;
+  if (!reads || reads.size === 0) return;
+  const index = new Map<string, number>();
+  history.forEach((m, i) => index.set(m.id, i));
+  const since = new Array<number>(history.length + 1).fill(0);
+  for (let i = history.length - 1; i >= 0; i--) {
+    since[i] = since[i + 1] + history[i].content.length + (history[i].prunedChars ?? 0);
+  }
+  for (const [file, read] of reads) {
+    const at = read.messageId ? index.get(read.messageId) : undefined;
+    if (at === undefined || history[at].prunedChars || since[at + 1] > maxDistance) {
+      reads.delete(file);
+    }
+  }
+}
+
+/**
+ * The working-set paragraph for a full reminder, or "".
+ *
+ * Built from the session's own change records and the files on disk, so it
+ * costs a few small reads and no request. It must never be the reason a
+ * send fails, so any error leaves it out.
+ */
+function workingSetLine(opts: AgentOptions): string {
+  try {
+    const snapshots = opts.session?.snapshots ?? [];
+    if (snapshots.length === 0) return "";
+    return workingSetHint(recentWorkingSet(snapshots), opts.cwd ?? process.cwd());
+  } catch (e) {
+    logger.debug("agent", "could not describe the working set", {
+      error: e instanceof Error ? e.message : String(e),
+    });
+    return "";
+  }
 }
 
 /** An argument as text, whatever shape the model gave it. */
@@ -1602,8 +1730,32 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<Chat
   const tail = rest.slice(-8);
   history.length = 0;
   if (systemMessage) history.push(systemMessage);
+  // Every whole-file read went with the transcript; none can be answered
+  // with a difference any more.
+  opts.session?.fullReads?.clear();
 
   if (summary) {
+    // The lines the session was changing, as they are on disk now. Claude
+    // Code re-attaches recently read files after compacting for the same
+    // reason: the next step is almost always about them, and without them
+    // the first thing a compacted session did was read everything again —
+    // measured, the follow-up after a compaction re-read the same file five
+    // times. A sixth of the budget at most, so the brief still leaves room.
+    let restored = "";
+    try {
+      const snapshots = opts.session?.snapshots ?? [];
+      if (snapshots.length) {
+        restored = workingSetExcerpts(
+          recentWorkingSet(snapshots),
+          opts.cwd ?? process.cwd(),
+          Math.min(12_000, Math.max(3_000, Math.floor(budget * 0.15)))
+        );
+      }
+    } catch (e) {
+      logger.debug("agent", "could not restore the working set", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
     history.push(
       newMessage(
         "user",
@@ -1622,14 +1774,23 @@ async function compact(history: ChatMessage[], opts: AgentOptions): Promise<Chat
               ]
             : []),
           "",
+          ...(restored
+            ? [
+                "Where you were working — the lines you changed most recently, exactly as they read on disk now. Edit from these directly:",
+                "",
+                restored,
+                "",
+              ]
+            : []),
           // Live, straight after a compaction: three `multi_edit` calls in
           // one reply, against three files, every `old_string` written from
           // memory of a read that is no longer in this conversation. All
           // three failed with "not found", and the turn spent a round trip
           // re-reading what it had just been told it no longer had. The
-          // brief cannot carry the file contents — that is the whole point
-          // of it — so it has to carry the fact that they are gone.
-          "The file contents you saw earlier are NOT in this conversation any more. Before editing any file, read it again: an `old_string` written from memory will not match.",
+          // brief cannot carry whole files, so it has to say they are gone —
+          // and, since "read it again" was taken as "read everything again",
+          // say how little to read.
+          `${restored ? "Every other" : "The"} file content you saw earlier is gone from this conversation. Before editing anything else, read just the part you need — grep for it, then read with offset and limit; an \`old_string\` written from memory will not match. Do not re-survey the project: the notes above say what it is.`,
           "",
           // The compacted transcript also loses every worked example of the
           // block syntax, and a session in the field showed what that costs:

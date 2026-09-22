@@ -4,6 +4,7 @@ import { ToolDefinition, ToolContext, FileSnapshot, FileRevision } from "../type
 import { err, ok, denied, asNumber, asBool, asArray, resolveIn, relative, isProbablyBinary, IGNORED_DIRS } from "./util";
 import { applyPatch } from "./patch-apply";
 import { captureFileRevision, sameFileRevision } from "./revision";
+import { changedRanges, describeRanges, excerpt, splitLines } from "../agent/lines";
 
 const MAX_READ_BYTES = 400_000;
 const MAX_READ_LINES = 2_000;
@@ -159,6 +160,34 @@ function snapshot(
   ctx.session.snapshots.push(entry);
 }
 
+/**
+ * The lines a change touched, as they read now, for the tool's result.
+ *
+ * "Applied 1 replacement" was the whole answer, so the model read the file
+ * again to see what it had done — measured on a real session, an edit was
+ * followed by a read of the same file more often than by anything else, and
+ * each of those reads was a whole file against a context budget that a few
+ * of them used up. With the changed lines in the result, the next edit can be
+ * written from them. Kept under the size at which old results are trimmed
+ * (`PRUNE_ABOVE_CHARS`), so it survives as long as the result itself does.
+ */
+export function editedExcerpt(before: string, after: string): string {
+  const ranges = changedRanges(before, after);
+  if (ranges.length === 0) return "";
+  const lines = splitLines(after);
+  const shown = excerpt(lines, ranges, { context: 3, maxLines: 40, maxChars: 1_500 });
+  if (!shown.text) return "";
+  return [
+    `Lines ${describeRanges(shown.shown)} of ${lines.length} now read:`,
+    shown.text,
+    shown.truncated && shown.resumeAt
+      ? `… more of the change continues — read from line ${shown.resumeAt} to see it.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
 function changedDuringApproval(file: string, before: FileRevision): boolean {
   try {
     const current = captureFileRevision(file);
@@ -202,13 +231,13 @@ function staleReadWarning(ctx: ToolContext, file: string): string | null {
 export const readTool: ToolDefinition = {
   name: "read",
   description:
-    "Read a file from the filesystem. Returns the contents with line numbers. Use offset/limit for large files. Always read a file before editing it.",
+    "Read a file, with line numbers; offset/limit for part of it. Reading a whole file again returns only what changed since.",
   parameters: {
     type: "object",
     properties: {
       path: { type: "string", description: "File path, absolute or relative to the working directory" },
-      offset: { type: "number", description: "1-based line to start from (optional)" },
-      limit: { type: "number", description: "Maximum lines to return (optional, default and maximum 2000)" },
+      offset: { type: "number", description: "1-based line to start from" },
+      limit: { type: "number", description: "Lines to return (default and maximum 2000)" },
     },
     required: ["path"],
   },
@@ -282,6 +311,21 @@ export const readTool: ToolDefinition = {
       });
     }
 
+    // The same whole file again, while the first read is still in front of
+    // the model: send what changed rather than all of it. An explicit
+    // offset or limit always gets the lines themselves.
+    if (!requestedSlice) {
+      const prior = ctx.session.fullReads?.get(file);
+      if (prior?.messageId) {
+        const delta = rereadDelta(prior.content, text, relative(ctx.cwd, file));
+        if (delta) {
+          return ok(delta, {
+            title: `${relative(ctx.cwd, file)} (${lines.length} lines, since your last read)`,
+          });
+        }
+      }
+    }
+
     const width = String(end).length;
     const body: string[] = [];
     for (let i = offset; i <= end; i++) {
@@ -292,12 +336,58 @@ export const readTool: ToolDefinition = {
       body.push(`… ${lines.length - end} more lines (use offset ${end + 1} to continue)`);
     }
 
-    return ok(body.join("\n"), {
-      title: `${relative(ctx.cwd, file)} (${lines.length} lines)`,
-      display: { kind: "text", lines: body, lang: path.extname(file).slice(1) },
-    });
+    // Only a read that carried every line can stand in for the file later.
+    const whole = !requestedSlice && !truncated && ctx.session.fullReads !== undefined;
+    if (whole) ctx.session.fullReads!.set(file, { content: text });
+    return {
+      ...ok(body.join("\n"), {
+        title: `${relative(ctx.cwd, file)} (${lines.length} lines)`,
+        display: { kind: "text", lines: body, lang: path.extname(file).slice(1) },
+      }),
+      ...(whole ? { fullRead: file } : {}),
+    };
   },
 };
+
+/**
+ * Past this share of the file, a list of changed regions is harder to use
+ * than the file: send the whole thing again instead.
+ */
+const DELTA_MAX_SHARE = 0.4;
+/** And past this many lines of excerpt, whatever the share. */
+const DELTA_MAX_LINES = 150;
+
+/**
+ * A second whole-file read, answered against the first.
+ *
+ * Whole-file reads of files the model had already read were the largest
+ * single cost in the sessions measured: the same 600-line file, 15–22k
+ * characters a time, five times in one follow-up, against a 40k budget —
+ * which is what kept forcing the compaction that then made it read the file
+ * yet again. The first read is still in the conversation when this runs
+ * (the loop only keeps an entry while its message is), so unchanged lines
+ * need not be sent twice.
+ *
+ * Null when the whole file is the better answer: the changes are too many,
+ * or the file is small enough that the difference would save nothing.
+ */
+export function rereadDelta(before: string, after: string, name: string): string | null {
+  const lines = splitLines(after);
+  if (before === after) {
+    return [
+      `${name} (${lines.length} lines) is unchanged since you read the whole file earlier in this conversation — that result is still its exact current text, so work from it.`,
+      "To see some lines again anyway, read them with offset and limit.",
+    ].join(" ");
+  }
+  const ranges = changedRanges(before, after);
+  const shown = excerpt(lines, ranges, { context: 3, maxLines: DELTA_MAX_LINES, maxChars: 12_000 });
+  if (shown.truncated || !shown.text) return null;
+  if (shown.lineCount > lines.length * DELTA_MAX_SHARE) return null;
+  return [
+    `${name} (${lines.length} lines) has changed since you read the whole file earlier in this conversation. Everything outside the lines below is exactly as that read showed, though line numbers after a change have shifted. The changed parts, as they read now:`,
+    shown.text,
+  ].join("\n");
+}
 
 // ---------------------------------------------------------------------------
 // write
@@ -306,7 +396,7 @@ export const readTool: ToolDefinition = {
 export const writeTool: ToolDefinition = {
   name: "write",
   description:
-    "Create a new file or overwrite an existing one with the given content. Parent directories are created automatically. Prefer 'edit' for changing part of an existing file.",
+    "Create a new file or overwrite an existing one. Parent directories are created automatically. Prefer 'edit' for changing part of an existing file.",
   mutates: true,
   parameters: {
     type: "object",
@@ -605,7 +695,7 @@ export function reindentTo(newStr: string, from: string, to: string): string {
 export const editTool: ToolDefinition = {
   name: "edit",
   description:
-    "Replace an exact string in a file. `old_string` must appear exactly once unless `replace_all` is true. Read the file first so the string matches byte for byte, including indentation.",
+    "Replace an exact string in a file. `old_string` must appear exactly once unless `replace_all` is true, and match the file's current text byte for byte, indentation included. The result shows the changed lines as they now read.",
   mutates: true,
   parameters: {
     type: "object",
@@ -679,6 +769,7 @@ export const editTool: ToolDefinition = {
       `Applied ${occurrences} replacement${occurrences === 1 ? "" : "s"} in ${relative(ctx.cwd, file)}`,
       note,
       stale,
+      editedExcerpt(before, after),
     ]
       .filter(Boolean)
       .join("\n");
@@ -794,7 +885,7 @@ export const multiEditTool: ToolDefinition = {
 Note: ${relaxedEdits} of these did not match byte for byte and were matched with whitespace relaxed; the file's own indentation was kept.`
       : "";
     const summary = `Applied ${edits.length} edits (${applied} replacements) to ${relative(ctx.cwd, file)}${relaxedNote}`;
-    return ok(stale ? `${summary}\n${stale}` : summary, {
+    return ok([summary, stale, editedExcerpt(before, working)].filter(Boolean).join("\n"), {
       title: relative(ctx.cwd, file),
       display: { kind: "diff", path: file, oldText: before, newText: working },
     });
@@ -1006,7 +1097,7 @@ export const globTool: ToolDefinition = {
 export const grepTool: ToolDefinition = {
   name: "grep",
   description:
-    "Search file contents with a regular expression. Returns file:line matches. Use `include` to restrict by glob, e.g. '*.ts'.",
+    "Search file contents with a regular expression. Returns file:line matches. Use `include` to restrict by glob, e.g. '*.ts'. `context` lines around a match are often enough to edit from.",
   parameters: {
     type: "object",
     properties: {
@@ -1195,9 +1286,10 @@ export const patchTool: ToolDefinition = {
           ].join(" and ")}; the file's own indentation was kept.`
         : null,
       moved.length || loosened.length
-        ? "Read the file again before the next edit so the following patch matches what is there."
+        ? "Your picture of this file has drifted: write the next patch from the current lines below, and read any other part you change first."
         : null,
       stale,
+      editedExcerpt(before, result.text),
     ].filter(Boolean);
 
     return ok(

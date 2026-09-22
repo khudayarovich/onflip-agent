@@ -99,7 +99,13 @@ import { buildSystemPrompt } from "onflip/dist/agent/system";
 import { loadProjectContext, ProjectContext } from "onflip/dist/agent/context";
 import { newMessage } from "onflip/dist/agent/protocol";
 import type { SubAgentRequest, SubAgentResult } from "onflip/dist/tools/task";
-import { runTurn, compactNow, reducibleChars, AgentOptions } from "onflip/dist/agent/run";
+import {
+  runTurn,
+  compactNow,
+  reducibleChars,
+  AgentOptions,
+  COMPACT_AFTER_MESSAGES_BACKSTOP,
+} from "onflip/dist/agent/run";
 import {
   ApprovalMode,
   isApprovalMode,
@@ -2051,7 +2057,12 @@ export class Engine {
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
       signal: this.abort.signal,
       remote: this.turnOrigin === "telegram",
-      compactAfterMessages: this.config.compactAfter ?? 60,
+      // Where the session's own edits are, so they can be named relative to
+      // the project in the reminder and restored after a compaction.
+      cwd: this.cwd,
+      // A backstop only; the character budget below is what decides. See the
+      // constant for what 60 used to cost.
+      compactAfterMessages: this.config.compactAfter ?? COMPACT_AFTER_MESSAGES_BACKSTOP,
       // The ceiling here is the composer's, not the model's — OnFlip cannot
       // read the account's plan, so this is a local heuristic about what can
       // be typed, nothing to do with the context window the plan grants.

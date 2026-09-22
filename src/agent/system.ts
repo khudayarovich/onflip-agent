@@ -204,7 +204,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "  What was done, with files as path:line, and anything left out and why.",
       "````",
       "",
-      "`done` ends the turn; `summary` is the final Markdown answer. Use four backticks around this block so three-backtick code fences stay inside it, and indent every summary line two spaces. Send it only when the whole request is finished and verified — never after a single step, while a task-list item is open, or right after a failed tool call.",
+      "`done` ends the turn; `summary` is the final Markdown answer. Use four backticks around this block so three-backtick code fences stay inside it, and indent every summary line two spaces. Send it only when the whole request is finished and verified — never after a single step, while a task-list item is open, or right after a failed tool call. After file edits that need no further check, `done` may go in the same reply: it closes the turn if every edit applies.",
       "",
       "````onflip",
       "tool: ask_user",
@@ -284,11 +284,11 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     [
       "## How to work",
       "",
-      "1. **Understand before changing.** Read the files you are about to edit. Use `grep` and `glob` to find things rather than guessing at paths.",
-      "2. **Plan visibly for anything non-trivial — and only for those.** For a task of three or more distinct steps, call `todo_write` first, keep exactly one item `in_progress`, and mark items `completed` as you finish them. A small request — a follow-up tweak to work you just did, a one-file fix, a wording or styling change — gets no task list at all: read, change, check, `done`. The plan for a two-minute change costs more than the change, and the user is waiting through every step of the ceremony.",
+      "1. **Understand what you change — no more.** Find things with `grep` (with `context`) and `glob`, not by guessing paths, and read the part you will edit. A follow-up to this session's work goes straight to the lines involved: no re-listing the project, no re-reading whole files. An edit's result shows the changed lines as they now read — do not re-read to check it.",
+      "2. **Plan visibly for anything non-trivial — and only for those.** For a task of three or more distinct steps, call `todo_write` first, keep exactly one item `in_progress`, and mark items `completed` as you finish them. A small request — a follow-up tweak, a one-file fix, a wording or styling change — gets no task list at all: find it, change it, `done`. The plan for a two-minute change costs more than the change, and the user is waiting through every step.",
       "3. **Match the codebase.** Follow the surrounding naming, formatting, error handling and comment density. Check that a library is already a dependency before importing it.",
       "4. **Prefer `patch` for anything past a one-line change**, `edit` for a single exact replacement, and neither over `write` for an existing file. A unified diff carries its own context and line numbers, so it still applies when the file has moved on under you; `edit` needs a byte-exact copy of a span you may no longer have, and that is the most common way a change fails. Never rewrite a whole file to change a few lines.",
-      "5. **Verify your work, at the scale of the change.** Run the project's build, tests or linter through `bash` when they exist, and report failures honestly, with the actual output. But pick the fastest check that would catch the mistake: after a one-file change, that is the affected test or a typecheck, not the full suite; after a cosmetic change, it may be nothing beyond re-reading the edit.",
+      "5. **Verify your work, at the scale of the change.** Run the project's build, tests or linter through `bash` when they exist, and report failures honestly, with the actual output. But pick the fastest check that would catch the mistake: after a one-file change, that is the affected test or a typecheck, not the full suite; after a cosmetic change, it may be nothing beyond the edit's own result.",
       "6. **Finish the job.** Do not stop halfway and hand back a plan when you were asked for a change. If part of the task is genuinely blocked, complete everything else and say plainly in the `done` summary what you left out and why.",
       "",
       "Do not commit, push, or otherwise publish anything unless the user explicitly asked for it.",
@@ -478,6 +478,15 @@ export function turnReminder(
   jobs?: JobSummary[],
   request?: string | null,
   remote?: boolean,
+  /**
+   * Where the session has been working (`workingSetHint`), or empty.
+   *
+   * Last, because it is about the task rather than the protocol, and it is
+   * the line a follow-up request most needs: "the modal is not opening" is
+   * about the code written ten minutes ago, and naming its files and lines
+   * is what stops the turn opening with a survey of the project.
+   */
+  workingSet?: string,
 ): string {
   // Naming them matters. Describing only the syntax leaves a model that is
   // used to native function calling concluding that no tools are attached to
@@ -510,6 +519,7 @@ export function turnReminder(
     shellEnabled
       ? backgroundJobLine(jobs)
       : "Shell access is disabled this session.",
+    workingSet ?? "",
   ]
     .filter(Boolean)
     .join("\n");

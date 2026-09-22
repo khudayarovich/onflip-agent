@@ -23,7 +23,7 @@ export { closeAutomationBrowser, automationBrowserOpen } from "./browser";
 export { isTerminalTool, TERMINAL_TOOL_NAMES } from "./terminal";
 
 export function createSessionState(): SessionState {
-  return { todos: [], snapshots: [], readFiles: new Map() };
+  return { todos: [], snapshots: [], readFiles: new Map(), fullReads: new Map() };
 }
 
 export interface RegistryOptions {

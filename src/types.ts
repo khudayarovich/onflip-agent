@@ -59,6 +59,28 @@ export interface ToolResult {
    * before a third.
    */
   timedOut?: boolean;
+  /**
+   * The absolute path of a file this result carries in full.
+   *
+   * Set by `read` when it sent a whole file, so the loop can note which
+   * message holds that text: a later read of the same file can then send
+   * only what changed, for as long as that message is still in front of the
+   * model. See `FullRead`.
+   */
+  fullRead?: string;
+}
+
+/**
+ * A whole-file read the model has in its conversation.
+ *
+ * The text is kept so a second read can be answered with the difference.
+ * `messageId` is the transcript message carrying the read, filled in by the
+ * loop once the result is in the history — until then, and after that
+ * message is trimmed, compacted away or rewound, the entry must not be used.
+ */
+export interface FullRead {
+  content: string;
+  messageId?: string;
 }
 
 /** Filesystem identity captured around a write, including symlink targets. */
@@ -93,6 +115,13 @@ export interface SessionState {
   snapshots: FileSnapshot[];
   /** Files the agent has read this session, so it can be told to re-read. */
   readFiles: Map<string, number>;
+  /**
+   * Whole-file reads still in the conversation, by absolute path.
+   *
+   * Optional so that state built by hand (tests, older callers) keeps
+   * working: without it every read is simply a full read.
+   */
+  fullReads?: Map<string, FullRead>;
 }
 
 export interface ToolContext {
