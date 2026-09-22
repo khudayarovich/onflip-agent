@@ -1840,22 +1840,49 @@ const PASTE_AT_END = new Function(
 const PASTE_CHUNK_LINES = 60;
 const PASTE_CHUNK_CHARS = 6_000;
 
-/** Split on line boundaries so no line is ever cut between two pastes. */
-export function chunkByLines(text: string, maxLines: number, maxChars: number): string[] {
-  const chunks: string[] = [];
-  let current: string[] = [];
-  let length = 0;
-  for (const line of text.split("\n")) {
-    if (current.length && (current.length >= maxLines || length + line.length + 1 > maxChars)) {
-      chunks.push(current.join("\n"));
-      current = [];
-      length = 0;
+/**
+ * Pieces to paste one after another, which put together are exactly `text`.
+ *
+ * Split on line boundaries where it can — each piece carries the newline
+ * that ends it — and inside a line only where it must. It used to split on
+ * line boundaries only, so one line longer than a piece may be — a minified
+ * file, a JSON result on a single line — went up as one paste of any size,
+ * and above about nine thousand characters ChatGPT turns a paste into an
+ * attachment chip and leaves the box empty. A cut never falls between the
+ * two halves of a surrogate pair, which would reach the editor as two
+ * broken characters.
+ */
+export function pasteParts(text: string, maxLines: number, maxChars: number): string[] {
+  const parts: string[] = [];
+  let current = "";
+  let lines = 0;
+  const flush = () => {
+    if (current) parts.push(current);
+    current = "";
+    lines = 0;
+  };
+  const rows = text.split("\n");
+  rows.forEach((row, i) => {
+    const piece = i < rows.length - 1 ? `${row}\n` : row;
+    if (current && (lines >= maxLines || current.length + piece.length > maxChars)) flush();
+    if (piece.length <= maxChars) {
+      current += piece;
+      lines++;
+      return;
     }
-    current.push(line);
-    length += line.length + 1;
-  }
-  if (current.length) chunks.push(current.join("\n"));
-  return chunks;
+    let at = 0;
+    while (at < piece.length) {
+      let end = Math.min(piece.length, at + maxChars);
+      const code = piece.charCodeAt(end - 1);
+      if (end < piece.length && code >= 0xd800 && code <= 0xdbff) end--;
+      flush();
+      current = piece.slice(at, end);
+      lines = 1;
+      at = end;
+    }
+  });
+  flush();
+  return parts;
 }
 
 /**
@@ -2019,19 +2046,19 @@ async function typeMessage(p: Page, text: string, signal?: AbortSignal): Promise
    * (or a hundred-odd lines) into a "pasted text" attachment — the box
    * stays empty and the chip would ride along with the message. Chunks
    * under sixty lines and six thousand characters each land inline, one
-   * after another at the end of the text already there, and the joins fall
-   * on line boundaries so nothing is glued together. Measured on the live
+   * after another at the end of the text already there; the joins fall on
+   * line boundaries wherever a line fits, and put together the pieces are
+   * the text exactly (see pasteParts). Measured on the live
    * composer: 12,000 characters in 350ms, 40,000 in 640ms, every line and
    * character intact, where insertText took two and twelve seconds.
    */
   const paste = {
     name: "paste",
     run: async () => {
-      const chunks = chunkByLines(text, PASTE_CHUNK_LINES, PASTE_CHUNK_CHARS);
-      for (let i = 0; i < chunks.length; i++) {
-        const part = chunks[i] + (i < chunks.length - 1 ? "\n" : "");
+      const parts = pasteParts(text, PASTE_CHUNK_LINES, PASTE_CHUNK_CHARS);
+      for (const part of parts) {
         await capped(composer.evaluate(PASTE_AT_END, part), 6_000, "paste");
-        if (chunks.length > 1) await p.waitForTimeout(40);
+        if (parts.length > 1) await p.waitForTimeout(40);
       }
     },
   };
