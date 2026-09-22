@@ -165,7 +165,8 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
   // "Bash" — folded to the one the registry and the explanations below use.
   const canonical = (name: string): string => {
     const norm = name.toLowerCase().replace(/[-\s]/g, "_");
-    return ALIASES[norm] ?? norm;
+    // Own keys only: "constructor" is a name a model can write.
+    return Object.hasOwn(ALIASES, norm) ? ALIASES[norm] : norm;
   };
 
   const resolveName = (name: string): ToolDefinition | undefined =>

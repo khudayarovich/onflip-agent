@@ -109,7 +109,9 @@ function value(text: string, min: number, max: number, names: string[], label: s
 export function parseCron(expression: string): CronFields {
   const text = expression.trim().toLowerCase();
   if (!text) throw new CronError("Enter a schedule.");
-  const expanded = SHORTHANDS[text] ?? text;
+  // Own keys only: "constructor" typed as a schedule found Object and threw
+  // a TypeError where a CronError belongs.
+  const expanded = Object.hasOwn(SHORTHANDS, text) ? SHORTHANDS[text] : text;
 
   const parts = expanded.split(/\s+/);
   if (parts.length !== 5) {

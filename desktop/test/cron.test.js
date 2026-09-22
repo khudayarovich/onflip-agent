@@ -187,3 +187,13 @@ test("anything unusual shows the expression rather than guessing", { skip: needs
   assert.equal(describeCron("*/7 3-5 * * *"), "*/7 3-5 * * *");
   assert.equal(describeCron("not cron"), "not cron");
 });
+
+test("a schedule named after Object.prototype is an ordinary bad schedule", { skip: needsBuild }, () => {
+  // The shorthand table answered for "constructor" with the Object function,
+  // and the message the person saw was "expanded.split is not a function".
+  const { cronError, parseCron } = load();
+  for (const text of ["constructor", "toString", "__proto__"]) {
+    assert.match(cronError(text), /five parts/, text);
+  }
+  assert.deepEqual(parseCron("@daily").hour, [0], "the real shorthands still expand");
+});

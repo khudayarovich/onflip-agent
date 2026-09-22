@@ -344,7 +344,7 @@ export function normalizeModel(value: string | undefined): string | undefined {
   // A session or a config written before 14 September 2026 can still
   // name a mode that no longer exists; it opens on the model that
   // replaced all three rather than on a slug nothing answers to.
-  if (RETIRED_DEEPSEEK[v]) return RETIRED_DEEPSEEK[v];
+  if (Object.hasOwn(RETIRED_DEEPSEEK, v)) return RETIRED_DEEPSEEK[v];
 
   // A service that is gone leaves its model names behind: Arena's were
   // written into ChatGPT's own slot by builds before 0.10.51, and an
@@ -363,7 +363,7 @@ export function normalizeModel(value: string | undefined): string | undefined {
     pro: "gpt-5-pro",
     mini: "o4-mini",
   };
-  return ALIASES[v] ?? v;
+  return Object.hasOwn(ALIASES, v) ? ALIASES[v] : v;
 }
 
 export function describeModel(slug: string): string {

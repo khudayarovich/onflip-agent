@@ -229,7 +229,8 @@ const TOOL_ICONS: Record<string, string> = {
  * is a phone nobody can read the answer on. The answer is what gets room.
  */
 export function toolLine(tool: string, subject: string | undefined, failed: boolean): string {
-  const icon = failed ? "❌" : (TOOL_ICONS[tool] ?? "⚙️");
+  // Own keys only: the name is the model's, and "constructor" is not an icon.
+  const icon = failed ? "❌" : ((Object.hasOwn(TOOL_ICONS, tool) ? TOOL_ICONS[tool] : undefined) ?? "⚙️");
   const name = tool.replace(/_/g, " ");
   const what = subject ? ` <code>${escapeHtml(oneLine(subject, 60))}</code>` : "";
   return `${icon} <i>${escapeHtml(name)}</i>${what}`;

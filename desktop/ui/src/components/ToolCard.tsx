@@ -111,7 +111,8 @@ export function ToolCard({
     </span>
   );
 
-  const Icon = TOOL_ICONS[call.tool] ?? Gear;
+  // Own keys only: the name is the model's, and "constructor" found Object.
+  const Icon = (Object.hasOwn(TOOL_ICONS, call.tool) ? TOOL_ICONS[call.tool] : undefined) ?? Gear;
 
   return (
     <div className="tool-card">

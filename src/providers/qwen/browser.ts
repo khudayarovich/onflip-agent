@@ -1762,8 +1762,8 @@ export const QWEN_MODES: Record<string, string> = {
 
 /** The label to pick for a slug, or "" when there is nothing to choose. */
 export function labelFor(slug: string | undefined): string {
-  if (!slug) return "";
-  return QWEN_MODES[slug] ?? "";
+  if (!slug || !Object.hasOwn(QWEN_MODES, slug)) return "";
+  return QWEN_MODES[slug];
 }
 
 /**

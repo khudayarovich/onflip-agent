@@ -83,8 +83,13 @@ const NAMES: Record<Lang, Record<string, string>> = {
   },
 };
 
+/** A table's own entry. The key is the model's, and "__proto__" is a key. */
+function own(table: Record<string, string>, key: string): string | undefined {
+  return Object.hasOwn(table, key) ? table[key] : undefined;
+}
+
 export function toolLabel(tool: string, lang: Lang): string {
-  const hit = NAMES[lang][tool] ?? NAMES.en[tool];
+  const hit = own(NAMES[lang], tool) ?? own(NAMES.en, tool);
   if (hit) return hit;
   return tool.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
 }

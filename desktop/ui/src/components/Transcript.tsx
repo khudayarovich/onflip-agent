@@ -8,6 +8,40 @@ import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/ski
 import { ChevronDown, Close, Info, Pencil, Reload, fileGlyph } from "./icons";
 import { CopyButton } from "./CopyButton";
 
+/**
+ * One item that cannot be drawn must not take the window with it.
+ *
+ * React unmounts the whole tree on an uncaught render error, and nothing
+ * above the transcript caught one: a tool call the model named `constructor`
+ * found `Object` in the icon table, rendered it as a component, and left a
+ * blank window. Resuming the session replays the same item, so the window
+ * stayed blank on every reopen. The boundary is per item, so the rest of the
+ * conversation and the composer stay usable.
+ */
+export class ItemBoundary extends React.Component<
+  { children: React.ReactNode },
+  { error: string | null }
+> {
+  state: { error: string | null } = { error: null };
+
+  static getDerivedStateFromError(e: unknown): { error: string } {
+    return { error: e instanceof Error ? e.message : String(e) };
+  }
+
+  componentDidCatch(e: unknown): void {
+    console.error("a transcript item failed to render", e);
+  }
+
+  render(): React.ReactNode {
+    return this.state.error === null ? this.props.children : <UnrenderableItem error={this.state.error} />;
+  }
+}
+
+function UnrenderableItem({ error }: { error: string }): React.ReactElement {
+  const t = useT();
+  return <div className="msg-error">{t("itemUnrenderable", { error: error.slice(0, 200) })}</div>;
+}
+
 export interface StreamingState {
   active: boolean;
   iteration: number;
@@ -251,27 +285,23 @@ export function Transcript({
         </div>
       )}
       <div className="transcript-inner">
-        {groupNotices(items).map((entry) =>
-          entry.kind === "notices" ? (
-            <NoticeGroup key={entry.id} notices={entry.notices} />
-          ) : entry.item.type === "user" ? (
-            <UserMessage
-              key={entry.item.id}
-              id={entry.item.id}
-              text={entry.item.text}
-              attachments={entry.item.attachments}
-              delivery={deliveries[entry.item.id]}
-              onRevise={onRevise}
-            />
-          ) : (
-            <TranscriptItem
-              key={entry.item.id}
-              item={entry.item}
-              toolProgress={toolProgress}
-              onResume={onResume}
-            />
-          )
-        )}
+        {groupNotices(items).map((entry) => (
+          <ItemBoundary key={entry.kind === "notices" ? entry.id : entry.item.id}>
+            {entry.kind === "notices" ? (
+              <NoticeGroup notices={entry.notices} />
+            ) : entry.item.type === "user" ? (
+              <UserMessage
+                id={entry.item.id}
+                text={entry.item.text}
+                attachments={entry.item.attachments}
+                delivery={deliveries[entry.item.id]}
+                onRevise={onRevise}
+              />
+            ) : (
+              <TranscriptItem item={entry.item} toolProgress={toolProgress} onResume={onResume} />
+            )}
+          </ItemBoundary>
+        ))}
         {streaming.active && (
           <div className="thinking-row">
             <div className="label">

@@ -79,6 +79,18 @@ const waitIdle = async (engine) => {
   while (engine.busy);
 };
 
+test("a setting named after Object.prototype is not a setting", { skip: needsBuild }, () => {
+  // The table of settings answered for "constructor" with the Object
+  // function, which ran on the value and saved whatever it made.
+  const { engine } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+  const file = path.join(process.env.ONFLIP_CONFIG_DIR, "config.json");
+  const before = fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null;
+  for (const key of ["constructor", "toString", "valueOf", "__proto__"]) {
+    assert.throws(() => engine.setConfigValue(key, "x"), /Unknown setting/, key);
+  }
+  assert.equal(fs.existsSync(file) ? fs.readFileSync(file, "utf8") : null, before);
+});
+
 test("Stop during /compact does not close the browser under the next turn", { skip: needsBuild }, async () => {
   closed = [];
   let call = 0;

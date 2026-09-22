@@ -187,6 +187,18 @@ test("a tool line is one line and says whether it failed", { skip: needsBuild },
   assert.ok(balanced(ok) && balanced(bad));
 });
 
+test("a tool the model named after Object.prototype gets the plain icon", { skip: needsBuild }, () => {
+  // The icon table was indexed by the model's name: "constructor" put the
+  // source of the Object function into the chat as the icon.
+  const { toolLine } = load();
+  for (const tool of ["constructor", "__proto__", "toString"]) {
+    const line = toolLine(tool, "x", false);
+    assert.ok(line.startsWith("⚙️ "), line);
+    assert.ok(!/native code|\[object Object\]/.test(line), line);
+  }
+  assert.ok(!toolLine("bash", "x", false).startsWith("⚙️"), "a real tool keeps its own icon");
+});
+
 test("a tool subject with angle brackets stays sendable", { skip: needsBuild }, () => {
   const { toolLine } = load();
   const html = toolLine("grep", "<script> tags", false);

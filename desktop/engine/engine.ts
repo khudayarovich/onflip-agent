@@ -2917,7 +2917,8 @@ export class Engine {
       allowedCommands: (v) => ({ allowedCommands: Array.isArray(v) ? v.map(String) : [] }),
       allowedWriteDirs: (v) => ({ allowedWriteDirs: Array.isArray(v) ? v.map(String) : [] }),
     };
-    const patch = allowed[key]?.(value);
+    // Own keys only: "constructor" ran Object(value) and saved what it made.
+    const patch = Object.hasOwn(allowed, key) ? allowed[key](value) : undefined;
     if (!patch) throw new Error(`Unknown setting: ${key}`);
     saveConfig(patch);
     this.config = loadConfig();
