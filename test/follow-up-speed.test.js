@@ -425,3 +425,15 @@ test("the working set follows later edits and forgets reverted ones", async () =
   assert.match(hint, /c\.js \(new, 1 lines\)/);
   assert.match(hint, /a\.js \(42 lines\) at/);
 });
+
+test("edits in the same millisecond still come out newest first", () => {
+  // Measured on a CI runner: an edit and the write after it shared a
+  // timestamp, and the older file came out first.
+  const cwd = project({ "a.js": "a\n", "b.js": "b\n" });
+  const at = Date.now();
+  const snap = (file, before, after) => ({ path: path.join(cwd, file), before, after, tool: "edit", at });
+  fs.writeFileSync(path.join(cwd, "a.js"), "a changed\n");
+  fs.writeFileSync(path.join(cwd, "b.js"), "b changed\n");
+  const set = recentWorkingSet([snap("a.js", "a\n", "a changed\n"), snap("b.js", "b\n", "b changed\n")]);
+  assert.deepEqual(set.map((f) => path.basename(f.path)), ["b.js", "a.js"]);
+});

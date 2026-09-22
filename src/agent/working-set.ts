@@ -67,18 +67,22 @@ export function recentWorkingSet(
   const recent = snapshots.slice(-(opts.recent ?? RECENT_CHANGES));
   // The earliest `before` in the window is the baseline: everything after it
   // is recent work, however many edits it took.
-  const byFile = new Map<string, { base: string | null | undefined; at: number }>();
-  for (const s of recent) {
+  const byFile = new Map<string, { base: string | null | undefined; at: number; last: number }>();
+  recent.forEach((s, index) => {
     const known = byFile.get(s.path);
     if (!known) {
-      byFile.set(s.path, { base: s.contentsOmitted ? undefined : s.before, at: s.at });
+      byFile.set(s.path, { base: s.contentsOmitted ? undefined : s.before, at: s.at, last: index });
     } else {
       known.at = Math.max(known.at, s.at);
+      known.last = index;
     }
-  }
+  });
 
   const files: WorkingFile[] = [];
-  const newestFirst = [...byFile.entries()].sort((x, y) => y[1].at - x[1].at);
+  // Newest first by position: snapshots are appended as the edits happen,
+  // while two edits in one millisecond share a timestamp — which put an
+  // older file first on a fast machine.
+  const newestFirst = [...byFile.entries()].sort((x, y) => y[1].last - x[1].last);
   for (const [file, { base, at }] of newestFirst) {
     if (files.length >= (opts.maxFiles ?? MAX_FILES)) break;
     const text = readText(file);
