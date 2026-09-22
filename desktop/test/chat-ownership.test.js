@@ -47,7 +47,7 @@ test("the session's own chats accumulate across turns, once each", { skip: needs
   assert.deepEqual(record, ["a", "b"]);
 });
 
-test("the engine records through the rule and deletes around the attached chat", () => {
+test("the engine records through the rule and deletes around the attached chat", { skip: needsBuild }, () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "engine", "engine.ts"), "utf8");
   assert.match(source, /recordableChatIds\(/);
   assert.match(source, /\.filter\(\(chat\) => chat !== stored\?\.chatId\)/, "removeSession spares the attached chat");

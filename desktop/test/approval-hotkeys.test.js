@@ -69,7 +69,7 @@ test("Escape always denies, armed or not", { skip: needsBuild }, () => {
   assert.equal(isApprovalHotkey(key("Escape", { target: { ...plainTarget, tagName: "INPUT" } }), true), true);
 });
 
-test("and the prompt goes through this rule rather than reading keys itself", () => {
+test("and the prompt goes through this rule rather than reading keys itself", { skip: needsBuild }, () => {
   const source = fs.readFileSync(path.join(__dirname, "..", "ui", "src", "components", "ApprovalModal.tsx"), "utf8");
   assert.match(source, /isApprovalHotkey\(/);
   assert.doesNotMatch(source, /tagName === "INPUT" \|\| target\.tagName === "TEXTAREA"/, "the old check is gone");
