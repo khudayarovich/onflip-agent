@@ -128,7 +128,7 @@ async function closeWindowGracefully(): Promise<void> {
 }
 
 /**
- * Is there a `userToken` with a real value in the profile on disk?
+ * The `userToken` the profile on disk holds now, or null.
  *
  * A record written in the last few minutes sits uncompressed in the Local
  * Storage LevelDB `.log`, as the key's bytes followed by the JSON the page
@@ -137,19 +137,29 @@ async function closeWindowGracefully(): Promise<void> {
  * Compaction moves old records into Snappy-compressed `.ldb` blocks a plain
  * scan cannot see, which is why a negative here means nothing and only the
  * sign-in flow, where the write is seconds old, may ask.
+ *
+ * The log is append-only, so it is the *last* record that says what the
+ * value is. Any real value anywhere used to count: a token from an earlier
+ * session, cleared since by a `null` record right after it, closed the
+ * sign-in window two seconds after it opened and was then believed over
+ * the page's own "signed out".
  */
-function tokenOnDisk(dir: string): boolean {
+export function tokenOnDisk(dir: string): string | null {
   const root = path.join(dir, "Default", "Local Storage", "leveldb");
   let files: string[];
   try {
     files = fs.readdirSync(root);
   } catch {
-    return false;
+    return null;
   }
   const key = Buffer.from(TOKEN_KEY);
-  const real = Buffer.from('{"value":"');
-  for (const f of files) {
-    if (!/\.log$/i.test(f)) continue;
+  const opener = Buffer.from('{"value":');
+  let current: string | null = null;
+  // LevelDB numbers its logs in the order it writes them.
+  const logs = files
+    .filter((f) => /\.log$/i.test(f))
+    .sort((a, b) => (parseInt(a, 10) || 0) - (parseInt(b, 10) || 0));
+  for (const f of logs) {
     const tmp = path.join(os.tmpdir(), `onflip-ds-signin-${process.pid}-${Date.now()}`);
     let buf: Buffer;
     try {
@@ -162,12 +172,19 @@ function tokenOnDisk(dir: string): boolean {
     }
     let at = -1;
     while ((at = buf.indexOf(key, at + 1)) !== -1) {
-      // The value follows the key within a few framing bytes; a null value
-      // (signed out) never matches `{"value":"`.
-      if (buf.subarray(at + key.length, at + key.length + 24).indexOf(real) !== -1) return true;
+      // The value follows the key within a few framing bytes.
+      const window = buf.subarray(at + key.length, at + key.length + 600);
+      const open = window.indexOf(opener);
+      if (open === -1 || open > 24) continue;
+      const rest = window.subarray(open + opener.length).toString("latin1");
+      if (rest.startsWith("null")) current = null;
+      else {
+        const m = /^"([^"]+)"/.exec(rest);
+        if (m) current = m[1];
+      }
     }
   }
-  return false;
+  return current;
 }
 
 export async function signInWithRealBrowser(
@@ -197,6 +214,14 @@ export async function signInWithRealBrowser(
   const dir = deepseekProfileDir();
   mkdirPrivate(dir);
   cancelled = false;
+  // What was there before the window opened. Only a token that differs from
+  // it was written by this sign-in; one that was already there proves
+  // nothing about whether the person has finished (see tokenOnDisk).
+  const before = tokenOnDisk(dir);
+  const newToken = (): boolean => {
+    const now = tokenOnDisk(dir);
+    return now !== null && now !== before;
+  };
 
   const args = [
     `--user-data-dir=${dir}`,
@@ -249,7 +274,7 @@ export async function signInWithRealBrowser(
       const step = await Promise.race([exited, finished, tick()]);
       if (step !== "tick") return step;
       if (Date.now() > deadline) return "timeout";
-      if (tokenOnDisk(dir)) return "token";
+      if (newToken()) return "token";
     }
   })();
   declareFinished = null;
@@ -279,12 +304,13 @@ export async function signInWithRealBrowser(
     logger.info("deepseek", "signed in", { account: check.account ?? "unknown" });
     return { ok: true, account: check.account };
   }
-  // The page check and the profile disagree: the token is on disk but the
-  // driven page did not show it. The disk is the direct evidence — believe
-  // it, and let the account name fall back to "DeepSeek account" — but log
-  // the disagreement loudly; it is the line that will name whatever kept the
-  // page from hydrating on this machine.
-  if (tokenOnDisk(dir)) {
+  // The page check and the profile disagree: a token this sign-in wrote is
+  // on disk but the driven page did not show it. The disk is the direct
+  // evidence — believe it, and let the account name fall back to "DeepSeek
+  // account" — but log the disagreement loudly; it is the line that will
+  // name whatever kept the page from hydrating on this machine. A token that
+  // was already there before the window opened is not that evidence.
+  if (newToken()) {
     logger.warn("deepseek", "the page check saw no session but the profile holds a token; believing the profile", {
       pageError: check.error ?? null,
     });
