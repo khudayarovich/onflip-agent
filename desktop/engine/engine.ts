@@ -1961,6 +1961,11 @@ export class Engine {
       disableShell: !this.shellEnabled || this.approvalMode === "read-only",
       disableNetwork: !this.networkEnabled,
       // No `task`: one level, on purpose.
+      // Its output is the turn's sign of life too. Without this the silence
+      // watchdog saw nothing while a sub-agent ran a test suite: a false
+      // "nothing has come back" at 150 seconds, and at 420 the work killed
+      // and restarted, up to three times.
+      onProgress: () => this.markActivity(),
     });
 
     const history: ChatMessage[] = [
@@ -2015,7 +2020,13 @@ export class Engine {
           // Its steps belong to it. What reaches the user is that something
           // is happening and, at the end, the answer - not thirty tool
           // cards from a conversation they are not in.
-          onNotice: (text) => req.onProgress?.(text),
+          onNotice: (text) => {
+            this.markActivity();
+            req.onProgress?.(text);
+          },
+          onDelta: () => this.markActivity(),
+          onNarration: () => this.markActivity(),
+          onToolStart: () => this.markActivity(),
           onThinking: (iteration) => {
             this.markActivity();
             record.steps = iteration;
@@ -2026,6 +2037,7 @@ export class Engine {
           // somebody reads to follow the work - a sub-agent that ran fifty
           // greps needs to say so, not list them.
           onToolEnd: (call, toolResult) => {
+            this.markActivity();
             if (record.activity.length < SUB_TASK_ACTIVITY_MAX) {
               record.activity.push({
                 tool: call.tool,

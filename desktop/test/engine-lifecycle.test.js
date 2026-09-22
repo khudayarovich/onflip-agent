@@ -147,6 +147,44 @@ test("rolling a message back returns its words and its files, without OnFlip's n
   assert.deepEqual(back, { text: "look at this", attachments: [file] });
 });
 
+test("a sub-agent's output keeps the silence watchdog quiet", { skip: needsBuild, timeout: 60_000 }, async () => {
+  // The watchdog heard only the sub-agent's step starts: a sub-agent running
+  // a test suite drew "nothing has come back" at 150 seconds and was killed
+  // and restarted at 420, up to three times.
+  const configFile = path.join(process.env.ONFLIP_CONFIG_DIR, "config.json");
+  const saved = fs.existsSync(configFile) ? fs.readFileSync(configFile, "utf8") : null;
+  fs.mkdirSync(path.dirname(configFile), { recursive: true });
+  fs.writeFileSync(configFile, JSON.stringify({ ...(saved ? JSON.parse(saved) : {}), subAgents: true }));
+  try {
+    const ticks =
+      process.platform === "win32"
+        ? '1..8 | % { Write-Output "tick $_"; Start-Sleep -Milliseconds 400 }'
+        : "for i in 1 2 3 4 5 6 7 8; do echo tick $i; sleep 0.4; done";
+    const stream = "```onflip\ntool: bash\ncommand: " + ticks + "\n```";
+    const task = "```onflip\ntool: task\ndescription: run the suite\nprompt: |\n  Run the tests.\n```";
+    const script = [task, stream, DONE];
+    const { engine } = makeEngine(async () => ({ content: script.shift() ?? DONE, conversationId: null }));
+    let inSub = false;
+    let longest = 0;
+    const emit = engine.peer.emit;
+    engine.peer.emit = (event, data) => {
+      if (event === "sub-tasks") inSub = data.subTasks.some((t) => t.status === "running");
+      return emit(event, data);
+    };
+    const sampler = setInterval(() => {
+      if (engine.busy && inSub) longest = Math.max(longest, engine.silence.idleMs());
+    }, 50);
+    engine.send("use a sub-task to run the tests");
+    await waitIdle(engine);
+    clearInterval(sampler);
+    assert.ok(longest > 0, "the sub-agent never ran");
+    assert.ok(longest < 2_000, `the watchdog saw ${longest}ms of silence while the sub-agent's command streamed`);
+  } finally {
+    if (saved === null) fs.rmSync(configFile, { force: true });
+    else fs.writeFileSync(configFile, saved);
+  }
+});
+
 test("a setting named after Object.prototype is not a setting", { skip: needsBuild }, () => {
   // The table of settings answered for "constructor" with the Object
   // function, which ran on the value and saved whatever it made.
