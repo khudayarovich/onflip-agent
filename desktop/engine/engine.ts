@@ -87,7 +87,7 @@ import {
 } from "onflip/dist/tools/browser";
 import { recordSend, usageSummary, associateAccount, closeUsageStore, UNKNOWN_ACCOUNT } from "./usage";
 import { adoptRestoredRevision, restoreSnapshot, snapshotStillCurrent, snapshotToken } from "./undo";
-import { claimSessionLock, releaseSessionLock } from "./session-lock";
+import { claimSessionLock, releaseSessionLock, sessionHeldElsewhere } from "./session-lock";
 import {
   createToolRegistry,
   createSessionState,
@@ -1339,7 +1339,9 @@ export class Engine {
   send(text: string, attachments?: string[], origin?: "telegram"): { queued: boolean } {
     if (!this.connected) throw new Error("The engine is still connecting — try again in a moment.");
     this.autoResumes = 0;
-    if (this.busy) {
+    // A switch waiting on the browser holds sends the way a turn does: see
+    // `holdingSends`.
+    if (this.busy || this.switching) {
       // A queued message keeps its own attachments: they belong to that
       // message, not to whichever turn happens to run next.
       this.queue.push({ id: randomUUID(), text, attachments, origin });
@@ -1372,7 +1374,9 @@ export class Engine {
     this.notice(
       `Nothing has come back for ${Math.round(idleMs / 60_000)} minutes, so the turn is stuck. Starting it again in a fresh conversation (attempt ${this.autoResumes} of ${MAX_AUTO_RESUMES}).`
     );
-    this.queue.push({ id: randomUUID(), text: RESUME_PROMPT, auto: true });
+    // First in the queue: it resumes the work that was stuck, and anything the
+    // person queued behind that work was meant to follow it, not jump it.
+    this.queue.unshift({ id: randomUUID(), text: RESUME_PROMPT, auto: true });
     this.abort.abort();
     // An abort is only seen by a loop that comes back to look, and the hang
     // this exists for is a `page.evaluate` that never returns — the case
@@ -2258,8 +2262,11 @@ export class Engine {
     };
   }
 
-  async resumeSession(id: string): Promise<EngineStatus> {
-    this.assertIdle();
+  resumeSession(id: string): Promise<EngineStatus> {
+    return this.holdingSends(() => this.doResumeSession(id));
+  }
+
+  private async doResumeSession(id: string): Promise<EngineStatus> {
     let restored = loadSession(id);
     if (!restored) throw new Error("That session could not be read.");
     if (!this.saveNow()) throw new Error("The current session could not be saved. Try again before leaving it.");
@@ -2477,8 +2484,13 @@ export class Engine {
    * AGENTS.md records — so the stored session is cleared and the profile is
    * the session from here on.
    */
-  async signInWithBrowser(): Promise<{ ok: boolean; reason?: string; browser?: string }> {
-    this.assertIdle();
+  signInWithBrowser(): Promise<{ ok: boolean; reason?: string; browser?: string }> {
+    // The sign-in browser holds OnFlip's profile for as long as it is open,
+    // and a send meanwhile would launch the automation browser on it.
+    return this.holdingSends(() => this.doSignInWithBrowser());
+  }
+
+  private async doSignInWithBrowser(): Promise<{ ok: boolean; reason?: string; browser?: string }> {
     const result = await signInWithRealBrowser((state) => this.peer.emit("sign-in", { state }));
     // `browser` is ChatGPT's flow naming which browser it opened; DeepSeek's
     // succeeds without one. Requiring it here turned every successful
@@ -2528,6 +2540,10 @@ export class Engine {
 
   removeSession(id: string): { ok: boolean } {
     if (this.session?.id === id) throw new Error("That session is currently open.");
+    // Open in another window, it is that window's: its next save would bring
+    // the file straight back, and the chats deleted below would be the ones
+    // it is still talking in.
+    if (sessionHeldElsewhere(id)) throw new Error("That session is open in another window. Close it there first.");
     // Read the record before the file goes: it names the conversations this
     // session opened on chatgpt.com, which should not outlive it. Attached
     // chats (`chatId`) are the user's own and are left alone.
@@ -2592,8 +2608,11 @@ export class Engine {
     return this.openProject(dir);
   }
 
-  async openProject(dir: string): Promise<EngineStatus> {
-    this.assertIdle();
+  openProject(dir: string): Promise<EngineStatus> {
+    return this.holdingSends(() => this.doOpenProject(dir));
+  }
+
+  private async doOpenProject(dir: string): Promise<EngineStatus> {
     const target = resolveDir(this.cwd, dir);
     if (path.resolve(target) === path.resolve(this.cwd)) return this.statusPayload();
 
@@ -3202,8 +3221,11 @@ export class Engine {
     }));
   }
 
-  async attachChat(id: string, title?: string): Promise<EngineStatus> {
-    this.assertIdle();
+  attachChat(id: string, title?: string): Promise<EngineStatus> {
+    return this.holdingSends(() => this.doAttachChat(id, title));
+  }
+
+  private async doAttachChat(id: string, title?: string): Promise<EngineStatus> {
     this.requireBrowserTransport("Continuing a ChatGPT conversation");
     const messages = await openConversation(this.auth.cookies, id);
 
@@ -3336,6 +3358,36 @@ export class Engine {
 
   private assertIdle(): void {
     if (this.busy) throw new Error("A turn is still running — stop it first.");
+    if (this.switching) throw new Error("Still opening the last one — try again in a moment.");
+  }
+
+  /**
+   * Set while a switch waits on the browser: resuming a session, opening a
+   * project, attaching a chat, signing in.
+   */
+  private switching = false;
+
+  /**
+   * Run a switch, holding every send that arrives meanwhile in the queue.
+   *
+   * Each switch checked for a running turn once, before its first await,
+   * and a Telegram message or a schedule firing inside that await started a
+   * turn anyway: typing into the page while it was being taken to another
+   * conversation, and — attaching a chat reads the chat before it swaps the
+   * session — running on a session that was replaced under it. What
+   * arrived waits, and starts on whatever the switch left open, failed or
+   * not.
+   */
+  private async holdingSends<T>(work: () => Promise<T>): Promise<T> {
+    this.assertIdle();
+    this.switching = true;
+    try {
+      return await work();
+    } finally {
+      this.switching = false;
+      const next = this.busy ? undefined : this.queue.shift();
+      if (next !== undefined) void this.runOneTurn(next.text, next.attachments, next.origin);
+    }
   }
 
   /** What the last write (or load) of the session looked like. */

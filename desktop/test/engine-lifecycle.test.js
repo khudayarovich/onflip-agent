@@ -14,6 +14,10 @@
  *  - The shell's directory is process-wide and only a change of project
  *    reset it, so after /new the first command ran in the previous
  *    session's subfolder.
+ *  - A message that arrived while a switch waited on the browser started a
+ *    turn anyway, on a page on its way to another conversation.
+ *  - The watchdog queued its "continue" behind what the person had queued.
+ *  - A session open in another window could be deleted from under it.
  */
 
 const test = require("node:test");
@@ -249,4 +253,138 @@ test("a new session's commands start at its own folder", { skip: needsBuild }, a
   // 8.3 TEMP, and macOS's /var is /private/var.
   const real = (p) => fs.realpathSync.native(p);
   assert.equal(real(ranIn), real(work), `ran in ${ranIn}`);
+});
+
+test("a session open in another window is not deleted from under it", { skip: needsBuild }, () => {
+  // Deleting it removed the file, which that window's next save put back,
+  // and deleted the session's ChatGPT chats while that window was still
+  // talking in them.
+  const { engine, work } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+  const store = require(path.join(ROOT, "dist", "agent", "store.js"));
+  const { sessionLockFile } = require(path.join(__dirname, "..", "dist", "engine", "session-lock.js"));
+  const held = store.createSession(work, "gpt");
+  assert.equal(store.saveSession(held), true);
+  // Held by a live process that is not this one: the test runner.
+  fs.writeFileSync(sessionLockFile(held.id), JSON.stringify({ pid: process.ppid, at: Date.now(), token: "t" }));
+  assert.throws(() => engine.removeSession(held.id), /open in another window/);
+  assert.ok(store.loadSession(held.id), "the session is still there");
+
+  // The false-positive half: a lock whose owner is gone is no one's, and a
+  // session nobody holds is deleted as before.
+  const orphan = store.createSession(work, "gpt");
+  store.saveSession(orphan);
+  fs.writeFileSync(sessionLockFile(orphan.id), JSON.stringify({ pid: 2 ** 22 + 12345, at: 0, token: "t" }));
+  fs.utimesSync(sessionLockFile(orphan.id), new Date(0), new Date(0));
+  assert.deepEqual(engine.removeSession(orphan.id), { ok: true });
+  assert.equal(store.loadSession(orphan.id), null);
+  const free = store.createSession(work, "gpt");
+  store.saveSession(free);
+  assert.deepEqual(engine.removeSession(free.id), { ok: true });
+});
+
+test("the watchdog's continue goes before what the person queued", { skip: needsBuild }, async () => {
+  // Queued behind the person's own follow-up, the follow-up ran first and
+  // the stuck work resumed after it, out of the order it was asked in.
+  // Marked busy by hand rather than wedged for real: a wedged turn keeps its
+  // silence watchdog running, and a process with a live timer never exits.
+  const { engine } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+  engine.busy = true;
+  assert.deepEqual(engine.send("then add a test for it"), { queued: true });
+  engine.restartSilentTurn(430_000);
+  try {
+    assert.deepEqual(
+      engine.queue.map((q) => [q.text, Boolean(q.auto)]),
+      [["continue", true], ["then add a test for it", false]]
+    );
+  } finally {
+    engine.clearForceStop();
+    engine.queue = [];
+    engine.busy = false;
+  }
+});
+
+test("a message that arrives while a chat is being attached waits for it", { skip: needsBuild, timeout: 20_000 }, async () => {
+  // Attaching reads the chat before it swaps the session. A message from the
+  // phone in that gap started a turn on the session being replaced, typing
+  // into a page that was on its way to another conversation.
+  const providers = require(path.join(ROOT, "dist", "providers", "index.js"));
+  const realOpen = providers.openConversation;
+  let release;
+  providers.openConversation = () => new Promise((resolve) => (release = resolve));
+  try {
+    const sent = [];
+    const { engine } = makeEngine(async (history) => {
+      sent.push(history.map((m) => m.content));
+      return { content: DONE, conversationId: null };
+    });
+    engine.auth = { cookies: [], accessToken: "" };
+    engine.transport = { name: "browser", adopt() {}, send: engine.transport.send, reset() {} };
+    // Attaching needs the browser transport; nothing in these turns may reach a
+    // real browser, so the page-side bookkeeping a turn does is marked done.
+    engine.projectEnsured = true;
+    engine.accountVerified = true;
+    const attaching = engine.attachChat("6f1e2d3c", "Holiday plans");
+    await sleep(20);
+    assert.deepEqual(engine.send("from the phone"), { queued: true }, "held, not run");
+    assert.throws(() => engine.newSession(), /Still opening/, "and nothing else switches underneath");
+    await sleep(100);
+    assert.equal(sent.length, 0, "no turn ran during the switch");
+
+    release([{ role: "user", content: "plan a trip" }, { role: "assistant", content: "Where to?" }]);
+    await attaching;
+    await waitIdle(engine);
+    assert.equal(sent.length, 1, "the held message ran once the chat was attached");
+    assert.ok(sent[0].includes("Where to?"), "on the attached chat, not the one it replaced");
+    assert.ok(sent[0].some((c) => c.includes("from the phone")));
+  } finally {
+    providers.openConversation = realOpen;
+  }
+});
+
+test("a switch that fails still hands on what it held", { skip: needsBuild, timeout: 20_000 }, async () => {
+  const providers = require(path.join(ROOT, "dist", "providers", "index.js"));
+  const realOpen = providers.openConversation;
+  let fail;
+  providers.openConversation = () => new Promise((_resolve, reject) => (fail = reject));
+  try {
+    const sent = [];
+    const { engine } = makeEngine(async (history) => {
+      sent.push(history.map((m) => m.content));
+      return { content: DONE, conversationId: null };
+    });
+    engine.auth = { cookies: [], accessToken: "" };
+    engine.transport = { name: "browser", adopt() {}, send: engine.transport.send, reset() {} };
+    // Attaching needs the browser transport; nothing in these turns may reach a
+    // real browser, so the page-side bookkeeping a turn does is marked done.
+    engine.projectEnsured = true;
+    engine.accountVerified = true;
+    // The session the failed switch leaves open, as a real engine always has.
+    engine.newSession();
+    const attaching = engine.attachChat("6f1e2d3c");
+    await sleep(20);
+    engine.send("still here?");
+    fail(new Error("That conversation could not be opened."));
+    await assert.rejects(attaching, /could not be opened/);
+    await waitIdle(engine);
+    assert.equal(sent.length, 1, "the held message ran on the session that stayed open");
+    // The false-positive half: with no switch running, a send is not held.
+    assert.deepEqual(engine.send("and again"), { queued: false });
+    await waitIdle(engine);
+  } finally {
+    providers.openConversation = realOpen;
+  }
+});
+
+test("resuming, opening and signing in hold sends the same way", { skip: needsBuild }, () => {
+  const src = fs.readFileSync(path.join(__dirname, "..", "engine", "engine.ts"), "utf8");
+  for (const [name, call] of [
+    ["resumeSession(id: string)", "this.doResumeSession(id)"],
+    ["openProject(dir: string)", "this.doOpenProject(dir)"],
+    ["attachChat(id: string, title?: string)", "this.doAttachChat(id, title)"],
+    ["signInWithBrowser()", "this.doSignInWithBrowser()"],
+  ]) {
+    const at = src.indexOf(`\n  ${name}: Promise<`);
+    assert.ok(at >= 0, `${name} is still the public entry`);
+    assert.ok(src.slice(at, at + 400).includes(`return this.holdingSends(() => ${call});`), `${name} holds sends`);
+  }
 });
