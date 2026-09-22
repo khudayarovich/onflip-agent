@@ -60,7 +60,24 @@ export function sessionsDirectory(): string {
   return path.join(providerStateDir(), "sessions");
 }
 
+/**
+ * What a session id may look like. Every id OnFlip has ever minted is a
+ * timestamp and a hex tail — `20260923101500-1a2b3c4d`.
+ *
+ * An id is a file name, and `path.join` resolves whatever it is handed:
+ * `deleteSession("../config")` removed the config beside the sessions
+ * folder. Ids arrive from the desktop renderer and from inside session
+ * files, so the shape is checked at the one place an id becomes a path
+ * rather than trusted wherever one is passed in.
+ */
+const SESSION_ID = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/;
+
+export function isSessionId(id: unknown): id is string {
+  return typeof id === "string" && SESSION_ID.test(id);
+}
+
 function sessionFile(id: string): string {
+  if (!isSessionId(id)) throw new Error(`Not a session id: ${JSON.stringify(String(id)).slice(0, 80)}`);
   return path.join(sessionsDirectory(), `${id}.json`);
 }
 
@@ -132,6 +149,10 @@ export function loadSession(id: string): StoredSession | null {
     const raw = fs.readFileSync(sessionFile(id), "utf8");
     const parsed = JSON.parse(withoutBom(raw)) as StoredSession;
     if (!parsed?.id || !Array.isArray(parsed.messages)) return null;
+    // The file name is the id. A copy renamed by hand still carries the id it
+    // was saved under, and believing that sent every later save — and the
+    // session lock — to the original's file.
+    parsed.id = id;
     parsed.todos ??= [];
     parsed.snapshots ??= [];
     parsed.snapshots = parsed.snapshots.map((snapshot) =>
@@ -173,13 +194,17 @@ export function listSessions(opts?: { cwd?: string; limit?: number }): SessionSu
 
   const out: SessionSummary[] = [];
   for (const f of files) {
+    const id = f.slice(0, -".json".length);
+    if (!isSessionId(id)) continue;
     try {
       const raw = fs.readFileSync(path.join(sessionsDirectory(), f), "utf8");
-      const s = JSON.parse(raw) as StoredSession;
+      // Without the BOM, as loadSession reads it: a session re-saved by an
+      // editor that writes one still loaded by id but vanished from the list.
+      const s = JSON.parse(withoutBom(raw)) as StoredSession;
       if (!s?.id) continue;
       if (opts?.cwd && path.resolve(s.cwd) !== path.resolve(opts.cwd)) continue;
       out.push({
-        id: s.id,
+        id,
         title: deriveTitle(s),
         cwd: s.cwd,
         model: s.model,

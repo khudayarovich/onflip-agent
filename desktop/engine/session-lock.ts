@@ -1,7 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { randomUUID } from "node:crypto";
-import { sessionsDirectory } from "onflip/dist/agent/store";
+import { isSessionId, sessionsDirectory } from "onflip/dist/agent/store";
 
 interface LockOwner {
   pid: number;
@@ -11,8 +11,9 @@ interface LockOwner {
 
 const INITIALISING_GRACE_MS = 10_000;
 
-export function sessionLockFile(id: string): string {
-  return path.join(sessionsDirectory(), `${id}.lock`);
+/** Null for anything that is not a session id: it names no session, so no lock. */
+export function sessionLockFile(id: string): string | null {
+  return isSessionId(id) ? path.join(sessionsDirectory(), `${id}.lock`) : null;
 }
 
 function readOwner(file: string): LockOwner | null {
@@ -61,6 +62,7 @@ function youngUnknownLock(file: string): boolean {
 
 export function sessionHeldElsewhere(id: string): boolean {
   const file = sessionLockFile(id);
+  if (!file) return false;
   const owner = readOwner(file);
   if (!owner) {
     if (!fs.existsSync(file)) return false;
@@ -77,6 +79,7 @@ export function sessionHeldElsewhere(id: string): boolean {
 /** Atomically acquire a session lock. False means another live engine won. */
 export function claimSessionLock(id: string): boolean {
   const file = sessionLockFile(id);
+  if (!file) return false;
   try {
     fs.mkdirSync(path.dirname(file), { recursive: true });
   } catch {
@@ -106,6 +109,7 @@ export function claimSessionLock(id: string): boolean {
 
 export function releaseSessionLock(id: string): void {
   const file = sessionLockFile(id);
+  if (!file) return;
   const owner = readOwner(file);
   if (owner?.pid !== process.pid) return;
   try {

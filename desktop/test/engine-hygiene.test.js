@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * Two small ways the engine mishandled what it was given.
+ * Small ways the engine mishandled what it was given.
  *
  * - A skill's `{input}` was filled with String.replace and a string, which
  *   expands `$&`, `$'` and `$$` in the user's own words: `printf $'a b'`
@@ -9,6 +9,8 @@
  * - The session lock's folder was created unguarded, out of the save a turn
  *   makes before it starts; a failure there escaped the turn's own handling
  *   and left the engine marked busy for good.
+ * - The lock was joined from the session id unchecked, as the session file
+ *   was, so an id like "../escape" named a file outside the sessions folder.
  */
 
 const test = require("node:test");
@@ -40,4 +42,27 @@ test("a lock folder that cannot be made is 'not ours', not a crash", { skip: nee
   fs.mkdirSync(path.dirname(dir), { recursive: true });
   fs.writeFileSync(dir, "a file where the folder should be");
   assert.equal(claimSessionLock("some-session"), false);
+});
+
+test("a lock is never taken for an id that is not a session id", { skip: needsBuild }, () => {
+  // The lock sits beside the session file and was joined from the id the
+  // same way, so "../escape" put a lock file outside the sessions folder.
+  const { claimSessionLock, releaseSessionLock, sessionHeldElsewhere, sessionLockFile } = require(LOCK);
+  const previous = process.env.ONFLIP_PROVIDER;
+  process.env.ONFLIP_PROVIDER = "qwen";
+  try {
+    const sessions = path.dirname(sessionLockFile("real-id"));
+    fs.mkdirSync(sessions, { recursive: true });
+    for (const id of ["../escape", "..\escape", ".."]) {
+      assert.equal(sessionLockFile(id), null, id);
+      assert.equal(claimSessionLock(id), false, id);
+      assert.equal(sessionHeldElsewhere(id), false, id);
+    }
+    assert.equal(fs.existsSync(path.join(sessions, "..", "escape.lock")), false);
+    assert.equal(claimSessionLock("real-id"), true, "a real id still locks");
+    releaseSessionLock("real-id");
+  } finally {
+    if (previous === undefined) delete process.env.ONFLIP_PROVIDER;
+    else process.env.ONFLIP_PROVIDER = previous;
+  }
 });
