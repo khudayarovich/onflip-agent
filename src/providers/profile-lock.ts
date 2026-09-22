@@ -1,4 +1,6 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
 
 /**
@@ -56,6 +58,45 @@ export function pidFromLockTarget(target: string): number | null {
   return Number.isInteger(pid) && pid > 0 ? pid : null;
 }
 
+/**
+ * The machine name out of a lock's target, or null.
+ *
+ * Everything before the pid — which is the hostname, dashes and all. On a
+ * junction (how the tests make a lock on Windows) the target is a whole path,
+ * so only its last segment is read.
+ */
+export function hostFromLockTarget(target: string): string | null {
+  const m = /^(.*)-\d{1,10}$/.exec(path.basename((target ?? "").trim()));
+  return m && m[1] ? m[1] : null;
+}
+
+/** What `releaseProfileLock` asks of the machine before it signals anything. */
+export interface LockInspection {
+  hostname(): string;
+  /** A running process's command line, or null when it cannot be read. */
+  commandLine(pid: number): string | null;
+}
+
+const SYSTEM: LockInspection = {
+  hostname: () => os.hostname(),
+  commandLine(pid) {
+    try {
+      if (process.platform === "linux") {
+        return fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim() || null;
+      }
+      return (
+        execFileSync("ps", ["-p", String(pid), "-o", "args="], {
+          encoding: "utf8",
+          timeout: 3_000,
+          stdio: ["ignore", "pipe", "ignore"],
+        }).trim() || null
+      );
+    } catch {
+      return null;
+    }
+  },
+};
+
 /** Is this process still running? Signal 0 checks without delivering. */
 function isAlive(pid: number): boolean {
   try {
@@ -101,7 +142,8 @@ export async function releaseProfileLock(
   // Not a nicety: every macOS fault in this driver's history was shipped by
   // someone who could not run the macOS branch, and a default parameter is
   // the difference between testing this and hoping about it.
-  platform: string = process.platform
+  platform: string = process.platform,
+  inspect: LockInspection = SYSTEM
 ): Promise<LockOutcome> {
   if (platform === "win32") return "free";
 
@@ -114,8 +156,28 @@ export async function releaseProfileLock(
     return "free";
   }
 
+  // A pid is only this browser's while it runs on this machine and holds
+  // this profile. The pid alone was trusted, so a lock surviving a reboot, a
+  // reused pid, or a lock written under another machine name got some
+  // unrelated process of the user's sent SIGTERM and then SIGKILL — Chromium
+  // itself checks the host before it believes a lock, and this did not.
   const pid = pidFromLockTarget(target);
-  if (pid && isAlive(pid)) {
+  const host = hostFromLockTarget(target);
+  if (pid && host !== inspect.hostname()) {
+    note?.("the lock was left under another machine name; clearing it without signalling anything", {
+      pid,
+      host,
+    });
+  } else if (pid && isAlive(pid)) {
+    const args = inspect.commandLine(pid);
+    if (args === null) {
+      note?.("a process holds the profile's lock and could not be identified; leaving it alone", { pid });
+      return "held";
+    }
+    if (!args.includes(dir)) {
+      note?.("the lock names a process that is not this profile's browser; clearing the stale lock", { pid });
+      return clearLockFiles(dir, pid, note);
+    }
     note?.("a browser is still holding the profile; closing it", { pid, target });
     try {
       process.kill(pid, "SIGTERM");
@@ -137,6 +199,14 @@ export async function releaseProfileLock(
 
   // The owner is gone — either it already was, or it is now. The lock it
   // left is what the next launch would refuse on, so it goes too.
+  return clearLockFiles(dir, pid, note);
+}
+
+function clearLockFiles(
+  dir: string,
+  pid: number | null,
+  note?: (message: string, data?: Record<string, unknown>) => void
+): LockOutcome {
   for (const name of LOCK_FILES) {
     try {
       fs.rmSync(path.join(dir, name), { force: true });

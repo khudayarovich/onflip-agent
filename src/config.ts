@@ -271,6 +271,13 @@ const PROVIDER_SETTINGS = [
   "discoveredModels",
   "accountName",
   "accountEmail",
+  // A service's throttle is that service's. At the top level, a DeepSeek
+  // cooldown made ChatGPT refuse to send ("Waiting out a ChatGPT cooldown")
+  // and turned off auto-resume there, for a limit ChatGPT never set.
+  "cooldownUntil",
+  // Picking a Qwen model pinned ChatGPT's choice, so ChatGPT stopped
+  // adopting its account's default.
+  "modelPinned",
 ] as const satisfies readonly (keyof OnFlipConfig)[];
 
 /**

@@ -324,6 +324,9 @@ export function isThinkingLevel(value: string): value is ThinkingLevel {
  * untouched rather than rejected — a model released after this build should
  * still be usable by name.
  */
+/** How the model names of services OnFlip no longer drives begin. */
+const RETIRED_PROVIDER_PREFIXES = ["arena-"];
+
 export function normalizeModel(value: string | undefined): string | undefined {
   const v = value?.trim().toLowerCase();
   if (!v) return undefined;
@@ -342,6 +345,13 @@ export function normalizeModel(value: string | undefined): string | undefined {
   // name a mode that no longer exists; it opens on the model that
   // replaced all three rather than on a slug nothing answers to.
   if (RETIRED_DEEPSEEK[v]) return RETIRED_DEEPSEEK[v];
+
+  // A service that is gone leaves its model names behind: Arena's were
+  // written into ChatGPT's own slot by builds before 0.10.51, and an
+  // unknown slug is passed through by design — so ChatGPT opened chats with
+  // `?model=arena-max`, silently ran its default, and the chip went on
+  // saying "arena-max". Such a slug names no model; the default does.
+  if (RETIRED_PROVIDER_PREFIXES.some((prefix) => v.startsWith(prefix))) return defaultModel();
 
   const ALIASES: Record<string, string> = {
     "gpt-4.1": "gpt-4-1",

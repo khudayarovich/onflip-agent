@@ -134,13 +134,21 @@ test("a live owner is signalled, and the profile freed once it goes", async (t) 
   // is the only way the read that follows a sign-in can succeed.
   const { spawn } = require("node:child_process");
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-lock-live-"));
-  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  // It names the profile the way the browser holding it does.
+  const args = ["-e", "setTimeout(() => {}, 60000)", "--", `--user-data-dir=${dir}`];
+  const child = spawn(process.execPath, args, { stdio: "ignore" });
+  // The process table is read through an injected probe here, because this
+  // runs the macOS branch on whatever machine builds; the real one is below.
+  const inspect = {
+    hostname: () => os.hostname(),
+    commandLine: (pid) => (pid === child.pid ? `${process.execPath} ${args.join(" ")}` : null),
+  };
   try {
     await new Promise((r) => setTimeout(r, 300));
     if (!makeLock(dir, `${os.hostname()}-${child.pid}`)) return t.skip("no link this OS allows");
 
     const said = [];
-    const outcome = await releaseProfileLock(dir, (m) => said.push(m), "darwin");
+    const outcome = await releaseProfileLock(dir, (m) => said.push(m), "darwin", inspect);
 
     assert.equal(outcome, "released");
     assert.ok(said.some((m) => /still holding the profile/.test(m)), said.join(" | "));
@@ -152,6 +160,65 @@ test("a live owner is signalled, and the profile freed once it goes", async (t) 
     let alive = true;
     try { process.kill(child.pid, 0); } catch { alive = false; }
     assert.equal(alive, false, "the process holding the lock is still running");
+  } finally {
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a live process that is not this profile's browser is never signalled", async (t) => {
+  // A lock outliving a reboot names a pid that now belongs to something
+  // else of the user's. It used to get SIGTERM, then SIGKILL.
+  const { spawn } = require("node:child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-lock-other-"));
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)"], { stdio: "ignore" });
+  const inspect = {
+    hostname: () => os.hostname(),
+    commandLine: (pid) => (pid === child.pid ? `${process.execPath} -e setTimeout(() => {}, 60000)` : null),
+  };
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    if (!makeLock(dir, `${os.hostname()}-${child.pid}`)) return t.skip("no link this OS allows");
+    const outcome = await releaseProfileLock(dir, undefined, "darwin", inspect);
+    assert.equal(outcome, "released", "the stale lock still goes");
+    let alive = true;
+    try { process.kill(child.pid, 0); } catch { alive = false; }
+    assert.equal(alive, true, "an unrelated process was killed");
+  } finally {
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("a lock left under another machine name signals nothing here", async (t) => {
+  const { spawn } = require("node:child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-lock-host-"));
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", "--", `--user-data-dir=${dir}`], { stdio: "ignore" });
+  const inspect = { hostname: () => os.hostname(), commandLine: () => `chrome --user-data-dir=${dir}` };
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    if (!makeLock(dir, `some-other-machine-${child.pid}`)) return t.skip("no link this OS allows");
+    assert.equal(await releaseProfileLock(dir, undefined, "darwin", inspect), "released");
+    let alive = true;
+    try { process.kill(child.pid, 0); } catch { alive = false; }
+    assert.equal(alive, true, "a pid from another machine was signalled here");
+  } finally {
+    try { child.kill("SIGKILL"); } catch { /* already gone */ }
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("the real process table is read where there is one", { skip: process.platform === "win32" ? "POSIX only" : false }, async () => {
+  const { spawn } = require("node:child_process");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-lock-real-"));
+  const child = spawn(process.execPath, ["-e", "setTimeout(() => {}, 60000)", "--", `--user-data-dir=${dir}`], { stdio: "ignore" });
+  try {
+    await new Promise((r) => setTimeout(r, 300));
+    fs.symlinkSync(`${os.hostname()}-${child.pid}`, path.join(dir, "SingletonLock"));
+    assert.equal(await releaseProfileLock(dir), "released");
+    let alive = true;
+    try { process.kill(child.pid, 0); } catch { alive = false; }
+    assert.equal(alive, false, "the browser holding this profile was not closed");
   } finally {
     try { child.kill("SIGKILL"); } catch { /* already gone */ }
     fs.rmSync(dir, { recursive: true, force: true });
