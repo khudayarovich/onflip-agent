@@ -101,9 +101,32 @@ export function getCookieKey(localStatePath: string, browser: string): CookieKey
   return { key, scheme: "cbc" };
 }
 
+/**
+ * The value, without the domain hash Chromium 130+ puts in front of it.
+ *
+ * Since cookie database version 24 the encrypted blob holds
+ * SHA256(host_key) followed by the value, on every platform. The Windows
+ * (GCM) branch never removed it, so every value imported from Edge came
+ * back as thirty-two bytes of binary followed by the token. The macOS and
+ * Linux branch guessed from the first byte — strip unless it is printable —
+ * and a hash starts with a printable byte about a third of the time
+ * (auth.openai.com's does). With the cookie's own host the check is exact;
+ * without one, the old guess stands.
+ */
+function withoutDomainHash(plain: Buffer, hostKey?: string): string {
+  if (plain.length >= 32 && hostKey !== undefined) {
+    const hash = crypto.createHash("sha256").update(hostKey).digest();
+    return (plain.subarray(0, 32).equals(hash) ? plain.subarray(32) : plain).toString("utf8");
+  }
+  const text = plain.toString("utf8");
+  return plain.length > 32 && !/^[ -~]/.test(text) ? plain.subarray(32).toString("utf8") : text;
+}
+
 export function decryptChromiumCookieValue(
   encryptedValue: Buffer,
-  cookieKey: CookieKey
+  cookieKey: CookieKey,
+  /** The row's `host_key`, which is what the prefix is a hash of. */
+  hostKey?: string
 ): string {
   const prefix = encryptedValue.subarray(0, 3).toString("ascii");
   if (prefix !== "v10" && prefix !== "v11") {
@@ -126,9 +149,7 @@ export function decryptChromiumCookieValue(
     const iv = Buffer.alloc(16, 0x20);
     const decipher = crypto.createDecipheriv("aes-128-cbc", cookieKey.key, iv);
     const plain = Buffer.concat([decipher.update(encryptedValue.subarray(3)), decipher.final()]);
-    // Recent Chromium prefixes the value with a 32-byte hash of the domain.
-    const text = plain.toString("utf8");
-    return plain.length > 32 && !/^[ -~]/.test(text) ? plain.subarray(32).toString("utf8") : text;
+    return withoutDomainHash(plain, hostKey);
   }
 
   const nonce = encryptedValue.subarray(3, 15);
@@ -138,5 +159,5 @@ export function decryptChromiumCookieValue(
   const data = ciphertext.subarray(0, ciphertext.length - 16);
   const decipher = crypto.createDecipheriv("aes-256-gcm", cookieKey.key, nonce);
   decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(data), decipher.final()]).toString("utf8");
+  return withoutDomainHash(Buffer.concat([decipher.update(data), decipher.final()]), hostKey);
 }

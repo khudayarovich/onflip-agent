@@ -140,7 +140,7 @@ function extractChromium(loc: BrowserCookieLocation): ExtractedToken | null {
 
     for (const row of allRows) {
       try {
-        const value = decryptChromiumCookieValue(row.encrypted_value, cookieKey);
+        const value = decryptChromiumCookieValue(row.encrypted_value, cookieKey, row.host_key);
         // The host is kept now rather than discarded. Two hosts are read
         // here and the jar used to be flattened to name and value, so a
         // cookie set for one of them was replayed to the other.
