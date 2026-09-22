@@ -9,6 +9,7 @@ import {
   escapeHtml,
   helpCard,
   oneLine,
+  plainText,
   statusCard,
   toolLine,
   type StatusLike,
@@ -294,20 +295,26 @@ interface Keyboard {
  * a malformed message, a chat that does not exist — fail identically however
  * many times they are tried, and Telegram says so in words.
  */
-async function say(chatId: number, html: string, keyboard?: Keyboard): Promise<number | null> {
+async function say(chatId: number, html: string, keyboard?: Keyboard, formatted = true): Promise<number | null> {
   const body = {
     chat_id: chatId,
     text: html,
-    parse_mode: "HTML",
+    ...(formatted ? { parse_mode: "HTML" } : {}),
     disable_web_page_preview: true,
     ...(keyboard ? { reply_markup: keyboard } : {}),
-  };
+  } as Record<string, unknown> & { parse_mode?: string };
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
       const sent = await api<{ message_id: number }>("sendMessage", body);
       return sent?.message_id ?? null;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
+      // Markup Telegram cannot parse would be refused again as it is, and
+      // the message was dropped without a word. Sent once more as plain
+      // text: the formatting is lost, the answer is not.
+      if (/can't parse entities|can't find end of the entity|unsupported start tag/i.test(message) && body.parse_mode) {
+        return say(chatId, plainText(html), keyboard, false);
+      }
       // Telegram refusing the content will refuse it again; only a transport
       // failure is worth a second go.
       const transient = /fetch failed|network|ETIMEDOUT|ECONNRESET|socket/i.test(message);

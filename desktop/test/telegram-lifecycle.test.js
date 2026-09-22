@@ -213,3 +213,38 @@ test("a restart leaves one loop polling, and a disabled bot acts on nothing", { 
   tg.stopTelegram();
   assert.deepEqual(bot.prompts, [], "nothing reached the engine after the bot was disabled");
 });
+
+test("a message Telegram cannot parse goes out as plain text, not nowhere", { skip: needsBuild }, async () => {
+  // say() retried only network failures, so markup Telegram refused was a
+  // message dropped without a word.
+  const fake = fakeTelegram();
+  const accept = global.fetch;
+  let refused = 0;
+  global.fetch = async (url, opts = {}) => {
+    const body = typeof opts.body === "string" ? JSON.parse(opts.body) : {};
+    if (String(url).endsWith("/sendMessage") && body.parse_mode === "HTML") {
+      refused++;
+      return {
+        json: async () => ({
+          ok: false,
+          error_code: 400,
+          description: "Bad Request: can't parse entities: Can't find end tag corresponding to start tag \"b\"",
+        }),
+      };
+    }
+    return accept(url, opts);
+  };
+  const tg = loadTelegram(userData({ enabled: true, token: "1:fake", allowedIds: "42", chats: [42] }));
+  tg.startTelegram(host());
+  await sleep(500);
+  fake.push({ message: { chat: { id: 42 }, from: { id: 42 }, text: "/help" } });
+  await sleep(600);
+  tg.stopTelegram();
+  assert.ok(refused > 0, "the formatted message was never tried");
+  const plain = fake.sent.filter((m) => m.chat_id === 42);
+  assert.ok(plain.length > 0, "nothing reached the chat");
+  for (const m of plain) {
+    assert.equal(m.parse_mode, undefined);
+    assert.doesNotMatch(m.text, /<\/?[a-z]+>/, "the markup was not taken out");
+  }
+});

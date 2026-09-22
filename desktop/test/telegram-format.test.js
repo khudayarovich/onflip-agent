@@ -271,3 +271,35 @@ test("and says nothing where there is no version to name", { skip: needsBuild },
   assert.match(card, /<b>OnFlip<\/b>/);
   assert.ok(!/<code><\/code>/.test(card), card);
 });
+
+test("a line longer than a message is cut into pieces that each balance", { skip: needsBuild }, () => {
+  // It was cut by characters: through a tag, an entity or a code block, and
+  // Telegram refused every such piece. An empty <pre> could go out too.
+  const { chunkHtml, plainText } = load();
+  // Two long lines back to back (the second used to follow an empty
+  // <pre></pre> of its own), and a run of entities where a cut by length
+  // must land inside one.
+  const code = "const bundle = " + "x&amp;y ".repeat(900) + ";\n" + "&amp;".repeat(700);
+  const html = `Here is the bundle:\n<pre><code class="language-js">${code}\nconsole.log(1)</code></pre>\nDone.`;
+  const parts = chunkHtml(html, 1000);
+  for (const part of parts) {
+    assert.ok(part.length <= 1000, `a part of ${part.length}`);
+    assert.ok(balanced(part), part.slice(0, 120));
+    assert.ok(plainText(part).trim().length > 0, "an empty part");
+    assert.doesNotMatch(part, /&[a-z]*$|^[a-z]*;/m, "an entity cut in half");
+  }
+  // Line breaks between messages are the messages themselves.
+  const text = parts.map((p) => plainText(p)).join("").replace(/\n/g, "");
+  assert.ok(text.includes(plainText(code).replace(/\n/g, "")), "the code survives the cut, character for character");
+
+  const prose = `${"word ".repeat(700)}<b>important</b> ${"tail ".repeat(200)}`;
+  for (const part of chunkHtml(prose, 1000)) {
+    assert.ok(balanced(part), part.slice(-80));
+    assert.ok(part.length <= 1000);
+  }
+});
+
+test("plain text is the message without its markup", { skip: needsBuild }, () => {
+  const { plainText } = load();
+  assert.equal(plainText("<b>a &amp; b</b> &lt;c&gt; <code>x</code>"), "a & b <c> x");
+});

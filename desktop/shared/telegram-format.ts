@@ -91,10 +91,12 @@ export function chunkHtml(html: string, limit: number = CHUNK_LIMIT): string[] {
   const out: string[] = [];
   let current = "";
   let inPre = false;
+  // Tags alone are not a message: Telegram refuses an empty one.
+  const hasText = (s: string) => s.replace(/<[^>]+>/g, "").trim().length > 0;
 
   const flush = () => {
-    if (!current.trim()) {
-      current = "";
+    if (!hasText(current)) {
+      current = inPre ? "<pre><code>" : "";
       return;
     }
     out.push(inPre ? `${current}</code></pre>` : current);
@@ -102,22 +104,112 @@ export function chunkHtml(html: string, limit: number = CHUNK_LIMIT): string[] {
   };
 
   for (const line of html.split("\n")) {
-    // A single line longer than the limit has to be cut somewhere; the
-    // alternative is a message that can never be sent.
-    let rest = line;
-    while (rest.length > limit) {
+    if (line.length > limit) {
+      // One line longer than a message has to be cut somewhere, or it can
+      // never be sent. It used to be cut by characters — through a tag, an
+      // entity or a code block — and Telegram refused every such piece.
       flush();
-      out.push(rest.slice(0, limit));
-      rest = rest.slice(limit);
+      out.push(...splitLongLine(line, limit, inPre ? ["<pre>", "<code>"] : []));
+      inPre = preOpenAfter(line, inPre);
+      current = inPre ? "<pre><code>" : "";
+      continue;
     }
-    if (current.length + rest.length + 1 > limit) flush();
-    current += (current && !current.endsWith("<pre><code>") ? "\n" : "") + rest;
+    if (current.length + line.length + 1 > limit) flush();
+    current += (current && !current.endsWith("<pre><code>") ? "\n" : "") + line;
     // Tracked after appending, so a line that opens a block is inside it.
-    if (rest.includes("<pre>")) inPre = true;
-    if (rest.includes("</pre>")) inPre = false;
+    inPre = preOpenAfter(line, inPre);
   }
-  if (current.trim()) out.push(current);
+  if (hasText(current)) out.push(inPre ? `${current}</code></pre>` : current);
   return out;
+}
+
+/** Whether a code block is open after this line. */
+function preOpenAfter(line: string, open: boolean): boolean {
+  const opened = line.lastIndexOf("<pre>");
+  const closed = line.lastIndexOf("</pre>");
+  if (opened === -1 && closed === -1) return open;
+  return opened > closed;
+}
+
+/** A cut point in escaped text that does not fall inside an entity. */
+function safeCut(text: string, at: number): number {
+  const amp = text.lastIndexOf("&", at - 1);
+  if (amp !== -1 && at - amp <= 8) {
+    const semi = text.indexOf(";", amp);
+    if (semi === -1 || semi >= at) return amp;
+  }
+  return at;
+}
+
+/**
+ * One line longer than a message, as messages that each stand alone.
+ *
+ * Every tag open at a cut is closed before it and opened again after it,
+ * `<pre><code>` included, because Telegram refuses a message whose tags do
+ * not balance. In prose the cut falls on a space where one is near; never
+ * inside an entity such as `&amp;`.
+ */
+export function splitLongLine(line: string, limit: number, openAtStart: string[] = []): string[] {
+  const nameOf = (tag: string) => (/^<\/?([a-z]+)/i.exec(tag)?.[1] ?? "").toLowerCase();
+  const stack = [...openAtStart];
+  const pieces: string[] = [];
+  let piece = stack.join("");
+  const closing = () =>
+    stack
+      .slice()
+      .reverse()
+      .map((tag) => `</${nameOf(tag)}>`)
+      .join("");
+  const inCode = () => stack.some((tag) => nameOf(tag) === "pre" || nameOf(tag) === "code");
+  const cut = () => {
+    if (piece.replace(/<[^>]+>/g, "").trim()) pieces.push(piece + closing());
+    piece = stack.join("");
+  };
+
+  for (const token of line.split(/(<[^>]+>)/).filter(Boolean)) {
+    if (token.startsWith("<")) {
+      if (piece.length + token.length + closing().length > limit) cut();
+      piece += token;
+      if (token.startsWith("</")) {
+        const at = stack.map(nameOf).lastIndexOf(nameOf(token));
+        if (at !== -1) stack.splice(at, 1);
+      } else if (!token.endsWith("/>")) {
+        stack.push(token);
+      }
+      continue;
+    }
+    let text = token;
+    for (;;) {
+      const room = limit - piece.length - closing().length;
+      if (text.length <= room) break;
+      let at = Math.max(1, room);
+      if (!inCode()) {
+        const space = text.lastIndexOf(" ", at);
+        if (space > at / 2) at = space + 1;
+      }
+      at = safeCut(text, at) || at;
+      piece += text.slice(0, at);
+      text = text.slice(at);
+      cut();
+    }
+    piece += text;
+  }
+  cut();
+  return pieces;
+}
+
+/**
+ * The same message without its markup, for when Telegram will not take it.
+ *
+ * A formatting slip should cost the formatting, never the message.
+ */
+export function plainText(html: string): string {
+  return html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&amp;/g, "&");
 }
 
 /** One line of a message, already escaped. */
