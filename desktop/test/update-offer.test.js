@@ -7,7 +7,9 @@
  *   came last. This repository publishes the CLI's releases too, so the next
  *   one would have been all the app could see: older than every desktop
  *   version, and no desktop update offered until another desktop release
- *   happened to follow it.
+ *   happened to follow it. Reading the whole list instead made every check
+ *   fourteen times larger, and two of them timed out in one afternoon; the
+ *   latest is asked first now, and the list only when it is not ours.
  * - "0.10.51-rc.1" split on dots and dashes read as 0.10.51.0.1, newer than
  *   0.10.51, so anyone running a release candidate never got the release.
  * - The timer marked a version announced before delivering it, so a check
@@ -27,20 +29,35 @@ const needsBuild = fs.existsSync(path.join(DIST, "update-install.js"))
   ? false
   : "desktop/dist is not built (run: cd desktop && npm run build:node)";
 
-/** The compiled updater with `electron` stubbed; `answer` is what GitHub says. */
+/** An answer with a status other than 200. */
+const http = (status, body) => ({ __http: true, status, body });
+
+/**
+ * The compiled updater with `electron` stubbed. `answer` is what GitHub says:
+ * the same thing for every request, or `(url, nth) => …` to answer by URL and
+ * by how many times that URL has been asked; "network-error" fails the
+ * request in transit.
+ */
 function load(answer, version = "0.10.51") {
   const asked = [];
   const net = {
     request({ url }) {
       asked.push(url);
+      const nth = asked.filter((u) => u === url).length;
+      const spec = typeof answer === "function" ? answer(url, nth) : answer;
       const request = new EventEmitter();
       request.setHeader = () => {};
       request.abort = () => {};
       request.end = () => {
+        if (spec === "network-error") {
+          request.emit("error", new Error("net::ERR_CONNECTION_RESET"));
+          return;
+        }
+        const { status, body } = spec && spec.__http ? spec : { status: 200, body: spec };
         const response = new EventEmitter();
-        response.statusCode = 200;
+        response.statusCode = status;
         request.emit("response", response);
-        response.emit("data", Buffer.from(JSON.stringify(answer)));
+        response.emit("data", Buffer.from(JSON.stringify(body)));
         response.emit("end");
       };
       return request;
@@ -105,18 +122,55 @@ test("the desktop release is picked out of everything the repository publishes",
   assert.equal(pickDesktopRelease({ message: "API rate limit exceeded" }), undefined);
 });
 
-test("and the check offers it, asking for the list rather than the latest", { skip: needsBuild }, async () => {
-  const { updates, asked } = load([exe("v0.3.0"), exe("desktop-v0.10.52"), exe("desktop-v0.10.51")]);
+const LATEST = /\/releases\/latest$/;
+const LIST = /\/releases\?per_page=\d+$/;
+
+test("the check finds the desktop release with one small request", { skip: needsBuild }, async () => {
+  // The list is nearly 300 KB against 20 KB for the latest alone, inside the
+  // same ten seconds; two checks in one afternoon ran out of them.
+  const { updates, asked } = load((url) => (LATEST.test(url) ? exe("desktop-v0.10.52") : []));
   const info = await updates.checkForUpdate();
-  assert.match(asked[0], /\/releases\?per_page=\d+$/);
+  assert.equal(asked.length, 1, "one request");
+  assert.match(asked[0], LATEST);
   assert.equal(info.latest, "0.10.52");
   assert.equal(info.available, process.platform === "linux" ? true : Boolean(info.installable));
   assert.equal(info.error, undefined);
 });
 
+test("and when the latest release is the CLI's, the list decides", { skip: needsBuild }, async () => {
+  const { updates, asked } = load((url) =>
+    LATEST.test(url) ? exe("v0.3.0") : [exe("v0.3.0"), exe("desktop-v0.10.52"), exe("desktop-v0.10.51")]
+  );
+  const info = await updates.checkForUpdate();
+  assert.equal(asked.length, 2);
+  assert.match(asked[0], LATEST);
+  assert.match(asked[1], LIST);
+  assert.equal(info.latest, "0.10.52");
+});
+
+test("a request that fails in transit is tried once more, and only once", { skip: needsBuild }, async () => {
+  const recovered = load((url, nth) => (nth === 1 ? "network-error" : exe("desktop-v0.10.52")));
+  const info = await recovered.updates.checkForUpdate();
+  assert.equal(info.latest, "0.10.52", "the second try found it");
+  assert.equal(recovered.asked.length, 2);
+  const down = load(() => "network-error");
+  const failed = await down.updates.checkForUpdate();
+  assert.equal(failed.available, false);
+  assert.match(failed.error, /ERR_CONNECTION_RESET/);
+  assert.equal(down.asked.length, 2, "one retry, not a loop");
+});
+
+test("but an answer GitHub gave on purpose is not asked again", { skip: needsBuild }, async () => {
+  const limited = load(() => http(403, { message: "API rate limit exceeded" }));
+  const info = await limited.updates.checkForUpdate();
+  assert.equal(info.available, false);
+  assert.match(info.error, /GitHub answered 403/);
+  assert.equal(limited.asked.length, 1, "a rate limit says the same thing twice");
+});
+
 test("a check that finds only older releases offers nothing", { skip: needsBuild }, async () => {
   // The false-positive half.
-  const { updates } = load([exe("v0.3.0"), exe("desktop-v0.10.51")]);
+  const { updates } = load((url) => (LATEST.test(url) ? exe("desktop-v0.10.51") : [exe("desktop-v0.10.51")]));
   const info = await updates.checkForUpdate();
   assert.equal(info.available, false);
   const rateLimited = await load({ message: "API rate limit exceeded" }).updates.checkForUpdate();

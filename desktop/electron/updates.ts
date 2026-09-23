@@ -15,12 +15,19 @@ import { app, net } from "electron";
  */
 
 /**
- * The list, not `/releases/latest`. This repository publishes the CLI's
- * releases too (`v0.2.0`), and "latest" is whichever release came last: the
- * next CLI release would have been the only one the app ever saw, older
- * than every desktop version, and no desktop update would have been offered
- * until another desktop release happened to follow it.
+ * The release GitHub calls latest, then — only when that is not a desktop
+ * release — the list.
+ *
+ * This repository publishes the CLI's releases too (`v0.2.0`), and "latest"
+ * is whichever release came last: reading it alone, the next CLI release
+ * would have been the only one the app ever saw, and no desktop update would
+ * have been offered until another desktop release followed it. Reading the
+ * list alone fixed that and cost the common case: fifteen releases are
+ * nearly 300 KB against 20 KB for one, all inside the same ten seconds, and
+ * two checks in one afternoon ran out of them. Latest is a desktop release
+ * on almost every check.
  */
+const LATEST_API = "https://api.github.com/repos/khudayarovich/onflip-agent/releases/latest";
 const RELEASES_API = "https://api.github.com/repos/khudayarovich/onflip-agent/releases?per_page=15";
 const RELEASES_PAGE = "https://github.com/khudayarovich/onflip-agent/releases";
 /** The desktop app's tags; everything else in the repository is not ours to offer. */
@@ -239,49 +246,74 @@ export function releaseReadyFor(
  * system proxy, which is the difference between working and silently never
  * finding an update on a corporate machine.
  */
-export async function checkForUpdate(): Promise<UpdateInfo> {
-  const current = app.getVersion();
-  try {
-    const body = await new Promise<string>((resolve, reject) => {
-      const request = net.request({ url: RELEASES_API, method: "GET" });
-      request.setHeader("Accept", "application/vnd.github+json");
-      request.setHeader("User-Agent", `OnFlip/${current}`);
-      const timer = setTimeout(() => {
-        request.abort();
-        reject(new Error("timed out"));
-      }, 10_000);
-      request.on("response", (response) => {
-        const chunks: Buffer[] = [];
-        // A body that dies mid-stream is an `error` on the response, and an
-        // unhandled one is an exception in the main process.
-        response.on("error", (e: Error) => {
-          clearTimeout(timer);
-          reject(e);
-        });
-        response.on("aborted", () => {
-          clearTimeout(timer);
-          reject(new Error("the connection was closed"));
-        });
-        response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
-        response.on("end", () => {
-          clearTimeout(timer);
-          if ((response.statusCode ?? 0) >= 400) {
-            reject(new Error(`GitHub answered ${response.statusCode}`));
-            return;
-          }
-          resolve(Buffer.concat(chunks).toString("utf8"));
-        });
-      });
-      request.on("error", (e) => {
+/** GitHub answered, and the answer was an error: asking again says the same. */
+class GitHubAnswer extends Error {}
+
+/** One GET against the GitHub API, read whole within ten seconds. */
+function getOnce(url: string, current: string): Promise<string> {
+  return new Promise<string>((resolve, reject) => {
+    const request = net.request({ url, method: "GET" });
+    request.setHeader("Accept", "application/vnd.github+json");
+    request.setHeader("User-Agent", `OnFlip/${current}`);
+    const timer = setTimeout(() => {
+      request.abort();
+      reject(new Error("timed out"));
+    }, 10_000);
+    request.on("response", (response) => {
+      const chunks: Buffer[] = [];
+      // A body that dies mid-stream is an `error` on the response, and an
+      // unhandled one is an exception in the main process.
+      response.on("error", (e: Error) => {
         clearTimeout(timer);
         reject(e);
       });
-      request.end();
+      response.on("aborted", () => {
+        clearTimeout(timer);
+        reject(new Error("the connection was closed"));
+      });
+      response.on("data", (chunk) => chunks.push(Buffer.from(chunk)));
+      response.on("end", () => {
+        clearTimeout(timer);
+        if ((response.statusCode ?? 0) >= 400) {
+          reject(new GitHubAnswer(`GitHub answered ${response.statusCode}`));
+          return;
+        }
+        resolve(Buffer.concat(chunks).toString("utf8"));
+      });
     });
+    request.on("error", (e) => {
+      clearTimeout(timer);
+      reject(e);
+    });
+    request.end();
+  });
+}
 
-    const listed: unknown = JSON.parse(body);
-    if (!Array.isArray(listed)) throw new Error("GitHub did not answer with a list of releases");
-    const release: GitHubRelease = pickDesktopRelease(listed) ?? {};
+/**
+ * A GitHub API answer, parsed. A stall, a dropped connection or a truncated
+ * body is tried once more, because a missed check waits hours for the next
+ * one; an answer GitHub gave on purpose — a rate limit, a 404 — is not.
+ */
+async function getJson(url: string, current: string): Promise<unknown> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return JSON.parse(await getOnce(url, current));
+    } catch (e) {
+      if (attempt >= 2 || e instanceof GitHubAnswer) throw e;
+    }
+  }
+}
+
+export async function checkForUpdate(): Promise<UpdateInfo> {
+  const current = app.getVersion();
+  try {
+    let release = pickDesktopRelease([await getJson(LATEST_API, current)]);
+    if (!release) {
+      const listed = await getJson(RELEASES_API, current);
+      if (!Array.isArray(listed)) throw new Error("GitHub did not answer with a list of releases");
+      release = pickDesktopRelease(listed);
+    }
+    release ??= {};
     const latest = release.tag_name ? versionOf(release.tag_name) : undefined;
     const newer = Boolean(latest && isNewer(latest, current));
     const installable = installableAssetFor(release);
