@@ -135,6 +135,60 @@ const ASSISTANT_SELECTOR = ".qwen-chat-message-assistant";
 const COMPOSER = "textarea.message-input-textarea";
 /** Send. Present but `.disabled` until the composer has something in it. */
 const SEND_BUTTON = "button.send-button";
+/** Send, once it has taken the text. */
+const SEND_READY = `${SEND_BUTTON}:not(.disabled)`;
+/**
+ * The most a filled composer waits for Send to take the text. It used to be
+ * the whole of the wait, every send; now it is only the ceiling.
+ */
+const SEND_ENABLE_MS = 300;
+/** The session answer a freshly loaded page asks for; see `firstSendReady`. */
+const AUTHS_PATH = "/api/v1/auths/";
+/** The fixed pause a new chat used to take after its composer appeared. */
+const NEW_CHAT_PAUSE_MS = 1_500;
+/** How long the page gets to render the session answer before a send. */
+const SESSION_SETTLE_MS = 200;
+
+/**
+ * Settles `settleMs` after a freshly loaded page has had its session
+ * answered — true — or false if no answer came. Created before the page is
+ * loaded, so an answer that comes quickly is not missed.
+ */
+export function sessionSettled(answer: Promise<unknown>, settleMs = SESSION_SETTLE_MS): Promise<boolean> {
+  return answer.then(
+    (response) =>
+      response ? new Promise<boolean>((resolve) => setTimeout(() => resolve(true), settleMs)) : false,
+    () => false
+  );
+}
+
+/**
+ * When a new chat's first send may go: once the page has taken the session,
+ * or when the old fixed pause runs out — whichever is first.
+ *
+ * The pause exists because a send that reaches a freshly loaded page before
+ * Qwen has applied the session goes to a guest chat, which is never
+ * answered. What applies the session is the page's own `/api/v1/auths/`
+ * answer: measured on a real load, the header rendered at 1.8 s and that
+ * answer arrived at 2.6 s. So the send now waits for the answer rather than
+ * for a number, and a page that never shows one waits exactly as long as
+ * before — never longer.
+ */
+export async function firstSendReady(
+  settled: Promise<boolean>,
+  capMs = NEW_CHAT_PAUSE_MS
+): Promise<"session" | "pause"> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const pause = new Promise<"pause">((resolve) => {
+    timer = setTimeout(() => resolve("pause"), capMs);
+  });
+  const session = settled.then((ok) => (ok ? ("session" as const) : pause));
+  try {
+    return await Promise.race([pause, session]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
 /** A message of ours on the page, which is how a send is confirmed. */
 const USER_MESSAGE = ".qwen-chat-message-user";
 /**
@@ -1185,13 +1239,20 @@ export async function sendTurn(
   // driver breaking, and pacing is the part of it OnFlip controls.
   await paceSend(opts.signal);
   logger.info("qwen", "turn: opening the page", { chars: text.length });
+  /** Where the setup time went, for the "sent" line: every step is a guess otherwise. */
+  const timing: { newChatMs?: number; readyBy?: "session" | "pause"; prepMs?: number; submitMs?: number } = {};
   let page = await chatPage(opts);
   if (pendingNewChat) {
     pendingNewChat = false;
+    const openedAt = Date.now();
     // Opening a conversation is the expensive request as far as an abuse
     // control is concerned, and the agent opens them far more eagerly than
     // a person does - a compaction, a sub-agent, a recovery each start one.
     await paceNewChat(opts.signal);
+    // Listening before the navigation, so a quick answer is not missed.
+    const settled = sessionSettled(
+      page.waitForResponse((response) => response.url().includes(AUTHS_PATH), { timeout: 10_000 }).catch(() => null)
+    );
     await gotoChat(page);
     // Wait for the page rather than for a number.
     //
@@ -1200,12 +1261,15 @@ export async function sendTurn(
     // driver has been chasing: a send that arrives before Qwen has applied
     // the session to a freshly loaded page is treated as a guest send, and a
     // guest send is never answered. The composer appearing is the page
-    // saying it is ready to take one.
+    // saying it is ready to take one; the session answer is the page saying
+    // it knows who is sending (`firstSendReady`).
     await page
       .waitForSelector(COMPOSER, { timeout: 20_000 })
       .catch(() => logger.warn("qwen", "the composer did not appear on the new chat"));
-    await page.waitForTimeout(1_500);
+    timing.readyBy = await firstSendReady(settled);
+    timing.newChatMs = Date.now() - openedAt;
   }
+  const prepAt = Date.now();
   // Never begin behind the previous answer. The page is shared between
   // turns and with any sub-agent, so a Stop control left behind by an
   // interrupted one would be read as this turn working.
@@ -1215,6 +1279,7 @@ export async function sendTurn(
   const before = await readLast(page);
   // What the page already said, so a notice is only ever something new.
   const pageBefore = pageLines(await bodyText(page));
+  timing.prepMs = Date.now() - prepAt;
 
   /**
    * Put the turn in the composer and press send.
@@ -1248,7 +1313,11 @@ export async function sendTurn(
     if (accepted < text.length) {
       logger.warn("qwen", "the composer truncated the turn", { sent: text.length, accepted });
     }
-    await page.waitForTimeout(300);
+    // Until Send has taken the text, rather than a flat 300 ms on every send:
+    // Qwen clears the button's `.disabled` class as soon as React has the
+    // value, usually within a frame. The old pause stays as the ceiling, and
+    // the check after the click still catches a send that did not go.
+    await page.waitForSelector(SEND_READY, { timeout: SEND_ENABLE_MS }).catch(() => {});
 
     // Try, then CHECK, then escalate — rather than trying and hoping.
     //
@@ -1321,8 +1390,10 @@ export async function sendTurn(
     );
   };
 
+  const submitAt = Date.now();
   await submit();
-  logger.info("qwen", "turn: sent, waiting for the reply", { setupMs: Date.now() - started });
+  timing.submitMs = Date.now() - submitAt;
+  logger.info("qwen", "turn: sent, waiting for the reply", { setupMs: Date.now() - started, ...timing });
 
   const deadline = Date.now() + (opts.timeoutMs ?? 10 * 60_000);
   /** A line every half minute, so a long wait is legible rather than silent. */
