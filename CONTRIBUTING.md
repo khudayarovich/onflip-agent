@@ -22,7 +22,7 @@ Do not report a security issue in a public issue — see [SECURITY.md](SECURITY.
 
 ## Getting set up
 
-Node.js 20 or newer.
+Node.js 22 or newer.
 
 ```bash
 npm install                 # installs and builds the engine

@@ -51,6 +51,34 @@ The `.zip` is not a convenience copy — it is what the in-app updater installs
 on macOS, because it holds the `.app` directly and nothing has to be mounted.
 Do not drop it from the release.
 
+**Neither job publishes a build that cannot open sqlite.** Before uploading,
+each runs `scripts/check-sqlite-fallback.js` inside the app it just built: on
+Windows under the runner's Node and under the app's own Electron-as-Node; on
+macOS inside each zip, the Intel one under Rosetta, where its arm64 default
+binding is refused exactly as on a real Intel Mac. A failing check stops the
+job before anything is uploaded. Every release up to 0.10.55 shipped an Intel
+Mac build that could not open its database, and nothing ran to notice.
+
+## Checking a release on a real machine
+
+`desktop/scripts/smoke.ps1` launches a packaged build in isolation — its own
+user-data and config folders, a signed-out DeepSeek profile, the `onflip://`
+registration saved and put back — and exits 1 unless the window loads, the
+engine starts and checks the session, and the usage store opens:
+
+```powershell
+# before the tag: the local build
+powershell -File desktop/scripts/smoke.ps1
+# after the release: the published installer, checksum-verified and
+# extracted, never installed
+powershell -File desktop/scripts/smoke.ps1 -Release X.Y.Z
+```
+
+Run the second one. A local build's sqlite binding is compiled for this
+machine's Node and loads where the published one — built on Node 22 in CI —
+does not; the published 0.10.51 fails this check on a machine with Node 24,
+and every local build of it passed. Close the installed OnFlip first.
+
 **To rebuild without moving the tag:** *Actions → Desktop release → Run
 workflow*, with the tag as input. It uploads with `--clobber` and reuses the
 existing release.

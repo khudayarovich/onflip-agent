@@ -32,7 +32,7 @@
     "preflight": "node scripts/preflight.js"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=22.0.0"
   },
   "dependencies": {
     "better-sqlite3": "^12.11.1",

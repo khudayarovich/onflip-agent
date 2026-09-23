@@ -8,7 +8,7 @@
  * assuming the other is how the desktop job stayed red for six releases
  * while the suite passed locally every single time:
  *
- *   engine · node 20/22 on ubuntu|macos|windows
+ *   engine · node 22/24 on ubuntu|macos|windows
  *       builds only `src/`, runs `node --test`. Desktop tests must SKIP
  *       here, through their `needsBuild` guard. Reproduced by moving
  *       `desktop/dist` aside.

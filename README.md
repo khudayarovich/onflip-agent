@@ -198,7 +198,7 @@ There is no OnFlip server. Nothing is sent anywhere except to the chat service y
 
 ## Building from source
 
-Requires Node.js 20+.
+Requires Node.js 22+.
 
 ```bash
 git clone https://github.com/khudayarovich/onflip-agent.git

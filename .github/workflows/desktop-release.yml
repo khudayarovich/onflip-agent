@@ -28,11 +28,11 @@ jobs:
   build-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -50,6 +50,21 @@ jobs:
       - name: Build the installer
         working-directory: desktop
         run: node scripts/release.js
+
+      # Open sqlite inside the packaged app before anything is published, in
+      # both runtimes the engine can be given: this runner's Node, which is
+      # the ABI the default binding was built for, and Electron-as-Node,
+      # where every machine goes whose Node cannot open that binding — no
+      # Node at all, or a newer one (Node 24 is the common case). A local
+      # build cannot stand in for this: its binding is compiled for the
+      # local Node, so it loads where the published one would not.
+      - name: Check sqlite opens in the packaged app
+        shell: bash
+        run: |
+          app="desktop/release/win-unpacked"
+          onflip="$app/resources/app/node_modules/onflip"
+          node scripts/check-sqlite-fallback.js "$onflip"
+          ELECTRON_RUN_AS_NODE=1 "$app/OnFlip.exe" scripts/check-sqlite-fallback.js "$onflip"
 
       - name: Publish the release
         env:
@@ -83,11 +98,11 @@ jobs:
     runs-on: macos-latest
     needs: build-windows
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
 
@@ -121,8 +136,12 @@ jobs:
             rm -rf "$dir" && mkdir -p "$dir"
             ditto -x -k desktop/release/OnFlip-*-mac-$arch.zip "$dir"
             app="$dir/OnFlip.app"
+            onflip="$app/Contents/Resources/app/node_modules/onflip"
             file "$app/Contents/MacOS/OnFlip"
-            ELECTRON_RUN_AS_NODE=1 "$app/Contents/MacOS/OnFlip" scripts/check-sqlite-fallback.js "$app/Contents/Resources/app/node_modules/onflip"
+            ELECTRON_RUN_AS_NODE=1 "$app/Contents/MacOS/OnFlip" scripts/check-sqlite-fallback.js "$onflip"
+            # This runner's own Node is arm64: the Node a Mac user with
+            # Node 22 installed hands the Apple Silicon build.
+            if [ "$arch" = arm64 ]; then node scripts/check-sqlite-fallback.js "$onflip"; fi
           done
 
       - name: Attach to the release

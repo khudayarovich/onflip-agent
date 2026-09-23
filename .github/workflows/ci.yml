@@ -22,19 +22,21 @@ jobs:
         # Windows is a first-class target — the shell tool runs PowerShell and
         # cookie decryption uses DPAPI — so it is built, not assumed.
         os: [ubuntu-latest, windows-latest, macos-latest]
-        node: ["20", "22"]
+        # 22 is what the release is built with; 24 is the current LTS and
+        # what the maintainer runs, which CI had never tested. 20 left when
+        # it reached end-of-life (April 2026).
+        node: ["22", "24"]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: ${{ matrix.node }}
           cache: npm
 
       # Install scripts are skipped deliberately: this job typechecks and
-      # compiles TypeScript, and never loads the native sqlite binding. Node
-      # 20 on Windows has no prebuilt better-sqlite3 binary, so installing it
-      # for real means compiling from source for a job that would not use it.
+      # compiles TypeScript, and never loads the native sqlite binding, so
+      # fetching or compiling one would be time spent on nothing.
       - run: npm ci --ignore-scripts
       - run: npm run typecheck
       - run: npm run build
@@ -58,9 +60,9 @@ jobs:
     name: desktop app
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
@@ -113,9 +115,9 @@ jobs:
     name: sqlite on an Intel Mac (Rosetta)
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: "22"
           cache: npm
