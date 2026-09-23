@@ -1261,10 +1261,33 @@ function capped(args: Record<string, unknown> | undefined): Record<string, unkno
 
 export function loggableArguments(call: ToolCall): Record<string, unknown> {
   if (call.tool.toLowerCase().replace(/[-\s]/g, "_") !== "browser_type") return capped(call.arguments);
-  const text = call.arguments?.text;
-  if (typeof text !== "string") return capped(call.arguments);
+  const args: Record<string, unknown> = { ...(call.arguments ?? {}) };
   // Keystrokes are never logged at any length: the browser types passwords.
-  return capped({ ...call.arguments, text: `<redacted ${text.length} chars>` });
+  if (typeof args.text === "string") args.text = `<redacted ${args.text.length} chars>`;
+  // Nor inside `fields`, where a whole login form arrives in one call. It
+  // may still be the text of a JSON array here — the registry decodes it
+  // later — and what cannot be read as one is redacted whole.
+  if (args.fields !== undefined) {
+    let list: unknown = args.fields;
+    if (typeof list === "string") {
+      try {
+        list = JSON.parse(list);
+      } catch {
+        /* redacted whole below */
+      }
+    }
+    args.fields = Array.isArray(list)
+      ? list.map((item) => {
+          if (!item || typeof item !== "object") return "<redacted>";
+          const field: Record<string, unknown> = { ...(item as Record<string, unknown>) };
+          for (const key of ["text", "value"]) {
+            if (field[key] !== undefined) field[key] = `<redacted ${String(field[key]).length} chars>`;
+          }
+          return field;
+        })
+      : `<redacted ${String(args.fields).length} chars>`;
+  }
+  return capped(args);
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {

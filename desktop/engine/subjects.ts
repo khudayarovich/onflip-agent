@@ -26,8 +26,10 @@ export function subjectFor(tool: string, args: Record<string, unknown>): string 
       return s(args.url);
     case "browser_open":
       return s(args.url);
-    case "browser_click":
     case "browser_type":
+      if (Array.isArray(args.fields)) return `${args.fields.length} fields`;
+      return s(args.ref) ? `ref ${s(args.ref)}` : s(args.text);
+    case "browser_click":
     case "browser_key":
       return s(args.ref) ? `ref ${s(args.ref)}` : s(args.text);
     case "todo_write":

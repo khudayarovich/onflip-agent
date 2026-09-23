@@ -4,7 +4,7 @@ import { chromium, BrowserContext, Page } from "playwright";
 import { ToolDefinition, ToolResult } from "../types";
 import { configDir, loadConfig } from "../config";
 import { logger } from "../log";
-import { err, ok, denied, asBool, asNumber, clip } from "./util";
+import { err, ok, denied, asArray, asBool, asNumber, clip } from "./util";
 import { ensureBundledBrowser } from "../chatgpt/browser-client";
 
 /**
@@ -159,6 +159,25 @@ export async function setBrowserViewport(width: number, height: number, scale?: 
 
 /** Refs are only meaningful for the snapshot that created them. */
 let snapshotSerial = 0;
+
+/**
+ * The page the model was last shown, by content, and when.
+ *
+ * Every action already answers with a fresh snapshot, and models ask for
+ * one straight afterwards anyway — a round trip, and up to six thousand
+ * characters of the page they were just shown. When nothing has changed,
+ * `browser_snapshot` says so in a line instead: same page, same refs. Held
+ * to a short window, because an older snapshot may have been trimmed out
+ * of the conversation since, and to once in a row, because a model that
+ * asks again after being told has a reason to want the page itself.
+ */
+let lastShown: { key: string; at: number; brief: boolean } | null = null;
+const SAME_PAGE_WINDOW_MS = 90_000;
+
+/** Everything the model reads from a snapshot, as one comparable string. */
+function snapshotKey(shot: Snapshot): string {
+  return JSON.stringify([shot.url, shot.title, shot.elements, shot.hidden, shot.text]);
+}
 
 function profileDir(): string {
   const dir = path.join(configDir(), "browser-automation");
@@ -319,6 +338,7 @@ async function ensurePage(): Promise<Page> {
 
 /** Shut the automation browser down. Safe to call when it never started. */
 export async function closeAutomationBrowser(): Promise<void> {
+  lastShown = null;
   if (idleTimer) {
     clearTimeout(idleTimer);
     idleTimer = null;
@@ -749,6 +769,7 @@ async function respond(p: Page, note: string): Promise<ToolResult> {
       { title: p.url() }
     );
   }
+  lastShown = { key: snapshotKey(shot), at: Date.now(), brief: false };
   return ok(describe(shot, note), { title: shot.title || shot.url });
 }
 
@@ -812,7 +833,7 @@ export const browserOpenTool: ToolDefinition = {
 export const browserSnapshotTool: ToolDefinition = {
   name: "browser_snapshot",
   description:
-    "Re-read the current page in the agent's browser: its interactive elements with fresh refs, and its visible text. Call this after the page changes, or when a ref has gone stale.",
+    "Re-read the current page in the agent's browser: its interactive elements with fresh refs, and its visible text. Every other browser tool already returns a fresh snapshot, so call this only when a ref has gone stale or the page changed on its own.",
   parameters: { type: "object", properties: {}, required: [] },
   async run() {
     if (!automationBrowserOpen()) {
@@ -820,6 +841,17 @@ export const browserSnapshotTool: ToolDefinition = {
     }
     const p = await ensurePage();
     const shot = await snapshot(p);
+    const key = snapshotKey(shot);
+    const age = lastShown ? Date.now() - lastShown.at : Infinity;
+    if (lastShown?.key === key && !lastShown.brief && age < SAME_PAGE_WINDOW_MS) {
+      lastShown = { key, at: Date.now(), brief: true };
+      const count = shot.elements.length;
+      return ok(
+        `Nothing has changed since the snapshot ${Math.round(age / 1000)}s ago: the same page, the same ${count} interactive element${count === 1 ? "" : "s"} under the same refs, and the same text. Act on those refs — every browser action already returns a fresh snapshot.`,
+        { title: shot.title || shot.url }
+      );
+    }
+    lastShown = { key, at: Date.now(), brief: false };
     return ok(describe(shot), { title: shot.title || shot.url });
   },
 };
@@ -859,59 +891,125 @@ export const browserClickTool: ToolDefinition = {
   },
 };
 
+/** The most fields one `browser_type` call fills. */
+const MAX_FIELDS = 20;
+
+/**
+ * What to type where: the `fields` list, or the single `ref` and `text`.
+ *
+ * A form of five fields used to be five calls, five approvals and five full
+ * snapshots of a page nobody needed to see until the form was filled — each
+ * one a round trip to the chat model.
+ */
+function typingPlan(args: Record<string, unknown>): { ref: unknown; text: string }[] | { error: string } {
+  const fields = asArray(args.fields);
+  if (!fields?.length) return [{ ref: args.ref, text: String(args.text ?? "") }];
+  if (fields.length > MAX_FIELDS) {
+    return { error: `\`fields\` holds ${fields.length} entries; send at most ${MAX_FIELDS} in one call and the rest in another.` };
+  }
+  const plan: { ref: unknown; text: string }[] = [];
+  for (const [i, item] of fields.entries()) {
+    const entry = (item && typeof item === "object" ? item : {}) as Record<string, unknown>;
+    const text = entry.text ?? entry.value;
+    if (!String(entry.ref ?? "").trim() || (typeof text !== "string" && typeof text !== "number")) {
+      return { error: `\`fields\` entry ${i + 1} needs a ref and a text, like \`- ref: ref_3\` with \`text: Jane\` under it.` };
+    }
+    plan.push({ ref: entry.ref, text: String(text) });
+  }
+  return plan;
+}
+
 export const browserTypeTool: ToolDefinition = {
   name: "browser_type",
   description:
-    "Type text into a field in the agent's browser, identified by its ref. Set submit: true to press Enter afterwards. Returns a fresh snapshot.",
+    "Type text into a field in the agent's browser, identified by its ref — or fill a whole form at once with `fields`. Set submit: true to press Enter afterwards. Returns a fresh snapshot.",
   mutates: true,
   parameters: {
     type: "object",
     properties: {
       ...REF_ARG,
       text: { type: "string", description: "Text to type. Replaces whatever is in the field." },
-      submit: { type: "boolean", description: "Press Enter after typing" },
+      fields: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: { ref: { type: "string" }, text: { type: "string" } },
+          required: ["ref", "text"],
+        },
+        description: "Instead of ref and text: several fields, filled in order under one approval and answered with one snapshot",
+      },
+      submit: { type: "boolean", description: "Press Enter after typing (in the last field)" },
     },
-    required: ["ref", "text"],
+    required: [],
   },
   async run(args, ctx) {
     if (!automationBrowserOpen()) return err("No page is open. Use browser_open first.");
     const p = await ensurePage();
 
-    const found = await locate(p, args.ref);
-    if ("error" in found) return found.error;
-    const text = String(args.text ?? "");
+    const plan = typingPlan(args);
+    if ("error" in plan) return err(plan.error);
+    // Every ref is found before anything is typed: a stale one halfway down
+    // would leave the form half filled and the model unsure which half.
+    const refs: string[] = [];
+    for (const step of plan) {
+      const found = await locate(p, step.ref);
+      if ("error" in found) return found.error;
+      refs.push(found.ref);
+    }
     const submit = asBool(args.submit);
 
     // The value is shown to the user, so a password does not go on screen.
     // Read as an attribute — the reliable path; an evaluate here is the
     // stringified-function trap all over again.
-    const fieldType = await p
-      .locator(`[data-onflip-ref="${found.ref}"]`)
-      .getAttribute("type")
-      .catch(() => null);
-    // Attribute values keep the page's casing, and `type="Password"` is
-    // still a password field.
-    const isSecret = fieldType?.toLowerCase() === "password";
-    const shown = isSecret
-      ? "•".repeat(Math.min(text.length, 12))
-      : text.length > 60
-        ? `${text.slice(0, 60)}…`
-        : text;
+    const shown: string[] = [];
+    for (const [i, ref] of refs.entries()) {
+      const text = plan[i].text;
+      const fieldType = await p
+        .locator(`[data-onflip-ref="${ref}"]`)
+        .getAttribute("type")
+        .catch(() => null);
+      // Attribute values keep the page's casing, and `type="Password"` is
+      // still a password field.
+      const isSecret = fieldType?.toLowerCase() === "password";
+      shown.push(
+        isSecret ? "•".repeat(Math.min(text.length, 12)) : text.length > 60 ? `${text.slice(0, 60)}…` : text
+      );
+    }
 
-    const stop = await allowed(ctx, "browser_type", `type into ${found.ref}: ${shown}`, [
-      `page: ${p.url()}`,
-      submit ? "and press Enter" : "without submitting",
-    ]);
+    const single = refs.length === 1;
+    const stop = await allowed(
+      ctx,
+      "browser_type",
+      single ? `type into ${refs[0]}: ${shown[0]}` : `fill ${refs.length} fields: ${refs.join(", ")}`,
+      [
+        ...(single ? [] : refs.map((ref, i) => `${ref}: ${shown[i]}`)),
+        `page: ${p.url()}`,
+        submit ? "and press Enter" : "without submitting",
+      ]
+    );
     if (stop) return stop;
 
-    try {
-      const field = p.locator(`[data-onflip-ref="${found.ref}"]`);
-      await field.fill(text, { timeout: 15_000 });
-      if (submit) await field.press("Enter");
-    } catch (e) {
-      return err(`Could not type into ${found.ref}: ${e instanceof Error ? e.message : String(e)}`);
+    const filled: string[] = [];
+    for (const [i, ref] of refs.entries()) {
+      try {
+        const field = p.locator(`[data-onflip-ref="${ref}"]`);
+        await field.fill(plan[i].text, { timeout: 15_000 });
+        filled.push(ref);
+        if (submit && i === refs.length - 1) await field.press("Enter");
+      } catch (e) {
+        const before = filled.length
+          ? ` ${filled.join(", ")} ${filled.length === 1 ? "was" : "were"} filled before it; the rest were not.`
+          : "";
+        return err(`Could not type into ${ref}: ${e instanceof Error ? e.message : String(e)}.${before}`);
+      }
     }
-    return respond(p, `Typed into ${found.ref}${submit ? " and pressed Enter" : ""}.`);
+    const last = refs[refs.length - 1];
+    return respond(
+      p,
+      single
+        ? `Typed into ${last}${submit ? " and pressed Enter" : ""}.`
+        : `Filled ${refs.join(", ")}${submit ? `, and pressed Enter in ${last}` : ""}.`
+    );
   },
 };
 
