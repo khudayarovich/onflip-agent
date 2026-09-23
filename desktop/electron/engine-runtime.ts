@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { BINDING_MISMATCH } from "onflip/dist/auth/sqlite-binding";
 
 /**
  * Which runtime the engine child runs on.
@@ -21,7 +22,7 @@ import { execFileSync } from "node:child_process";
 export type SqliteProbe =
   /** The machine's Node opened the shipped binding. */
   | "ok"
-  /** It is compiled for another ABI, and no shipped binding fits. */
+  /** It is built for another ABI or another CPU, and no shipped binding fits. */
   | "mismatch"
   /** There is no Node to ask. */
   | "no-node"
@@ -38,19 +39,22 @@ export type SqliteProbe =
 const PROBE = `
 const path = require("path");
 const [engineDir, onflipDir] = process.argv.slice(1);
-const abi = (e) => /NODE_MODULE_VERSION|compiled against a different Node\\.js version/.test(String(e && e.message));
+// The engine's own test, BINDING_MISMATCH, pasted in as a literal: another
+// ABI, or another CPU — an Intel Mac's Node refuses the Apple Silicon
+// binding the Mac release is built with before any ABI is compared.
+const mismatch = (e) => ${BINDING_MISMATCH}.test(String(e && e.message));
 let Database;
 try {
   Database = require(require.resolve("better-sqlite3", { paths: [engineDir] }));
 } catch (e) {
-  process.stdout.write(abi(e) ? "mismatch" : "unknown");
+  process.stdout.write(mismatch(e) ? "mismatch" : "unknown");
   process.exit(0);
 }
 try {
   new Database(":memory:").close();
   process.stdout.write("ok");
 } catch (e) {
-  if (!abi(e)) {
+  if (!mismatch(e)) {
     process.stdout.write("unknown");
     process.exit(0);
   }

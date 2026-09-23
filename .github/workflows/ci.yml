@@ -100,3 +100,51 @@ jobs:
           node --test
           --test-reporter=spec --test-reporter-destination=stdout
           --test-reporter=./scripts/gha-reporter.mjs --test-reporter-destination=stdout
+
+  # The Intel Mac, which nobody working on this has. The macOS release is
+  # built on Apple Silicon, so the Intel app's default sqlite binding is
+  # arm64, and an Intel Mac can only open sqlite through the darwin-x64
+  # binding shipped in prebuilds/. Every release up to 0.10.55 got that
+  # wrong, and nothing ran on an Intel Mac to say so. An Apple Silicon runner
+  # reproduces it exactly: the Intel build of the app's Electron runs under
+  # Rosetta, the arm64 binding this install builds is refused for its CPU,
+  # and the check fails unless the shipped binding takes over.
+  mac-intel-sqlite:
+    name: sqlite on an Intel Mac (Rosetta)
+    runs-on: macos-latest
+    env:
+      # The one job that needs an Electron binary: the Intel one, below.
+      ELECTRON_SKIP_BINARY_DOWNLOAD: ""
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+
+      # With install scripts, as the release installs: better-sqlite3 gets
+      # the binding for this runner's own CPU, which is what the Intel app
+      # ships as its default.
+      - run: npm ci
+      - run: npm run build
+
+      - name: install the Intel build of the app's Electron
+        run: |
+          version=$(node -p "require('./desktop/package-lock.json').packages['node_modules/electron'].version")
+          mkdir -p "$RUNNER_TEMP/electron-x64"
+          cd "$RUNNER_TEMP/electron-x64"
+          npm init -y > /dev/null
+          npm_config_arch=x64 npm install --no-audit --no-fund --no-save "electron@$version"
+          file node_modules/electron/dist/Electron.app/Contents/MacOS/Electron
+
+      - name: make sure Rosetta can run it
+        run: /usr/bin/arch -x86_64 /usr/bin/true || sudo softwareupdate --install-rosetta --agree-to-license
+
+      # Fails unless the default binding is refused for this CPU and the
+      # shipped darwin-x64 one opens sqlite: see check-sqlite-fallback.js.
+      - name: the arm64 binding is refused, and the shipped darwin-x64 one opens sqlite
+        run: >-
+          ELECTRON_RUN_AS_NODE=1
+          "$RUNNER_TEMP/electron-x64/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+          scripts/check-sqlite-fallback.js . --expect-fallback

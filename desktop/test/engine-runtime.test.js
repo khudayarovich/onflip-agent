@@ -84,6 +84,41 @@ test("a binding that simply loads is ok", { skip: needsBuild, timeout: 30_000 },
   }
 });
 
+// Exactly what macOS says when an Intel Mac's Node loads the Apple Silicon
+// binding the Mac release is built with: refused before any ABI is compared.
+const WRONG_CPU = `
+module.exports = class Database {
+  constructor(file, options) {
+    if (!(options && options.nativeBinding && require("fs").existsSync(options.nativeBinding))) {
+      throw new Error("dlopen(/Applications/OnFlip.app/Contents/Resources/app/node_modules/better-sqlite3/build/Release/better_sqlite3.node, 0x0001): tried: '/Applications/OnFlip.app/Contents/Resources/app/node_modules/better-sqlite3/build/Release/better_sqlite3.node' (mach-o file, but is an incompatible architecture (have 'arm64', need 'x86_64h' or 'x86_64'))");
+    }
+  }
+  close() {}
+};
+`;
+
+test("an Intel Mac's Node, handed the Apple Silicon binding, is a mismatch", { skip: needsBuild, timeout: 30_000 }, () => {
+  // Read as "unknown", this kept the engine on a Node that could never open
+  // sqlite; as a mismatch it goes to Electron, whose darwin-x64 binding ships.
+  const { probeSystemNode } = load();
+  const f = fixture(WRONG_CPU);
+  try {
+    assert.equal(probeSystemNode(process.execPath, f.engine, f.onflip), "mismatch");
+  } finally {
+    f.cleanup();
+  }
+});
+
+test("and a shipped binding for its CPU and ABI makes it ok", { skip: needsBuild, timeout: 30_000 }, () => {
+  const { probeSystemNode } = load();
+  const f = fixture(WRONG_CPU, { prebuilt: true });
+  try {
+    assert.equal(probeSystemNode(process.execPath, f.engine, f.onflip), "ok");
+  } finally {
+    f.cleanup();
+  }
+});
+
 test("any other failure is unknown, not a mismatch", { skip: needsBuild, timeout: 30_000 }, () => {
   const { probeSystemNode } = load();
   const f = fixture('module.exports = class Database { constructor() { throw new Error("disk I/O error"); } };');
@@ -120,6 +155,16 @@ test("the engine goes to Electron only when the machine's Node cannot serve it",
     "ONFLIP_NODE is the person's choice"
   );
   assert.equal(asked, false);
+});
+
+test("the usage store opens sqlite through the shared fallback", { skip: needsBuild }, () => {
+  // Checked in the source: the store's own test opens a real database with
+  // a binding that loads, so it cannot see which path a refusal would take.
+  // Its private ABI-only test is what left Intel Macs counting zero.
+  const usage = fs.readFileSync(path.join(__dirname, "..", "engine", "usage.ts"), "utf8");
+  assert.match(usage, /return withBundledBinding\(\s*\(nativeBinding\) => new Database\(file,/);
+  assert.equal((usage.match(/new Database\(/g) || []).length, 1, "no other way in");
+  assert.doesNotMatch(usage, /NODE_MODULE_VERSION/, "no private copy of the test");
 });
 
 test("main spawns through the decision", { skip: needsBuild }, () => {

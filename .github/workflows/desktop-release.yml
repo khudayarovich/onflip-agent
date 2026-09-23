@@ -106,6 +106,25 @@ jobs:
         working-directory: desktop
         run: node scripts/release.js --mac
 
+      # Open sqlite inside each Mac build before it is published, from the
+      # zip the updater will install, the way the app does with no Node on
+      # the machine. The Intel build runs under Rosetta, where its arm64
+      # default binding is refused exactly as on a real Intel Mac and only
+      # the shipped darwin-x64 binding can answer — which every release up to
+      # 0.10.55 shipped broken with nothing here to notice.
+      - name: Check sqlite opens in both Mac builds
+        shell: bash
+        run: |
+          /usr/bin/arch -x86_64 /usr/bin/true || sudo softwareupdate --install-rosetta --agree-to-license
+          for arch in arm64 x64; do
+            dir="$RUNNER_TEMP/check-$arch"
+            rm -rf "$dir" && mkdir -p "$dir"
+            ditto -x -k desktop/release/OnFlip-*-mac-$arch.zip "$dir"
+            app="$dir/OnFlip.app"
+            file "$app/Contents/MacOS/OnFlip"
+            ELECTRON_RUN_AS_NODE=1 "$app/Contents/MacOS/OnFlip" scripts/check-sqlite-fallback.js "$app/Contents/Resources/app/node_modules/onflip"
+          done
+
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}

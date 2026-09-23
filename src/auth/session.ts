@@ -10,52 +10,38 @@ import {
 import { decryptChromiumCookieValue, getCookieKey, CryptoError } from "./crypto";
 import { SessionCookie, pickSessionCookie } from "./access";
 import { chatGptCookiesFromBinaryCookies, SAFARI_ACCESS_HINT } from "./safari";
+import { bundledSqliteBinding, isBindingMismatch, withBundledBinding } from "./sqlite-binding";
+
+export { bundledSqliteBinding } from "./sqlite-binding";
 
 /**
  * Open a cookie database under whatever runtime this process happens to be.
  *
- * better-sqlite3's own binding is prebuilt for Node's ABI. On a machine with
- * no Node installed, the desktop app runs everything under Electron-as-Node —
- * a different ABI — and the require fails with NODE_MODULE_VERSION 137 vs
- * 130. That failure used to end cookie import entirely: the user clicked
- * "sign in with my browser's session" and was told to go install Node.
+ * better-sqlite3's own binding is prebuilt for one Node ABI on one CPU. On a
+ * machine with no Node installed, the desktop app runs everything under
+ * Electron-as-Node — a different ABI — and the load fails with
+ * NODE_MODULE_VERSION 137 vs 130; on an Intel Mac it fails sooner, because
+ * the release is built on Apple Silicon. Either failure used to end cookie
+ * import entirely: the user clicked "sign in with my browser's session" and
+ * was told to go install Node.
  *
- * So the package carries a second binding, prebuilt for the Electron ABI the
- * desktop app ships (see prebuilds/), and the ABI that fails to load falls
- * back to the binding that matches `process.versions.modules`. Node and
- * Electron ABI numbers never collide, so the number alone picks the file.
+ * So the package carries a binding per platform and CPU for the Electron
+ * ABI the desktop app ships (see prebuilds/), and a load the default binding
+ * cannot do falls back to the one that matches this process. See
+ * `sqlite-binding.ts`.
  */
 export function openCookieDb(file: string): Database.Database {
   try {
-    return new Database(file, { readonly: true, fileMustExist: true });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    const wrongAbi = /NODE_MODULE_VERSION|was compiled against a different Node\.js version/i.test(
-      message
+    return withBundledBinding(
+      (nativeBinding) => new Database(file, { readonly: true, fileMustExist: true, ...(nativeBinding ? { nativeBinding } : {}) })
     );
-    if (!wrongAbi) throw e;
-    const bundled = bundledSqliteBinding();
-    if (!bundled) {
-      throw new Error(
-        `the sqlite binding does not match this runtime (needs ABI ${process.versions.modules}), ` +
-          "and no bundled binding for it shipped with the app"
-      );
-    }
-    return new Database(file, { readonly: true, fileMustExist: true, nativeBinding: bundled });
+  } catch (e) {
+    if (!isBindingMismatch(e) || bundledSqliteBinding()) throw e;
+    throw new Error(
+      `the sqlite binding does not match this runtime (${process.platform}-${process.arch}, ABI ${process.versions.modules}), ` +
+        "and no bundled binding for it shipped with the app"
+    );
   }
-}
-
-/** The shipped binding for this runtime's ABI, or null when there is none. */
-export function bundledSqliteBinding(): string | null {
-  const file = path.join(
-    __dirname,
-    "..",
-    "..",
-    "prebuilds",
-    `${process.platform}-${process.arch}`,
-    `better_sqlite3-abi${process.versions.modules}.node`
-  );
-  return fs.existsSync(file) ? file : null;
 }
 
 export interface ExtractedToken {

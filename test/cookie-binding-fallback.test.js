@@ -35,6 +35,18 @@ test("the three spellings of a binding fault are all recognised", () => {
   assert.ok(bindingMismatch("NODE_MODULE_VERSION 127. This version of Node.js requires 130"), "the code");
 });
 
+test("a binding built for another CPU is this runtime's failure too", () => {
+  // Every Intel Mac: the release is built on Apple Silicon, so the default
+  // binding in the Intel app is arm64 and refuses to load at all.
+  assert.ok(
+    bindingMismatch(
+      "dlopen(/x/better_sqlite3.node, 0x0001): tried: '/x/better_sqlite3.node' (mach-o file, but is an incompatible architecture (have 'arm64', need 'x86_64'))"
+    ),
+    "macOS"
+  );
+  assert.ok(bindingMismatch("C:\\x\\better_sqlite3.node is not a valid Win32 application."), "Windows");
+});
+
 test("a browser that simply has no session is not a binding fault", () => {
   assert.equal(bindingMismatch("Firefox has no ChatGPT session"), false);
   assert.equal(bindingMismatch("Chrome encrypts its cookies so only Chrome can read them"), false);

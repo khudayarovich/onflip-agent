@@ -3,7 +3,7 @@ import * as path from "node:path";
 import Database from "better-sqlite3";
 import { configDir } from "onflip/dist/config";
 import { logger } from "onflip/dist/log";
-import { bundledSqliteBinding } from "onflip/dist/auth/session";
+import { withBundledBinding } from "onflip/dist/auth/sqlite-binding";
 
 /** Local per-account request counting, shared safely by every engine window. */
 
@@ -37,16 +37,15 @@ function databaseFile(): string {
   return path.join(configDir(), "usage.sqlite3");
 }
 
+/**
+ * The default binding, or the shipped one when the default cannot run in
+ * this process — another ABI, or another CPU, which is every Intel Mac: the
+ * release is built on Apple Silicon. See `sqlite-binding.ts`.
+ */
 function createDatabase(file: string): Database.Database {
-  try {
-    return new Database(file, { timeout: 10_000 });
-  } catch (e) {
-    const message = e instanceof Error ? e.message : String(e);
-    if (!/NODE_MODULE_VERSION|was compiled against a different Node\.js version/i.test(message)) throw e;
-    const nativeBinding = bundledSqliteBinding();
-    if (!nativeBinding) throw e;
-    return new Database(file, { timeout: 10_000, nativeBinding });
-  }
+  return withBundledBinding(
+    (nativeBinding) => new Database(file, { timeout: 10_000, ...(nativeBinding ? { nativeBinding } : {}) })
+  );
 }
 
 function dayKey(date: Date): string {

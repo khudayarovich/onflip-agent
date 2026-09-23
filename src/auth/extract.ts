@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import * as path from "node:path";
 import type { ExtractedToken, BrowserReport } from "./session";
+import { BINDING_MISMATCH } from "./sqlite-binding";
 import { logger } from "../log";
 
 /** Per-browser findings from the last search, for the message and the log. */
@@ -81,16 +82,15 @@ function runtimeCandidates(): string[] {
  * Is this the sqlite binding refusing the runtime, rather than a browser
  * refusing its cookies?
  *
- * Three spellings of one fault: Node's own load error, the wording a
- * different Node uses for it, and the sentence openCookieDb writes when it
- * has already fallen back and found no shipped binding either. Telling them
+ * Every way a binding refuses the runtime — built for another ABI, or for
+ * another CPU, as the Apple Silicon binding in the Intel Mac build does (see
+ * `sqlite-binding.ts`) — and the sentence openCookieDb writes when it has
+ * already fallen back and found no shipped binding either. Telling them
  * apart from "no session" is the whole point - one is about this machine's
  * runtime, the other about whether anyone is logged in.
  */
 export function bindingMismatch(text: string): boolean {
-  return /NODE_MODULE_VERSION|was compiled against a different Node\.js version|sqlite binding does not match this runtime/i.test(
-    text
-  );
+  return BINDING_MISMATCH.test(text) || /sqlite binding does not match this runtime/i.test(text);
 }
 
 /**
