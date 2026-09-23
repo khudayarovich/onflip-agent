@@ -112,9 +112,6 @@ jobs:
   mac-intel-sqlite:
     name: sqlite on an Intel Mac (Rosetta)
     runs-on: macos-latest
-    env:
-      # The one job that needs an Electron binary: the Intel one, below.
-      ELECTRON_SKIP_BINARY_DOWNLOAD: ""
     steps:
       - uses: actions/checkout@v4
 
@@ -142,8 +139,14 @@ jobs:
           mkdir -p "$RUNNER_TEMP/electron-x64"
           cd "$RUNNER_TEMP/electron-x64"
           npm init -y > /dev/null
-          if ! npm_config_arch=x64 npm install --no-audit --no-fund --no-save "electron@$version" > install.log 2>&1; then
+          if ! npm install --no-audit --no-fund --no-save --ignore-scripts "electron@$version" > install.log 2>&1; then
             echo "::error title=Intel Electron install::$(tail -n 30 install.log | enc)"
+            exit 1
+          fi
+          # The electron package has no install script to run: its binary is
+          # fetched by install.js on first use, so fetch it now, for x64.
+          if ! ELECTRON_INSTALL_ARCH=x64 node node_modules/electron/install.js >> install.log 2>&1; then
+            echo "::error title=Intel Electron download::$(tail -n 30 install.log | enc)"
             exit 1
           fi
           exe=node_modules/electron/dist/Electron.app/Contents/MacOS/Electron
