@@ -16,6 +16,8 @@ export function subjectFor(tool: string, args: Record<string, unknown>): string 
       return s(args.pattern);
     case "grep":
       return s(args.pattern);
+    case "find_symbol":
+      return s(args.symbol) || s(args.name);
     case "bash": {
       const cmd = s(args.command).trim().replace(/\s+/g, " ");
       return cmd.length > 80 ? `${cmd.slice(0, 80)}…` : cmd;

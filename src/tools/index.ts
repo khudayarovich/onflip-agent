@@ -7,6 +7,7 @@ import {
   PermissionRequest,
 } from "../types";
 import { FS_TOOLS } from "./fs";
+import { SYMBOL_TOOLS } from "./symbols";
 import { SHELL_TOOLS } from "./shell";
 import { TODO_TOOLS } from "./todo";
 import { WEB_TOOLS } from "./web";
@@ -77,7 +78,7 @@ export interface ToolRegistry {
 export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
   let signal = opts.signal;
 
-  let tools: ToolDefinition[] = [...FS_TOOLS, ...TODO_TOOLS, ...MEMORY_TOOLS];
+  let tools: ToolDefinition[] = [...FS_TOOLS, ...SYMBOL_TOOLS, ...TODO_TOOLS, ...MEMORY_TOOLS];
   if (!opts.disableShell) tools = [...tools, ...SHELL_TOOLS];
   // Browsing is network access with a mouse attached, so it goes out with
   // the network tools rather than getting a switch of its own.
@@ -118,6 +119,14 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
     rg: "grep",
     find: "glob",
     find_files: "glob",
+    find_symbols: "find_symbol",
+    find_definition: "find_symbol",
+    goto_definition: "find_symbol",
+    go_to_definition: "find_symbol",
+    definition: "find_symbol",
+    symbol: "find_symbol",
+    symbols: "find_symbol",
+    lookup_symbol: "find_symbol",
     run_command: "bash",
     shell: "bash",
     exec: "bash",
@@ -175,6 +184,7 @@ export function createToolRegistry(opts: RegistryOptions): ToolRegistry {
   // Every tool this registry could have offered, for explaining a hidden one.
   const everyTool = [
     ...FS_TOOLS,
+    ...SYMBOL_TOOLS,
     ...TODO_TOOLS,
     ...MEMORY_TOOLS,
     ...SHELL_TOOLS,

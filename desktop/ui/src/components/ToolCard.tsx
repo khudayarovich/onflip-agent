@@ -34,6 +34,7 @@ const TOOL_ICONS: Record<string, IconFn> = {
   list: ListIcon,
   glob: Search,
   grep: Search,
+  find_symbol: Search,
   bash: Terminal,
   job_output: Terminal,
   todo_write: CheckSquare,

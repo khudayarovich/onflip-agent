@@ -40,6 +40,10 @@ export interface SystemPromptOptions {
  * typed or has to go up as a file — so the scaffolding was paying rent on
  * every thread. The bullet form keeps everything the model acts on: names,
  * types, enum values, what is required, and each argument's description.
+ *
+ * "string" is not written out. Every value in a block is text until a tool
+ * reads it, so the label told the model nothing, and it was the commonest
+ * word in the tool docs; only a type that is *not* text is worth naming.
  */
 function describeArguments(parameters: Record<string, unknown>): string {
   const props = (parameters?.properties ?? {}) as Record<
@@ -52,10 +56,11 @@ function describeArguments(parameters: Record<string, unknown>): string {
   const required = new Set((parameters?.required as string[]) ?? []);
   const lines = names.map((name) => {
     const schema = props[name];
-    const kind = [schemaType(schema), required.has(name) ? "required" : ""]
+    const type = schemaType(schema);
+    const kind = [type === "string" ? "" : type, required.has(name) ? "required" : ""]
       .filter(Boolean)
       .join(", ");
-    const head = `- ${name} (${kind})`;
+    const head = kind ? `- ${name} (${kind})` : `- ${name}`;
     const description =
       typeof schema.description === "string" ? schema.description : "";
     return description ? `${head}: ${description}` : head;
@@ -284,7 +289,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     [
       "## How to work",
       "",
-      "1. **Understand what you change — no more.** Find things with `grep` (with `context`) and `glob`, not by guessing paths, and read the part you will edit. A follow-up to this session's work goes straight to the lines involved: no re-listing the project, no re-reading whole files. An edit's result shows the changed lines as they now read — do not re-read to check it.",
+      "1. **Understand what you change — no more.** Find things with `find_symbol`, `grep` (with `context`) and `glob`, not by guessing paths, and read the part you will edit. A follow-up to this session's work goes straight to the lines involved: no re-listing the project, no re-reading whole files. An edit's result shows the changed lines as they now read — do not re-read to check it.",
       "2. **Plan visibly for anything non-trivial — and only for those.** For a task of three or more distinct steps, call `todo_write` first, keep exactly one item `in_progress`, and mark items `completed` as you finish them. A small request — a follow-up tweak, a one-file fix, a wording or styling change — gets no task list at all: find it, change it, `done`. The plan for a two-minute change costs more than the change, and the user is waiting through every step.",
       "3. **Match the codebase.** Follow the surrounding naming, formatting, error handling and comment density. Check that a library is already a dependency before importing it.",
       "4. **Prefer `patch` for anything past a one-line change**, `edit` for a single exact replacement, and neither over `write` for an existing file. A unified diff carries its own context and line numbers, so it still applies when the file has moved on under you; `edit` needs a byte-exact copy of a span you may no longer have, and that is the most common way a change fails. Never rewrite a whole file to change a few lines.",
@@ -319,6 +324,21 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
 
   // -- project context ------------------------------------------------------
   sections.push(`## Environment\n\n${context.environment}`);
+
+  // The survey a fresh session used to open with — list, glob, read, one
+  // round trip each — answered before it is asked. Bounded by
+  // MAX_MAP_CHARS, and absent for a folder that is not a project.
+  if (context.projectMap?.trim()) {
+    sections.push(
+      [
+        "## Project map",
+        "",
+        "The project's files when this session began, so you can go straight to the right one; `glob` and `find_symbol` see them as they are now.",
+        "",
+        context.projectMap,
+      ].join("\n"),
+    );
+  }
 
   if (context.instructions.trim()) {
     sections.push(

@@ -18,7 +18,7 @@ const { parseTurn } = require("../dist/agent/protocol");
 
 /** The registry the parser consults; unmarked forms are gated on it. */
 const known = (name) =>
-  ["read", "edit", "bash", "done", "ask_user", "todo_write", "grep"].includes(
+  ["read", "edit", "bash", "done", "ask_user", "todo_write", "grep", "find_symbol"].includes(
     String(name).trim().toLowerCase()
   );
 
@@ -315,12 +315,35 @@ test("but a read from an unclosed block still runs, and so does a closing block"
   // The false-positive half: nothing that changes anything, nothing refused.
   const read = parse(FENCE + "onflip\ntool: read\npath: a.txt");
   assert.deepEqual(read.calls.map((c) => [c.tool, c.arguments.path]), [["read", "a.txt"]]);
+  const lookup = parse(FENCE + "onflip\ntool: find_symbol\nsymbol: runTurn");
+  assert.deepEqual(lookup.calls.map((c) => [c.tool, c.arguments.symbol]), [["find_symbol", "runTurn"]]);
   const done = parse(FENCE + "onflip\ntool: done\nsummary: |\n  All three files are fixed.");
   assert.equal(done.calls[0].tool, "done");
   assert.match(done.calls[0].arguments.summary, /All three files are fixed/);
   // And a closed block of any kind is untouched by the rule.
   const edit = parse(FENCE + "onflip\ntool: edit\npath: a.py\nold_string: a\nnew_string: b\n" + FENCE);
   assert.equal(edit.calls[0].tool, "edit");
+});
+
+test("once the tool is named, a later `name:` is an argument, in every form", () => {
+  // `name:` doubles as `tool:`, and it was swallowed whole after one: a
+  // lookup written `tool: find_symbol` / `name: runTurn` arrived empty.
+  const block = parse(FENCE + "onflip\ntool: find_symbol\nname: runTurn\n" + FENCE);
+  assert.deepEqual(block.calls.map((c) => [c.tool, c.arguments]), [["find_symbol", { name: "runTurn" }]]);
+  const json = parse(FENCE + 'onflip\n{"tool": "find_symbol", "name": "runTurn"}\n' + FENCE);
+  assert.deepEqual(json.calls.map((c) => [c.tool, c.arguments]), [["find_symbol", { name: "runTurn" }]]);
+  const { parseCollapsedBlock } = require("../dist/agent/protocol");
+  const flat = parseCollapsedBlock("tool: find_symbol name: runTurn path: src");
+  assert.deepEqual(flat.map((c) => [c.tool, c.arguments]), [["find_symbol", { name: "runTurn", path: "src" }]]);
+});
+
+test("but `name:` on its own still names the tool, and is not also an argument", () => {
+  const block = parse(FENCE + "onflip\nname: read\npath: a.txt\n" + FENCE);
+  assert.deepEqual(block.calls.map((c) => [c.tool, c.arguments]), [["read", { path: "a.txt" }]]);
+  const json = parse(FENCE + 'onflip\n{"name": "read", "path": "a.txt"}\n' + FENCE);
+  assert.deepEqual(json.calls.map((c) => [c.tool, c.arguments]), [["read", { path: "a.txt" }]]);
+  const wrapped = parse(FENCE + 'onflip\n{"name": "read", "arguments": {"path": "a.txt"}}\n' + FENCE);
+  assert.deepEqual(wrapped.calls.map((c) => [c.tool, c.arguments]), [["read", { path: "a.txt" }]]);
 });
 
 test("an unclosed tag is held to the same rule", () => {

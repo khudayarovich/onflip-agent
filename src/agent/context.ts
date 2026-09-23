@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { execFileSync } from "node:child_process";
 import { configDir } from "../config";
 import { discoverSkills, Skill } from "./skills";
+import { projectMapFor } from "./project-map";
 
 /**
  * Project context assembled once per session and prepended to the system
@@ -55,6 +56,12 @@ export interface ProjectContext {
   instructionSources: string[];
   git: GitInfo | null;
   environment: string;
+  /**
+   * An outline of the project's files, taken when the session began; ""
+   * for a folder that is not a project (a home directory, a drive root) or
+   * that holds nothing. See `agent/project-map.ts`.
+   */
+  projectMap?: string;
 }
 
 /** An instruction file left out, and which limit it was over. */
@@ -205,7 +212,7 @@ export function gitInfo(cwd: string): GitInfo | null {
   };
 }
 
-function describeEnvironment(cwd: string, info: GitInfo | null): string {
+function describeEnvironment(cwd: string, info: GitInfo | null, mapped: boolean): string {
   const lines = [
     `Working directory: ${cwd}`,
     `Platform: ${process.platform} (${os.release()})`,
@@ -222,7 +229,10 @@ function describeEnvironment(cwd: string, info: GitInfo | null): string {
     lines.push("Git: not a repository");
   }
 
-  // A shallow listing saves the model an opening `list` call almost every time.
+  // A shallow listing saves the model an opening `list` call almost every
+  // time. The project map says all of it and more, so it stands in for this
+  // wherever there is one.
+  if (mapped) return lines.join("\n");
   try {
     const entries = fs
       .readdirSync(cwd, { withFileTypes: true })
@@ -240,6 +250,7 @@ function describeEnvironment(cwd: string, info: GitInfo | null): string {
 export function loadProjectContext(cwd: string): ProjectContext {
   const info = gitInfo(cwd);
   const { text, sources, skipped: skippedFiles } = collectInstructions(cwd);
+  const projectMap = projectMapFor(cwd);
   return {
     cwd,
     instructions: text,
@@ -247,7 +258,8 @@ export function loadProjectContext(cwd: string): ProjectContext {
     instructionsSkipped: skippedFiles,
     skills: discoverSkills(cwd),
     git: info,
-    environment: describeEnvironment(cwd, info),
+    environment: describeEnvironment(cwd, info, projectMap !== ""),
+    projectMap,
   };
 }
 

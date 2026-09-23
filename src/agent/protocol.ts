@@ -40,6 +40,7 @@ const SAFE_WHEN_UNCLOSED = new Set([
   "list",
   "glob",
   "grep",
+  "find_symbol",
   "todo_read",
   "todo_write",
   "job_output",
@@ -398,7 +399,12 @@ export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | 
 
     const value = coerce(rest.trim(), key);
     if (key === "tool" || key === "tool_name" || key === "name") {
+      // The first of these names the tool. A `name:` after it is an
+      // argument — `find_symbol` looks a definition up by name, and a block
+      // reading `tool: find_symbol` then `name: runTurn` used to lose the
+      // only argument it had.
       if (!toolName) toolName = String(value).trim();
+      else if (key === "name") args[key] = value;
     } else {
       args[key] = value;
     }
@@ -853,6 +859,7 @@ export function parseCollapsedBlock(text: string): ToolCall[] | null {
     const value = head.slice(mark.to, end).trim();
     if (mark.key === "tool" || mark.key === "tool_name" || mark.key === "name") {
       if (!toolName) toolName = value;
+      else if (mark.key === "name" && value) args.name = value;
     } else if (value) {
       args[mark.key] = coerce(value, mark.key);
     }
@@ -931,12 +938,8 @@ function tryJson(text: string): ToolCall[] | null {
 function toToolCall(value: unknown): ToolCall | null {
   if (!value || typeof value !== "object") return null;
   const obj = value as Record<string, unknown>;
-  const name =
-    pickString(obj, "tool") ??
-    pickString(obj, "tool_name") ??
-    pickString(obj, "name") ??
-    pickString(obj, "function") ??
-    pickString(obj, "action");
+  const nameKey = ["tool", "tool_name", "name", "function", "action"].find((key) => pickString(obj, key));
+  const name = nameKey ? pickString(obj, nameKey) : null;
   if (!name) return null;
 
   const rawArgs = obj.arguments ?? obj.args ?? obj.parameters ?? obj.input ?? obj.params;
@@ -955,10 +958,11 @@ function toToolCall(value: unknown): ToolCall | null {
     // tool name, `{"tool": "todo_write", "todos": [...]}`. Live, and it used
     // to yield a call with empty arguments — which is a tool run with the
     // user's work silently missing. Everything that is not a name key is an
-    // argument.
-    const NAME_KEYS = new Set(["tool", "tool_name", "name", "function", "action", "type"]);
+    // argument — and `name` is one only when it is what named the tool:
+    // beside `"tool": "find_symbol"` it is the name being looked up.
+    const NAME_KEYS = new Set(["tool", "tool_name", "function", "action", "type"]);
     for (const [key, value] of Object.entries(obj)) {
-      if (!NAME_KEYS.has(key)) args[key] = value;
+      if (key !== nameKey && !NAME_KEYS.has(key)) args[key] = value;
     }
   }
 
