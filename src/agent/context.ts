@@ -5,6 +5,7 @@ import { execFileSync } from "node:child_process";
 import { configDir } from "../config";
 import { discoverSkills, Skill } from "./skills";
 import { projectMapFor } from "./project-map";
+import { knownChecks, renderKnownChecks } from "./project-checks";
 
 /**
  * Project context assembled once per session and prepended to the system
@@ -12,8 +13,12 @@ import { projectMapFor } from "./project-map";
  * so the model does not have to spend turns discovering it.
  */
 
-/** Instruction files, in ascending precedence. */
-const INSTRUCTION_FILES = [
+/**
+ * Instruction files, in ascending precedence. A write to any of them always
+ * asks first: `isInstructionFile` in `agent/permissions.ts` has to cover
+ * every name here.
+ */
+export const INSTRUCTION_FILES = [
   "AGENTS.md",
   "AGENT.md",
   "CLAUDE.md",
@@ -62,6 +67,12 @@ export interface ProjectContext {
    * that holds nothing. See `agent/project-map.ts`.
    */
   projectMap?: string;
+  /**
+   * Build, test and lint commands OnFlip saw pass in this project before,
+   * rendered for the prompt; "" when there are none. See
+   * `agent/project-checks.ts`.
+   */
+  knownChecks?: string;
 }
 
 /** An instruction file left out, and which limit it was over. */
@@ -260,6 +271,7 @@ export function loadProjectContext(cwd: string): ProjectContext {
     git: info,
     environment: describeEnvironment(cwd, info, projectMap !== ""),
     projectMap,
+    knownChecks: renderKnownChecks(knownChecks(cwd)),
   };
 }
 

@@ -340,6 +340,22 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     );
   }
 
+  // What earlier sessions learned the slow way: which checks exist and
+  // pass here, where they run, and how long they take. OnFlip's own record
+  // of commands it saw exit 0 — not the model's say-so — and absent until
+  // there is one.
+  if (context.knownChecks?.trim()) {
+    sections.push(
+      [
+        "## Checks that passed here before",
+        "",
+        "OnFlip saw these exit 0 in this project. Verify with them rather than guessing a command; the quickest one that covers the change is enough.",
+        "",
+        context.knownChecks,
+      ].join("\n"),
+    );
+  }
+
   if (context.instructions.trim()) {
     sections.push(
       [

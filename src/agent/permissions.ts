@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { configDir } from "../config";
 
 /**
  * Approval policy for side-effecting tools.
@@ -36,8 +37,8 @@ export const APPROVAL_MODES: ApprovalMode[] = [
 export const APPROVAL_DESCRIPTIONS: Record<ApprovalMode, string> = {
   "read-only": "reads only — no writes, no commands",
   ask: "ask before every write and command",
-  "auto-edit": "auto-approve workspace edits, ask for commands",
-  "full-auto": "auto-approve everything except destructive commands",
+  "auto-edit": "auto-approve workspace edits except instruction files, ask for commands",
+  "full-auto": "auto-approve everything except destructive commands and instruction files",
   yolo: "auto-approve everything, including destructive commands",
 };
 
@@ -139,6 +140,47 @@ export type PermissionDecision =
   | { allow: false; reason: string };
 
 /**
+ * Files OnFlip reads back into a later session as instructions, by name,
+ * wherever they sit: `INSTRUCTION_FILES` in `agent/context.ts` is the list
+ * this has to cover, and a test holds the two together.
+ */
+const INSTRUCTION_BASENAMES = new Set([
+  "agents.md",
+  "agent.md",
+  "claude.md",
+  "onflip.md",
+  ".cursorrules",
+  "copilot-instructions.md",
+]);
+
+/** The same names, and the `.onflip` folder, as a path inside a shell command. */
+const INSTRUCTION_NAME_PATTERN = String.raw`(?<![\w.-])(?:(?:AGENTS?|CLAUDE|ONFLIP)\.md|\.cursorrules|copilot-instructions\.md)(?![\w.-])|(?<![\w.-])\.onflip[\\/]`;
+
+/**
+ * Whether a write would change what a later session is told to do.
+ *
+ * An instruction file outranks the system prompt ("they override the
+ * general guidance above"), `.onflip/memory.md` is read into every session,
+ * and a skill's body is loaded whenever a task matches it. In auto-edit and
+ * full-auto a workspace write goes through unasked, so anything the model
+ * was talked into — by a web page, a README, a tool result — could be
+ * written into one of these and obeyed from then on, in every session,
+ * long after the page that said it was closed. So a write to one is always
+ * shown first, whatever the mode, except in yolo, which asks for nothing.
+ *
+ * The configuration folder counts wherever it has been moved to: global
+ * instructions and skills live in it, and so does the allowlist.
+ */
+export function isInstructionFile(target: string): boolean {
+  const resolved = path.resolve(target);
+  const parts = resolved.split(/[\\/]+/);
+  const base = (parts.pop() ?? "").toLowerCase();
+  if (INSTRUCTION_BASENAMES.has(base)) return true;
+  if (parts.some((part) => part.toLowerCase() === ".onflip")) return true;
+  return isInside(realPath(configDir()), realPath(resolved));
+}
+
+/**
  * Commands that can destroy data, exfiltrate the workspace, or take the machine
  * down. These always prompt unless the mode is explicitly `yolo`.
  */
@@ -184,6 +226,32 @@ const DESTRUCTIVE_PATTERNS: { re: RegExp; why: string }[] = [
   { re: /\breg\s+delete\b/i, why: "registry delete" },
   { re: /\bcipher\s+\/w/i, why: "wipes free space" },
   { re: /\bvssadmin\b.*delete/i, why: "deletes shadow copies" },
+  // The shell's ways of writing an instruction file: see
+  // `isInstructionFile`. A redirect or a write cmdlet whose target is one,
+  // `sed -i` on one, or a copy or move that lands on one. Reading one —
+  // `cat AGENTS.md`, `grep x AGENTS.md > out.txt` — is not flagged.
+  {
+    re: new RegExp(String.raw`(>>?|\btee\b(\s+-a)?)\s*["']?[^\s"'|;&<>]*?(${INSTRUCTION_NAME_PATTERN})`, "i"),
+    why: "writes an instruction file that later sessions load",
+  },
+  {
+    re: new RegExp(
+      String.raw`\b(Out-File|Set-Content|Add-Content)\b[^|;\n]*?\s["']?[^\s"'|;&<>]*?(${INSTRUCTION_NAME_PATTERN})`,
+      "i"
+    ),
+    why: "writes an instruction file that later sessions load",
+  },
+  {
+    re: new RegExp(String.raw`\bsed\b[^|;&\n]*\s-i\b[^|;&\n]*?(${INSTRUCTION_NAME_PATTERN})`, "i"),
+    why: "writes an instruction file that later sessions load",
+  },
+  {
+    re: new RegExp(
+      String.raw`\b(cp|mv|copy|move|Copy-Item|Move-Item|ren|Rename-Item)\b[^|;&\n]*\s["']?[^\s"'|;&<>]*?(${INSTRUCTION_NAME_PATTERN})["']?\s*(?=$|[|;&\n])`,
+      "i"
+    ),
+    why: "writes an instruction file that later sessions load",
+  },
 ];
 
 export interface DangerAssessment {
@@ -580,6 +648,16 @@ export function evaluate(policy: PolicyState, req: PermissionRequest): PolicyVer
     const preCleared =
       target && [...policy.allowedWriteDirs].some((d) => isInside(realPath(d), target));
 
+    // Ahead of a remembered folder as well as the mode: "always allow
+    // writes in src" was never agreement to rewrite what every later
+    // session is told. See `isInstructionFile`.
+    if (policy.mode !== "yolo" && target && isInstructionFile(target)) {
+      return {
+        outcome: "ask",
+        reason: "instruction file — later sessions read it as instructions, so a change to one is always shown first",
+        dangerous: !inWorkspace,
+      };
+    }
     if (preCleared) return { outcome: "allow", reason: "directory previously approved" };
     if (policy.mode === "yolo") return { outcome: "allow" };
     if (policy.mode === "full-auto" || policy.mode === "auto-edit") {

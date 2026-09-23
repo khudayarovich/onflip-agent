@@ -121,6 +121,7 @@ import {
   remember,
   commandKey,
   rememberableWriteDir,
+  isInstructionFile,
   PolicyState,
   BashRules,
   isRuleAction,
@@ -1345,6 +1346,10 @@ export class Engine {
   private rememberLabel(req: PermissionRequest): string | undefined {
     if (req.kind === "command") return commandKey(req.subject) ? "Always allow" : undefined;
     if (req.kind === "write" && req.targetPath) {
+      // An instruction file is asked about every time, remembered folder or
+      // not (`isInstructionFile`), so a control promising "always" would be
+      // a promise the next write breaks.
+      if (isInstructionFile(req.targetPath)) return undefined;
       // A drive root or the home folder is never remembered, so the control
       // is not offered for one: see `rememberableWriteDir`.
       const dir = rememberableWriteDir(req.targetPath);

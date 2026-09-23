@@ -5,6 +5,7 @@ import { ToolDefinition, ToolResult } from "../types";
 import { err, ok, denied, asNumber, asBool, clip } from "./util";
 import { assessCommand } from "../agent/permissions";
 import { spillText } from "../agent/spill";
+import { notePassedCommand } from "../agent/project-checks";
 
 const DEFAULT_TIMEOUT = 120_000;
 const MAX_TIMEOUT = 600_000;
@@ -576,12 +577,24 @@ export const bashTool: ToolDefinition = {
       return cwdNote ? { ...started, output: `${cwdNote}\n${started.output}` } : started;
     }
 
+    const startedAt = Date.now();
     const result = await execute(command, cwd, timeout, ctx.signal, ctx.onProgress);
 
     if (result.cwd && result.cwd !== cwd && isUsableDirectory(result.cwd)) setShellCwd(result.cwd);
 
     if (result.aborted) {
       return { output: "Command interrupted by the user.", error: true, denied: true };
+    }
+    // A build, test or lint command that passed is remembered for the next
+    // session in this project: see `agent/project-checks.ts`.
+    if (!result.timedOut && result.code === 0) {
+      notePassedCommand({
+        project: ctx.cwd,
+        line: command,
+        startDir: cwd,
+        endDir: result.cwd || undefined,
+        ms: Date.now() - startedAt,
+      });
     }
 
     const parts: string[] = [];
