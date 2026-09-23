@@ -98,7 +98,7 @@ const fakePlaywright = {
 const playwrightKey = require.resolve("playwright");
 require.cache[playwrightKey] = { id: playwrightKey, filename: playwrightKey, loaded: true, exports: fakePlaywright };
 
-const { closeAutomationBrowser } = require("../dist/tools/browser");
+const { closeAutomationBrowser, SNAPSHOT } = require("../dist/tools/browser");
 const { createToolRegistry } = require("../dist/tools/index");
 const { loggableArguments } = require("../dist/agent/run");
 const { parseTurn } = require("../dist/agent/protocol");
@@ -324,6 +324,71 @@ test("an older snapshot is not vouched for: it may have been trimmed from the co
   } finally {
     Date.now = realNow;
   }
+});
+
+// ---------------------------------------------------------------------------
+// what the snapshot tells the model's service
+// ---------------------------------------------------------------------------
+
+/** The in-page snapshot program, run against a hand-built document. */
+function runSnapshot(fields) {
+  const attrs = (el) => el.attrs;
+  const elements = fields.map((f) => ({
+    tagName: f.tag || "INPUT",
+    attrs: { ...(f.type ? { type: f.type } : {}), ...(f.attrs || {}) },
+    value: f.value,
+    innerText: f.innerText || "",
+    disabled: false,
+    checked: false,
+    getAttribute(name) {
+      return name in attrs(this) ? attrs(this)[name] : null;
+    },
+    setAttribute(name, value) {
+      attrs(this)[name] = value;
+    },
+    removeAttribute(name) {
+      delete attrs(this)[name];
+    },
+    getBoundingClientRect: () => ({ width: 120, height: 24 }),
+  }));
+  const document = {
+    title: "Sign in",
+    body: { innerText: "Sign in to continue" },
+    getElementById: () => null,
+    querySelectorAll: (selector) =>
+      selector === "[data-onflip-ref]" ? elements.filter((e) => "data-onflip-ref" in e.attrs) : elements,
+  };
+  const window = { getComputedStyle: () => ({ visibility: "visible", display: "block", opacity: "1" }) };
+  const location = { href: "https://example.test/login" };
+  return new Function("document", "window", "location", `return (${SNAPSHOT})(120);`)(document, window, location);
+}
+
+test("a password in a field never leaves the page, whoever typed it", () => {
+  // The person signing in through the browser panel, or the profile
+  // autofilling, puts a password in a field the model never typed — and
+  // every snapshot after it went to the model's service with the password
+  // in the clear.
+  const shot = runSnapshot([
+    { type: "email", value: "jane@example.test", attrs: { placeholder: "Email" } },
+    { type: "password", value: "hunter22", attrs: { placeholder: "Password" } },
+    { type: "PASSWORD", value: "correct horse battery staple" },
+  ]);
+  assert.ok(!JSON.stringify(shot).includes("hunter22"), "the typed password is not in the snapshot");
+  assert.ok(!JSON.stringify(shot).includes("correct horse"), "nor one in a field with no label to name it by");
+  const [email, password, unlabelled] = shot.elements;
+  assert.equal(email.value, "jane@example.test", "an ordinary field still reads as typed");
+  assert.equal(password.role, "password");
+  assert.equal(password.value, "••••••••", "filled, and how long, is what the model needs");
+  assert.equal(password.name, "Password");
+  assert.equal(unlabelled.name, "", "its value is not used as its name either");
+  assert.equal(unlabelled.value, "••••••••••••", "capped, like the approval prompt's mask");
+});
+
+test("and the snapshot the model reads says the field is filled without saying with what", () => {
+  const shot = runSnapshot([{ type: "password", value: "hunter22", attrs: { "aria-label": "Password" } }]);
+  assert.equal(shot.elements[0].value, "••••••••");
+  const empty = runSnapshot([{ type: "password", value: "", attrs: { "aria-label": "Password" } }]);
+  assert.equal(empty.elements[0].value, "", "an empty field still reads as empty");
 });
 
 test("the tool says when a snapshot is worth asking for", () => {

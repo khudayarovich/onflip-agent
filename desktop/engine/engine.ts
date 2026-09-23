@@ -169,7 +169,7 @@ import {
 import { buildFileDiff, FULL_MAX_CHARS, FULL_MAX_LINES } from "./diffs";
 import { replayItems, stripUserNotes } from "./replay";
 import { expandSkillToken } from "../shared/skills";
-import { subjectFor } from "./subjects";
+import { displayArgs, subjectFor } from "./subjects";
 import { SilenceWatch } from "./silence";
 import { SESSION_WATCH_MS, idleStep, lookOnWake } from "./idle";
 import { presentableTail } from "./presentable";
@@ -2250,7 +2250,8 @@ export class Engine {
             id,
             tool: call.tool,
             subject: subjectFor(call.tool, call.arguments),
-            args: call.arguments,
+            // Masked for the screen; the approval preview reads pendingArgs.
+            args: displayArgs(call.tool, call.arguments),
           };
           this.peer.emit("item", { type: "tool", id, call: dto } satisfies ChatItem);
         },

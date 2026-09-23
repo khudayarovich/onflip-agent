@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { ChatMessage } from "onflip/dist/types";
 import { isUserRequest, parseTurn } from "onflip/dist/agent/protocol";
 import { ChatItem, ToolCallDTO, ToolResultDTO } from "../shared/protocol";
-import { subjectFor } from "./subjects";
+import { displayArgs, subjectFor } from "./subjects";
 
 /**
  * Rebuild display items from a stored transcript.
@@ -63,7 +63,7 @@ export function replayItems(history: ChatMessage[]): ChatItem[] {
           id: randomUUID(),
           tool: c.tool,
           subject: subjectFor(c.tool, c.arguments),
-          args: c.arguments,
+          args: displayArgs(c.tool, c.arguments),
         }));
       if (closing && calls.length === 0) {
         const kind = closingKind(closing.tool);

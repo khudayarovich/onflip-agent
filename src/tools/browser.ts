@@ -564,9 +564,10 @@ async function emitFrame(p: Page, note?: string): Promise<void> {
  *
  * A string rather than a function because this file compiles without the DOM
  * lib — and, as `browser-client.ts` learned the hard way, a stringified
- * function is only *called* when it is given an argument.
+ * function is only *called* when it is given an argument. Exported so the
+ * suite can run it against a hand-built document.
  */
-const SNAPSHOT = `(limit) => {
+export const SNAPSHOT = `(limit) => {
   const SELECTOR = [
     'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea',
     'summary', '[contenteditable="true"]',
@@ -576,6 +577,15 @@ const SNAPSHOT = `(limit) => {
   ].join(',');
 
   const clean = (s) => (s || '').replace(/\\s+/g, ' ').trim().slice(0, 120);
+
+  // A password field's characters never leave the page. This snapshot goes
+  // to the model's service after every action and into the transcript, and
+  // what is in the field may be nothing the model typed: a password the
+  // person entered in the browser panel, or one the profile autofilled.
+  // That it is filled, and how long, is all the model needs.
+  const secret = (el) =>
+    el.tagName.toLowerCase() === 'input' && (el.getAttribute('type') || '').toLowerCase() === 'password';
+  const masked = (s) => '•'.repeat(Math.min(String(s || '').length, 12));
 
   const nameOf = (el) => {
     const labelled = el.getAttribute('aria-labelledby');
@@ -590,7 +600,7 @@ const SNAPSHOT = `(limit) => {
       clean(el.getAttribute('title')) ||
       clean(el.getAttribute('alt')) ||
       clean(el.getAttribute('name')) ||
-      clean(el.value)
+      (secret(el) ? '' : clean(el.value))
     );
   };
 
@@ -635,7 +645,7 @@ const SNAPSHOT = `(limit) => {
       ref,
       role: roleOf(el),
       name: nameOf(el),
-      value: typeof el.value === 'string' ? clean(el.value) : '',
+      value: typeof el.value === 'string' ? (secret(el) ? masked(el.value) : clean(el.value)) : '',
       checked: el.checked === true,
     });
   }
