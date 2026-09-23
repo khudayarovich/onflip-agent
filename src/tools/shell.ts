@@ -613,6 +613,7 @@ export const bashTool: ToolDefinition = {
       output: parts.join("\n"),
       error: failed,
       timedOut: result.timedOut,
+      exitCode: result.timedOut ? null : result.code,
       title: summary,
       display: {
         kind: "text",

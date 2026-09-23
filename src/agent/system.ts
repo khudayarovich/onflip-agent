@@ -204,7 +204,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "  What was done, with files as path:line, and anything left out and why.",
       "````",
       "",
-      "`done` ends the turn; `summary` is the final Markdown answer. Use four backticks around this block so three-backtick code fences stay inside it, and indent every summary line two spaces. Send it only when the whole request is finished and verified — never after a single step, while a task-list item is open, or right after a failed tool call. After file edits that need no further check, `done` may go in the same reply: it closes the turn if every edit applies.",
+      "`done` ends the turn; `summary` is the final Markdown answer. Use four backticks around this block so three-backtick code fences stay inside it, and indent every summary line two spaces. Send it only when the whole request is finished and verified — never after a single step, while a task-list item is open, or after a failed call. It may share a reply with edits or a final build/test run: the turn ends only if every edit applies and every command exits 0.",
       "",
       "````onflip",
       "tool: ask_user",

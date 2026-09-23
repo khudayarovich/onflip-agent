@@ -450,8 +450,12 @@ export async function runTurn(
       // failure it had already been shown?
       let anyLanded = false;
       let sawRepeat = false;
-      /** Every call was a file edit, and every one of them applied. */
-      let onlyEditsThatLanded = true;
+      /**
+       * Why a `done` beside these calls cannot end the turn, or null while it
+       * still can: every call so far an edit that applied or a command that
+       * finished with exit code 0. See `settledAlone`.
+       */
+      let notSettled: string | null = null;
       const fullReadPaths: string[] = [];
       for (const call of realCalls) {
         if (opts.signal.aborted) {
@@ -492,9 +496,7 @@ export async function runTurn(
         if (result.denied) deniedCalls++;
         if (!result.error && !result.denied) anyLanded = true;
         if (result.fullRead) fullReadPaths.push(result.fullRead);
-        if (!CLOSES_WITH_EDITS.has(canonicalName(opts.tools, call.tool)) || result.error || result.denied) {
-          onlyEditsThatLanded = false;
-        }
+        notSettled ??= settledAlone(canonicalName(opts.tools, call.tool), result);
 
         // Watching a model send the same failing call four times in a row is
         // watching it spend the step budget on a result it has already been
@@ -527,13 +529,17 @@ export async function runTurn(
       }
 
       // A closing block beside tool calls usually closes nothing: the model
-      // wrote its summary before seeing what the calls returned. One shape is
-      // the exception, because there is nothing left to see — a `done` after
-      // file edits that all applied. An edit either lands or fails; if every
-      // one landed, the summary written before the results is still true,
-      // and making the model send it again alone is a whole round trip spent
-      // on ceremony at the end of every small change. Anything that returns
-      // information (a read, a command, a search) still has to be read first.
+      // wrote its summary before seeing what the calls returned. Two shapes
+      // are the exception, because there is nothing left to see — file edits
+      // that all applied, and a final check (a build, a test run) that exited
+      // 0. An edit lands or fails, and a check passes or fails; when all of
+      // them succeeded the summary written ahead of the results is still
+      // true, and making the model send it again alone is a whole round trip
+      // spent on ceremony. Measured over the saved sessions: 45 of 101
+      // requests ended with a reply that was nothing but `done`, most of them
+      // straight after a check had passed. Anything that returns information
+      // (a read, a search, a fetch) still has to be read first, and a check
+      // that failed is the next thing to work on, not the end.
       // A block beside these that could not be read was never run; saying so
       // is what stops the model believing it was.
       if (dropped) {
@@ -546,14 +552,17 @@ export async function runTurn(
         !dropped &&
         terminal !== null &&
         terminalName(terminal) === "done" &&
-        onlyEditsThatLanded &&
+        notSettled === null &&
         openTodoCount(opts.session.todos) === 0;
       if (terminal && !closesNow) {
         const name = terminalName(terminal);
-        logger.info("protocol", "closing block ignored beside tool calls", { block: name });
+        logger.info("protocol", "closing block ignored beside tool calls", { block: name, why: notSettled });
         resultBlocks.push(
-          `[OnFlip] The ${name} block in that reply was ignored: it arrived beside tool calls whose results you had not seen. ` +
-            `Read the results above, and when the turn really is over send the ${name} block alone, in its own reply.`
+          notSettled && notSettled.startsWith("failed:")
+            ? `[OnFlip] The ${name} block in that reply was not taken: ${notSettled.slice("failed:".length).trim()}. ` +
+                `Deal with that result first, and send ${name} once the work really is finished.`
+            : `[OnFlip] The ${name} block in that reply was ignored: it arrived beside tool calls whose results you had not seen. ` +
+                `Read the results above, and when the turn really is over send the ${name} block alone, in its own reply.`
         );
       }
 
@@ -569,7 +578,7 @@ export async function runTurn(
       if (closesNow && terminal) {
         const summary = stringArgument(terminal.arguments.summary);
         const final = composeFinal(summary) || "Done.";
-        logger.info("protocol", "done accepted beside edits that all applied", {
+        logger.info("protocol", "done accepted beside calls that all succeeded", {
           calls: realCalls.map((c) => c.tool),
         });
         events.onFinal?.(final, { kind: "done", openTodos: 0 });
@@ -1060,6 +1069,30 @@ function terminalNameOf(tools: ToolRegistry, name: string): TerminalToolName | n
  * here returns information the summary could have needed to see first.
  */
 const CLOSES_WITH_EDITS = new Set(["edit", "multi_edit", "patch", "write", "todo_write"]);
+
+/**
+ * Whether one call leaves a `done` beside it able to end the turn: null if
+ * so, otherwise why not. A failure is prefixed "failed:", because that is
+ * the case the model has to be told about in its own words.
+ *
+ * A command counts when it finished with exit code 0 — a plain 0, not an
+ * unknown code — or was started in the background and stayed up, which says
+ * as much about it as waiting another round trip would.
+ */
+function settledAlone(name: string, result: ToolResult): string | null {
+  if (result.denied) return `failed: \`${name}\` was declined`;
+  if (result.timedOut) return `failed: \`${name}\` timed out`;
+  if (result.error) {
+    return name === "bash" && typeof result.exitCode === "number"
+      ? `failed: \`bash\` exited with code ${result.exitCode}`
+      : `failed: \`${name}\` returned an error`;
+  }
+  if (CLOSES_WITH_EDITS.has(name)) return null;
+  if (name === "bash") {
+    return result.exitCode === 0 || result.exitCode === undefined ? null : "the command's exit code is unknown";
+  }
+  return `\`${name}\` returns information to read first`;
+}
 
 /** The registry's own name for a tool, or the spelling folded without one. */
 function canonicalName(tools: ToolRegistry, name: string): string {

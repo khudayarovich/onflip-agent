@@ -66,6 +66,13 @@ export interface ToolResult {
    */
   timedOut?: boolean;
   /**
+   * The exit code of a command the tool ran to completion; null when the
+   * process ended without one. Absent when no command finished, such as a
+   * background start. The loop reads it when deciding whether a `done`
+   * sent beside the command can end the turn: only a plain 0 counts.
+   */
+  exitCode?: number | null;
+  /**
    * The absolute path of a file this result carries in full.
    *
    * Set by `read` when it sent a whole file, so the loop can note which

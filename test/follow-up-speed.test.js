@@ -319,6 +319,67 @@ test("done beside edits with the task list still open is not the end", async () 
   assert.ok(sent.length >= 2);
 });
 
+test("done beside a final check that passed ends the turn in one round trip", async () => {
+  // 45 of 101 saved requests ended with a reply that was nothing but done,
+  // most of them straight after a build or test had passed.
+  const cwd = project({ "app.js": numbered(20) });
+  const session = createSessionState();
+  const { sent, transport } = scripted([
+    [
+      block("edit", { path: "app.js", old_string: "line 7\n", new_string: "line seven\n" }),
+      block("bash", { command: 'node -e "process.exit(0)"' }),
+      done("Renamed line 7; the check passes."),
+    ].join("\n\n"),
+  ]);
+  const result = await turn(cwd, session, transport, [said("system", "prompt"), said("user", "rename line 7 and check")]);
+  assert.equal(result.endedBy, "done");
+  assert.equal(sent.length, 1, "no second send just to repeat the done");
+  assert.equal(result.finalAnswer, "Renamed line 7; the check passes.");
+});
+
+test("done beside a check that failed is not the end, and the model is told why", async () => {
+  const cwd = project({ "app.js": numbered(20) });
+  const session = createSessionState();
+  const { sent, transport } = scripted([
+    [block("bash", { command: 'node -e "process.exit(3)"' }), done("All tests pass.")].join("\n\n"),
+    done("The check exits 3; nothing was changed."),
+  ]);
+  const result = await turn(cwd, session, transport, [said("system", "prompt"), said("user", "run the check")]);
+  assert.equal(sent.length, 2, "the failure goes back to the model");
+  assert.match(sent[1].last.content, /The done block in that reply was not taken: `bash` exited with code 3/);
+  assert.equal(result.finalAnswer, "The check exits 3; nothing was changed.");
+});
+
+test("done beside a server started in the background that stayed up ends the turn", async () => {
+  const { killAllJobs } = require("../dist/tools/index");
+  const cwd = project({ "app.js": numbered(5) });
+  const session = createSessionState();
+  const { sent, transport } = scripted([
+    [block("bash", { command: 'node -e "setTimeout(() => {}, 15000)"', background: "true" }), done("The server is running.")].join("\n\n"),
+  ]);
+  try {
+    const result = await turn(cwd, session, transport, [said("system", "prompt"), said("user", "start the server")]);
+    assert.equal(sent.length, 1);
+    assert.equal(result.finalAnswer, "The server is running.");
+  } finally {
+    killAllJobs();
+  }
+});
+
+test("done beside a search still waits, whatever else in the reply succeeded", async () => {
+  // The false-positive half: a call that returns information has to be read.
+  const cwd = project({ "app.js": numbered(20) });
+  const session = createSessionState();
+  const { sent, transport } = scripted([
+    [block("bash", { command: 'node -e "process.exit(0)"' }), block("grep", { pattern: "line 1" }), done("Found it.")].join("\n\n"),
+    done("Line 1 and lines 10-19 match."),
+  ]);
+  const result = await turn(cwd, session, transport, [said("system", "prompt"), said("user", "find line 1")]);
+  assert.equal(sent.length, 2);
+  assert.match(sent[1].last.content, /The done block in that reply was ignored/);
+  assert.equal(result.finalAnswer, "Line 1 and lines 10-19 match.");
+});
+
 test("a whole-file read is filed against its message, so the next one is a delta", async () => {
   const cwd = project({ "app.js": numbered(300) });
   const session = createSessionState();
@@ -436,4 +497,17 @@ test("edits in the same millisecond still come out newest first", () => {
   fs.writeFileSync(path.join(cwd, "b.js"), "b changed\n");
   const set = recentWorkingSet([snap("a.js", "a\n", "a changed\n"), snap("b.js", "b\n", "b changed\n")]);
   assert.deepEqual(set.map((f) => path.basename(f.path)), ["b.js", "a.js"]);
+});
+
+test("the prompt tells the model a done may ride with the final check", () => {
+  // The loop can only save the round trip if the model sends the two together.
+  const { buildSystemPrompt } = require("../dist/agent/system");
+  const cwd = project({ "app.js": numbered(5) });
+  const prompt = buildSystemPrompt({
+    tools: registryFor(cwd, createSessionState()).list,
+    context: { instructions: "", instructionSources: [], environment: "", skills: [], cwd },
+    approvalMode: "ask",
+    shellEnabled: true,
+  });
+  assert.match(prompt, /It may share a reply with edits or a final build\/test run: the turn ends only if every edit applies and every command exits 0\./);
 });
