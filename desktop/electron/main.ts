@@ -1012,6 +1012,11 @@ function createWindow(cwd?: string): Workspace {
   lastActiveId = win.id;
   win.on("focus", () => {
     lastActiveId = win.id;
+    // The engine goes quiet when nobody is using the app and closes the
+    // service's browser after a long spell (engine/idle.ts); coming back to
+    // the window is how it learns somebody is here again. Best-effort: an
+    // engine still starting, or restarting, has nothing to wake.
+    ws.peer?.request("wake", {}).catch(() => {});
   });
 
   // Shown when the first frame is ready — or after five seconds regardless.

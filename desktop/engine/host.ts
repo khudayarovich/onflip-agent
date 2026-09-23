@@ -214,6 +214,9 @@ peer.onRequest = async (method, rawParams) => {
     case "status":
       return engine.statusPayload();
 
+    case "wake":
+      return engine.wake();
+
     default:
       throw new Error(`Unknown engine method: ${method}`);
   }

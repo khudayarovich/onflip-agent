@@ -170,6 +170,7 @@ import { replayItems, stripUserNotes } from "./replay";
 import { expandSkillToken } from "../shared/skills";
 import { subjectFor } from "./subjects";
 import { SilenceWatch } from "./silence";
+import { SESSION_WATCH_MS, idleStep, lookOnWake } from "./idle";
 import { presentableTail } from "./presentable";
 import { recordableChatIds } from "./chat-ids";
 
@@ -276,16 +277,6 @@ export const ENGINE_VERSION = readVersion();
  */
 const SUB_TASK_ACTIVITY_MAX = 40;
 
-/**
- * How often the session is re-checked while the app sits idle.
- *
- * Short enough that a session ending is noticed before the next message is
- * written; long enough that a service watching for automation sees a request
- * a person could plausibly have caused. Sessions were measured lasting
- * hours, so this is about catching the change, not racing it.
- */
-const SESSION_WATCH_MS = 3 * 60_000;
-
 export class Engine {
   private config = loadConfig();
   private auth!: ResolvedAuth;
@@ -301,10 +292,20 @@ export class Engine {
    * the conversation that asked for it.
    */
   private subTasks: SubTaskDTO[] = [];
-  /** The background session re-check; see `startSessionWatch`. */
+  /** The background session re-check and idle clock; see `startSessionWatch` and `idle.ts`. */
   private sessionWatch: ReturnType<typeof setInterval> | null = null;
   /** One check at a time; a slow one must not stack up behind itself. */
   private watchInFlight = false;
+  /** A session was found signed in, so the clock's checks have something to watch. */
+  private watching = false;
+  /** When anything was last asked of this engine: a turn, or the window coming to the front. */
+  private lastActiveAt = Date.now();
+  /** When the watch last asked the service. */
+  private lastCheckAt = 0;
+  /** The service's browser was closed for idleness and has not been reopened. */
+  private parked = false;
+  /** The close in progress, which a send or a check waits out rather than racing. */
+  private parking: Promise<void> | null = null;
   /** Who the ChatGPT session belongs to, once identified. */
   private account: { name?: string; email?: string } | null = null;
   /** User message awaiting proof of delivery — cleared by the first send. */
@@ -435,6 +436,38 @@ export class Engine {
     return this.initInFlight;
   }
 
+  /**
+   * The engine's side of every send, around whichever transport was chosen.
+   *
+   * Counting rides on it — one send is one request against the account's
+   * limits, whichever code path asked for it — and so does waiting out a
+   * browser that is closing for idleness, which is not one to open a page in.
+   */
+  private wrapTransport(chosen: Transport): Transport {
+    return {
+      name: chosen.name,
+      send: async (history, opts) => {
+        if (this.parking) await this.parking;
+        recordSend(this.accountKey());
+        const reply = await chosen.send(history, opts);
+        // The first send that comes back proves the user's message reached
+        // ChatGPT; the "sending…" badge under it becomes "delivered".
+        if (this.pendingDelivery) {
+          // A streamed delta may already have advanced the badge to "read".
+          // In that case there is no earlier state left to emit.
+          if (this.pendingRead) {
+            this.peer.emit("delivery", { id: this.pendingDelivery, state: "sent" });
+          }
+          this.pendingDelivery = null;
+          this.pendingRead = null;
+        }
+        return reply;
+      },
+      reset: () => chosen.reset(),
+      ...(chosen.adopt ? { adopt: (n: number) => chosen.adopt!(n) } : {}),
+    };
+  }
+
   private async initOnce(): Promise<EngineStatus> {
     this.emitConnect("connecting");
     configureBrowser({
@@ -458,30 +491,7 @@ export class Engine {
       ? { accessToken: "", model: "", maxIterations: 0, cookies: [], sessionToken: "" }
       : await resolveAuth();
     const choice = chooseTransport(this.auth);
-    // Counting rides on the transport: one send is one request against the
-    // account's limits, whichever code path asked for it.
-    const chosen = choice.transport;
-    this.transport = {
-      name: chosen.name,
-      send: async (history, opts) => {
-        recordSend(this.accountKey());
-        const reply = await chosen.send(history, opts);
-        // The first send that comes back proves the user's message reached
-        // ChatGPT; the "sending…" badge under it becomes "delivered".
-        if (this.pendingDelivery) {
-          // A streamed delta may already have advanced the badge to "read".
-          // In that case there is no earlier state left to emit.
-          if (this.pendingRead) {
-            this.peer.emit("delivery", { id: this.pendingDelivery, state: "sent" });
-          }
-          this.pendingDelivery = null;
-          this.pendingRead = null;
-        }
-        return reply;
-      },
-      reset: () => chosen.reset(),
-      ...(chosen.adopt ? { adopt: (n: number) => chosen.adopt!(n) } : {}),
-    };
+    this.transport = this.wrapTransport(choice.transport);
     this.transportReason = choice.reason;
     // resolveAuth saves the account when the session endpoint answers from
     // Node; the page-context fallback fills it in after the first turn.
@@ -532,6 +542,7 @@ export class Engine {
     if (this.session.chatId) await this.reattachChat();
 
     this.connected = true;
+    this.startIdleClock();
     // Mirror the agent's browser into the desktop panel. The browser itself
     // is a separate OS window that cannot be embedded, so the panel is fed
     // frames captured after each action.
@@ -759,24 +770,101 @@ export class Engine {
    *   put a banner in front of somebody for no reason.
    */
   private startSessionWatch(): void {
+    if (!isBrowserProvider()) return;
+    this.watching = true;
+    this.startIdleClock();
+  }
+
+  /**
+   * The clock the watch runs on, which also parks an idle browser.
+   *
+   * Started with the engine rather than with the watch: a browser opened by
+   * a sign-in probe that found no session still runs, and is exactly as
+   * worth closing when nobody is using the app. See `idle.ts`.
+   */
+  private startIdleClock(): void {
     if (this.sessionWatch || !isBrowserProvider()) return;
     this.sessionWatch = setInterval(() => {
-      void this.checkSessionQuietly();
+      void this.idleTick();
     }, SESSION_WATCH_MS);
     // Never hold the process open on its own account.
     this.sessionWatch.unref?.();
   }
 
   private stopSessionWatch(): void {
+    this.watching = false;
     if (!this.sessionWatch) return;
     clearInterval(this.sessionWatch);
     this.sessionWatch = null;
+  }
+
+  private async idleTick(): Promise<void> {
+    const step = idleStep(Date.now() - this.lastActiveAt, {
+      busy: this.busy,
+      watching: this.watching,
+      parked: this.parked,
+    });
+    if (step === "park") await this.parkBrowser();
+    else if (step === "check") await this.checkSessionQuietly();
+  }
+
+  /** Something was asked of the app: it is in use, whatever it is doing. */
+  private noteActive(): void {
+    this.lastActiveAt = Date.now();
+  }
+
+  /**
+   * Close the service's browser until it is needed again.
+   *
+   * The driver forgets the live conversation as it closes, so the next send
+   * carries the whole transcript into a new one — the same recovery as
+   * after Stop, and the reason this waits two hours rather than one.
+   */
+  private async parkBrowser(): Promise<void> {
+    if (this.busy || this.parked || this.parking || this.watchInFlight) return;
+    this.parked = true;
+    logger.info("session", "idle: closing the service's browser until it is needed", {
+      provider: activeProvider(),
+      idleMinutes: Math.round((Date.now() - this.lastActiveAt) / 60_000),
+    });
+    this.parking = closeBrowser()
+      .catch(() => {})
+      .finally(() => {
+        this.parking = null;
+      });
+    await this.parking;
+  }
+
+  /**
+   * The window came to the front.
+   *
+   * Counts as use, and after a quiet spell looks at the session at once —
+   * which also reopens a parked browser while the person is still reading,
+   * so their next message does not wait for it.
+   */
+  wake(): null {
+    const look = lookOnWake(Date.now() - this.lastCheckAt, {
+      busy: this.busy,
+      watching: this.watching,
+      parked: this.parked,
+    });
+    this.noteActive();
+    if (look) void this.checkSessionQuietly();
+    return null;
   }
 
   private async checkSessionQuietly(): Promise<void> {
     if (this.busy || this.watchInFlight) return;
     this.watchInFlight = true;
     try {
+      if (this.parking) {
+        await this.parking;
+        // A turn that started meanwhile will find out for itself.
+        if (this.busy) return;
+      }
+      // The check opens the browser again if it was parked.
+      this.parked = false;
+      this.lastCheckAt = Date.now();
       const state = await checkSignedIn(this.auth.cookies);
       // The rule lives in `watchVerdict`, pure and tested: unreachable
       // changes nothing, and neither does an answer that agrees with what is
@@ -1573,6 +1661,9 @@ export class Engine {
     // per turn, and a queued turn from the phone must still read as one.
     this.turnOrigin = origin;
     this.busy = true;
+    this.noteActive();
+    // The turn opens the browser again, if idleness had closed it.
+    this.parked = false;
     this.abort = new AbortController();
     this.silence.start();
     this.toolIds.clear();
@@ -1816,6 +1907,9 @@ export class Engine {
       // Keep the engine busy across the hand-off. If idle were exposed here,
       // a new send could start beside the queued turn before setImmediate runs.
       this.busy = next !== undefined;
+      // Idleness is counted from the end of the work, not its start: a
+      // two-hour turn is not two hours of nobody using the app.
+      this.noteActive();
       this.saveNow();
       this.pushStatus();
       this.maybeAdoptChatTitle();
