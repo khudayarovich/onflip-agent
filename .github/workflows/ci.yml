@@ -129,14 +129,29 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+      # Every step here says what it found as an annotation, because a job's
+      # log needs admin rights to read and its annotations do not: a red run
+      # that says only "exit code 1" is one nobody can act on.
+      - name: the default binding, as installed
+        run: echo "::notice title=default sqlite binding::$(file node_modules/better-sqlite3/build/Release/better_sqlite3.node)"
+
       - name: install the Intel build of the app's Electron
         run: |
+          enc() { node -e 'const s=require("fs").readFileSync(0,"utf8");process.stdout.write(s.replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A"))'; }
           version=$(node -p "require('./desktop/package-lock.json').packages['node_modules/electron'].version")
           mkdir -p "$RUNNER_TEMP/electron-x64"
           cd "$RUNNER_TEMP/electron-x64"
           npm init -y > /dev/null
-          npm_config_arch=x64 npm install --no-audit --no-fund --no-save "electron@$version"
-          file node_modules/electron/dist/Electron.app/Contents/MacOS/Electron
+          if ! npm_config_arch=x64 npm install --no-audit --no-fund --no-save "electron@$version" > install.log 2>&1; then
+            echo "::error title=Intel Electron install::$(tail -n 30 install.log | enc)"
+            exit 1
+          fi
+          exe=node_modules/electron/dist/Electron.app/Contents/MacOS/Electron
+          if [ ! -x "$exe" ]; then
+            echo "::error title=Intel Electron install::no binary at $exe%0A$(tail -n 30 install.log | enc)"
+            exit 1
+          fi
+          echo "::notice title=Intel Electron $version::$(file "$exe")"
 
       - name: make sure Rosetta can run it
         run: /usr/bin/arch -x86_64 /usr/bin/true || sudo softwareupdate --install-rosetta --agree-to-license
@@ -144,7 +159,12 @@ jobs:
       # Fails unless the default binding is refused for this CPU and the
       # shipped darwin-x64 one opens sqlite: see check-sqlite-fallback.js.
       - name: the arm64 binding is refused, and the shipped darwin-x64 one opens sqlite
-        run: >-
-          ELECTRON_RUN_AS_NODE=1
-          "$RUNNER_TEMP/electron-x64/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
-          scripts/check-sqlite-fallback.js . --expect-fallback
+        run: |
+          enc() { node -e 'const s=require("fs").readFileSync(0,"utf8");process.stdout.write(s.replace(/%/g,"%25").replace(/\r/g,"%0D").replace(/\n/g,"%0A"))'; }
+          electron="$RUNNER_TEMP/electron-x64/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
+          if ELECTRON_RUN_AS_NODE=1 "$electron" scripts/check-sqlite-fallback.js . --expect-fallback > check.log 2>&1; then
+            echo "::notice title=sqlite under Rosetta::$(enc < check.log)"
+          else
+            echo "::error title=sqlite under Rosetta::$(enc < check.log)"
+            exit 1
+          fi
