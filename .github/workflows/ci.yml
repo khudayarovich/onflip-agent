@@ -147,7 +147,18 @@ jobs:
           fi
           # The electron package has no install script to run: its binary is
           # fetched by install.js on first use, so fetch it now, for x64.
-          if ! ELECTRON_INSTALL_ARCH=x64 node node_modules/electron/install.js >> install.log 2>&1; then
+          # Three tries: GitHub's release downloads answer 500 now and then,
+          # and a server hiccup is not a reason for this job to go red.
+          fetched=false
+          for attempt in 1 2 3; do
+            if ELECTRON_INSTALL_ARCH=x64 node node_modules/electron/install.js >> install.log 2>&1; then
+              fetched=true
+              break
+            fi
+            echo "download attempt $attempt failed" >> install.log
+            sleep $((attempt * 15))
+          done
+          if [ "$fetched" != true ]; then
             echo "::error title=Intel Electron download::$(tail -n 30 install.log | enc)"
             exit 1
           fi
