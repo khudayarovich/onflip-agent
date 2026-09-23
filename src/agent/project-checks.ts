@@ -156,7 +156,10 @@ export function knownChecks(project: string, now = Date.now()): KnownCheck[] {
         (c) =>
           c &&
           typeof c.command === "string" &&
+          // Checked again on the way out: the record ends up in a prompt,
+          // and a file on disk is not proof of what OnFlip wrote into it.
           PLAIN.test(c.command) &&
+          CHECKS.some((re) => re.test(c.command)) &&
           typeof c.lastPassedAt === "number" &&
           now - c.lastPassedAt < FORGET_AFTER_MS
       )

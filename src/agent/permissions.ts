@@ -168,16 +168,37 @@ const INSTRUCTION_NAME_PATTERN = String.raw`(?<![\w.-])(?:(?:AGENTS?|CLAUDE|ONFL
  * long after the page that said it was closed. So a write to one is always
  * shown first, whatever the mode, except in yolo, which asks for nothing.
  *
- * The configuration folder counts wherever it has been moved to: global
- * instructions and skills live in it, and so does the allowlist.
+ * Inside an OnFlip folder only what is read back counts — a project's
+ * `.onflip/instructions.md`, `memory.md` and `skills/`, and in the
+ * configuration folder (wherever it has been moved to) the global skills,
+ * the per-project check records and `config.json`, which holds the
+ * allowlist. Not the folder as a whole: a folder-less chat works in
+ * `<config>/scratch/<chat>`, and counted whole, every document one of those
+ * wrote would have stopped to ask. A scratch chat's own `.onflip` still
+ * counts, since its memory is read back like any project's.
  */
 export function isInstructionFile(target: string): boolean {
-  const resolved = path.resolve(target);
+  const resolved = realPath(target);
+  if (INSTRUCTION_BASENAMES.has(path.basename(resolved).toLowerCase())) return true;
+  // The nearest OnFlip folder above the file — a project's `.onflip`, or the
+  // default config folder, which follow the same rules. Nearest, so a
+  // scratch chat's own `.onflip` inside `~/.onflip/scratch` is its own.
   const parts = resolved.split(/[\\/]+/);
-  const base = (parts.pop() ?? "").toLowerCase();
-  if (INSTRUCTION_BASENAMES.has(base)) return true;
-  if (parts.some((part) => part.toLowerCase() === ".onflip")) return true;
-  return isInside(realPath(configDir()), realPath(resolved));
+  const at = parts
+    .slice(0, -1)
+    .map((part) => part.toLowerCase())
+    .lastIndexOf(".onflip");
+  if (at >= 0) return readBack(parts.slice(at + 1));
+  // The configuration folder, moved somewhere not named `.onflip`.
+  const rel = path.relative(realPath(configDir()), resolved);
+  return Boolean(rel) && !rel.startsWith("..") && !path.isAbsolute(rel) && readBack(rel.split(/[\\/]+/));
+}
+
+/** Within an OnFlip folder, the paths a later session reads back. */
+function readBack(rel: string[]): boolean {
+  const first = (rel[0] ?? "").toLowerCase();
+  if (first === "skills" || first === "projects") return rel.length > 1;
+  return rel.length === 1 && ["instructions.md", "memory.md", "config.json"].includes(first);
 }
 
 /**

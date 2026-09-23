@@ -51,9 +51,36 @@ test("every file loaded as instructions is recognised as one, wherever it sits",
 });
 
 test("ordinary files are not instruction files", () => {
-  for (const rel of ["src/app.ts", "README.md", "docs/agents-guide.md", "AGENTS.md.bak", "notes/claude.txt", "onflip.json"]) {
+  for (const rel of ["src/app.ts", "README.md", "docs/agents-guide.md", "AGENTS.md.bak", "notes/claude.txt", "onflip.json", ".onflip/notes.txt"]) {
     assert.equal(isInstructionFile(path.join(WORK, rel)), false, rel);
   }
+});
+
+test("a folder-less chat's documents are not instruction files, though they live in the config folder", () => {
+  // Found by launching the app: a scratch chat works in <config>/scratch,
+  // and counting the folder whole made every document it wrote ask.
+  const chat = path.join(process.env.ONFLIP_CONFIG_DIR, "scratch", "chat-1");
+  assert.equal(isInstructionFile(path.join(chat, "report.docx")), false);
+  assert.equal(isInstructionFile(path.join(chat, "data", "sheet.xlsx")), false);
+  assert.equal(isInstructionFile(path.join(os.homedir(), ".onflip", "scratch", "chat-2", "notes.md")), false, "the default one too");
+  for (const other of ["logs/x.jsonl", "sessions/abc.json", "screenshots/a.png"]) {
+    assert.equal(isInstructionFile(path.join(process.env.ONFLIP_CONFIG_DIR, other)), false, other);
+  }
+  // What is read back still counts: the chat's own memory, the global
+  // skills and the check records that go into prompts.
+  assert.equal(isInstructionFile(path.join(chat, ".onflip", "memory.md")), true);
+  assert.equal(
+    isInstructionFile(path.join(os.homedir(), ".onflip", "scratch", "chat-2", ".onflip", "memory.md")),
+    true,
+    "the nearest .onflip decides, not the outermost"
+  );
+  assert.equal(isInstructionFile(path.join(chat, "AGENTS.md")), true);
+  assert.equal(isInstructionFile(path.join(process.env.ONFLIP_CONFIG_DIR, "projects", "abc.json")), true);
+  assert.equal(isInstructionFile(path.join(process.env.ONFLIP_CONFIG_DIR, "AGENTS.md")), true);
+
+  const policy = createPolicy(chat, "auto-edit");
+  assert.equal(evaluate(policy, write(path.join(chat, "report.docx"))).outcome, "allow", "auto-edit still means it in a chat");
+  assert.equal(evaluate(policy, write(path.join(chat, ".onflip", "memory.md"))).outcome, "ask");
 });
 
 test("in auto-edit and full-auto an instruction file asks, where any other workspace edit does not", () => {
