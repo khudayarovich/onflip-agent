@@ -185,13 +185,27 @@ export interface PassedCommand {
  * name the session did not use — Windows's 8.3 short form of a temp
  * folder, a macOS `/tmp` that is really `/private/tmp` — and compared
  * lexically the two looked like different folders.
+ *
+ * A folder that does not exist is named through its nearest existing
+ * parent. Canonicalising only the paths that exist is worse than not at
+ * all: under CI's short-named temp folder the project came back long and
+ * its subfolder stayed short, and every check run there was taken for one
+ * run outside the project.
  */
 function real(p: string): string {
-  try {
-    return fs.realpathSync.native(p);
-  } catch {
-    return path.resolve(p);
+  let current = path.resolve(p);
+  const tail: string[] = [];
+  for (let depth = 0; depth < 64; depth++) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...tail);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) break;
+      tail.unshift(path.basename(current));
+      current = parent;
+    }
   }
+  return path.resolve(p);
 }
 
 /** A folder inside the project, relative with forward slashes, or null. */

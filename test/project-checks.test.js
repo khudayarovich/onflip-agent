@@ -135,6 +135,26 @@ test("a check is filed under the folder the shell really ended in", () => {
   assert.equal(knownChecks(root).length, 1);
 });
 
+test("a project reached by another name still owns its subfolders", (t) => {
+  // Found by running the suite the way CI does: under a short-named (8.3)
+  // temp folder the project resolved to its long name and a subfolder that
+  // did not exist yet stayed short, so every check in it was taken for one
+  // run outside the project. A link reproduces the same mismatch anywhere.
+  const real = project();
+  const link = path.join(HOME, `link-${path.basename(real)}`);
+  try {
+    fs.symlinkSync(real, link, "junction");
+  } catch {
+    return t.skip("links cannot be made here");
+  }
+  notePassedCommand({ project: link, line: "npm run typecheck", startDir: path.join(link, "desktop"), ms: 5, now: 1_000 });
+  assert.deepEqual(knownChecks(link, 2_000).map((c) => `${c.dir}: ${c.command}`), ["desktop: npm run typecheck"]);
+  // And the shell reporting where it ended under the folder's real name,
+  // with the session opened through the link, is still the same folder.
+  notePassedCommand({ project: link, line: "npm test", startDir: link, endDir: real, ms: 5, now: 1_500 });
+  assert.deepEqual(knownChecks(link, 2_000).map((c) => `${c.dir}: ${c.command}`), [": npm test", "desktop: npm run typecheck"]);
+});
+
 test("a chain's one duration is not pinned on a check that was timed alone", () => {
   const root = project();
   const now = Date.now();
