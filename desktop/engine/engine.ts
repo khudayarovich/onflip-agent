@@ -147,6 +147,7 @@ import {
 import { openLog, closeLog, logger, logFile, diagnosticLogLines } from "onflip/dist/log";
 import {
   isResumableFailure,
+  cooldownPassesByItself,
   cooldownRemainingMs,
   describeWait,
   failureCodeOf,
@@ -219,6 +220,9 @@ const MAX_AUTO_RESUMES = 3;
  * turn needs anyway.
  */
 const WARMING_WAIT_MS = 30_000;
+
+/** The longest cooldown OnFlip waits out by itself before carrying on. */
+const AUTO_RESUME_MAX_COOLDOWN_MS = 15 * 60_000;
 
 /**
  * Steps a turn may take before it stops and asks to carry on.
@@ -1406,7 +1410,10 @@ export class Engine {
     // be a promise the next click breaks.
     if (req.kind === "network") {
       const origin = loopbackOrigin(req.origin);
-      return origin ? `Always allow the browser on ${origin.replace(/^https?:\/\//, "")}` : undefined;
+      if (!origin) return undefined;
+      return origin === "file://"
+        ? "Always allow the browser on pages in the working folder"
+        : `Always allow the browser on ${origin.replace(/^https?:\/\//, "")}`;
     }
     return undefined;
   }
@@ -1577,6 +1584,15 @@ export class Engine {
     if (loadConfig().autoResume === false) return;
     const wait = cooldownRemainingMs();
     if (wait <= 0) return;
+    // A short throttle is a pause in the work; a limit measured in hours —
+    // Qwen's daily cap says "wait 4 hours" — is the end of it for today, and
+    // a turn that starts by itself hours later is one nobody is watching.
+    if (wait > AUTO_RESUME_MAX_COOLDOWN_MS) {
+      this.notice(
+        `${providerLabel()} asked for a pause of ${describeWait(wait)}, so OnFlip will not carry on by itself. Say "continue" once it has passed, or switch to another service to keep working now.`
+      );
+      return;
+    }
     this.cancelCooldownResume();
     const sessionId = this.session?.id;
     const length = this.history.length;
@@ -1594,7 +1610,7 @@ export class Engine {
       if (this.autoResumes >= MAX_AUTO_RESUMES) return;
       this.autoResumes += 1;
       logger.info("session", "resuming after a cooldown", { attempt: this.autoResumes });
-      this.notice("The ChatGPT pause is over — carrying on.");
+      this.notice(`The ${providerLabel()} pause is over — carrying on.`);
       void this.runOneTurn(RESUME_PROMPT, undefined, undefined);
     }, wait + 2_000);
     timer.unref?.();
@@ -1914,7 +1930,15 @@ export class Engine {
       } satisfies ChatItem);
       this.peer.emit("turn", { state: "end", error: message });
       if (resumable) this.queueAutoResume(message);
-      else if (!this.abort.signal.aborted && cooldownRemainingMs() > 0) this.resumeAfterCooldown();
+      // Only during a throttle's pause, which passes by itself — and that
+      // includes a message typed during one: it is refused like any send in
+      // a cooldown, typing it cancelled the resume, and it would otherwise
+      // be dropped along with the promise to carry on. It is in the history,
+      // so the resume carries it. A refusal a person has to clear — an abuse
+      // flag, a 403 — is not resent into.
+      else if (!this.abort.signal.aborted && cooldownPassesByItself()) {
+        this.resumeAfterCooldown();
+      }
     } finally {
       this.silence.stop();
       this.clearForceStop();

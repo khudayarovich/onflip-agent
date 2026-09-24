@@ -27,7 +27,7 @@ import {
   TOAST_QUERY,
   joined,
 } from "./selectors";
-import { paceNewChat } from "./backoff";
+import { paceNewChat, parseRetryAfter } from "./backoff";
 import { logger, shapeOf } from "../log";
 
 /**
@@ -232,22 +232,9 @@ let lastThrottle: { at: number; url: string; retryAfter: number | null } | null 
 /** The last conversation request the server refused, while the watcher is on. */
 let lastRequestFailure: { at: number; url: string; status: number; retryAfter: number | null } | null = null;
 
-/**
- * Seconds a `Retry-After` header asks for, or null when it names none.
- *
- * The header is either a number of seconds or an HTTP date. Honouring it is
- * the difference between a cooldown the server set and one OnFlip guessed:
- * every 429 used to cool down for a flat five minutes (three, from the page's
- * notice), whatever the server had said.
- */
-export function parseRetryAfter(value: string | undefined | null, now = Date.now()): number | null {
-  const raw = (value ?? "").trim();
-  if (!raw) return null;
-  if (/^\d+$/.test(raw)) return Number(raw);
-  const at = Date.parse(raw);
-  if (!Number.isFinite(at)) return null;
-  return Math.max(0, Math.ceil((at - now) / 1000));
-}
+// Shared with the other drivers; re-exported so this module's callers and
+// tests keep finding it where they always did.
+export { parseRetryAfter };
 
 /** A header by name, whatever case the server sent it in. */
 function headerValue(headers: Record<string, unknown> | undefined, name: string): string | undefined {

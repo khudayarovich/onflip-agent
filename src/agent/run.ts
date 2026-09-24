@@ -18,10 +18,12 @@ import {
 import { logger } from "../log";
 import { pruneToolResults } from "./prune";
 import { ChangeLedger, recordChange, unlanded } from "./landed";
+import { providerLabel } from "../providers/id";
 import { recentWorkingSet, workingSetExcerpts, workingSetHint } from "./working-set";
 import {
   classifyFailure,
   failureCodeOf,
+  isThrottle,
   startCooldown,
   clearCooldown,
   describeWait,
@@ -428,7 +430,7 @@ export async function runTurn(
         chars: raw.length,
       });
       events.onNotice?.(
-        `ChatGPT's reply was cut off at its length limit — asking for it again (${truncationNudges} of ${MAX_TRUNCATION_NUDGES}).`
+        `${serviceName()}'s reply was cut off at its length limit — asking for it again (${truncationNudges} of ${MAX_TRUNCATION_NUDGES}).`
       );
       history.push(newMessage("user", truncationNudge({ attempt: truncationNudges })));
       stepLog.push("shaky");
@@ -655,10 +657,10 @@ export async function runTurn(
         lastNoCallText = squash(`${text}\n${closingText}`);
         const what =
           disguised === "denial"
-            ? "ChatGPT replied that it could not use its tools"
+            ? `${serviceName()} replied that it could not use its tools`
             : disguised === "permission"
-              ? "ChatGPT asked for permission instead of acting"
-              : "ChatGPT tried to hand the task to its own ChatGPT Work agent, which cannot see this computer";
+              ? `${serviceName()} asked for permission instead of acting`
+              : `${serviceName()} tried to hand the task to its own ChatGPT Work agent, which cannot see this computer`;
         logger.info("protocol", "closing block carried a refusal; nudging", {
           block: name,
           attempt: protocolCorrections,
@@ -693,7 +695,7 @@ export async function runTurn(
           doneNudged = true;
           totalNudges++;
           events.onNotice?.(
-            `ChatGPT said it was done with ${open} task${open === 1 ? "" : "s"} still open on its list — asking it to finish or close them.`
+            `${serviceName()} said it was done with ${open} task${open === 1 ? "" : "s"} still open on its list — asking it to finish or close them.`
           );
           history.push(newMessage("user", doneWithOpenTodosNudge({ openTodos, openCount: open })));
           stepLog.push("shaky");
@@ -719,7 +721,7 @@ export async function runTurn(
         const final = composeFinal(pendingProse, text, summary) || "Done.";
         if (open > 0) {
           events.onNotice?.(
-            `ChatGPT finished with ${open} task${open === 1 ? "" : "s"} still open on its list — say "continue" if they matter.`
+            `${serviceName()} finished with ${open} task${open === 1 ? "" : "s"} still open on its list — say "continue" if they matter.`
           );
         }
         events.onFinal?.(final, { kind: "done", openTodos: open });
@@ -731,7 +733,7 @@ export async function runTurn(
       const asked = [question, ...options.map((o) => `- ${o}`)].filter(Boolean).join("\n");
       const final =
         composeFinal(pendingProse, text, asked) ||
-        "ChatGPT ended the turn with a question but left it blank — say how to proceed.";
+        `${serviceName()} ended the turn with a question but left it blank — say how to proceed.`;
       events.onFinal?.(final, { kind: "ask_user", openTodos: open, options });
       return finish("ask_user", final, iteration);
     }
@@ -759,7 +761,7 @@ export async function runTurn(
     // printed at the user as though it were one.
     if (malformed) {
       throw new Error(
-        `ChatGPT kept returning a tool call that could not be parsed (${malformed.replace(/\.$/, "")}). ` +
+        `${serviceName()} kept returning a tool call that could not be parsed (${malformed.replace(/\.$/, "")}). ` +
           "This usually means the reply is being mangled in transit. Try /new to start a fresh conversation, or a different model with /model."
       );
     }
@@ -794,18 +796,18 @@ export async function runTurn(
       // as the app shouting at them about a "protocol" they never saw.
       const what =
         variant === "handoff"
-          ? "ChatGPT tried to hand the task to its own ChatGPT Work agent, which cannot see this computer"
+          ? `${serviceName()} tried to hand the task to its own ChatGPT Work agent, which cannot see this computer`
           : variant === "denial"
-            ? "ChatGPT replied that it could not use its tools"
+            ? `${serviceName()} replied that it could not use its tools`
             : variant === "permission"
-              ? "ChatGPT asked for permission instead of acting"
+              ? `${serviceName()} asked for permission instead of acting`
               : variant === "fabrication"
-                ? "ChatGPT described running something without actually calling a tool"
+                ? `${serviceName()} described running something without actually calling a tool`
                 : variant === "cut"
-                  ? "ChatGPT's reply looks cut off"
+                  ? `${serviceName()}'s reply looks cut off`
                   : open > 0
-                    ? `ChatGPT stopped with ${open} task${open === 1 ? "" : "s"} still open on its list`
-                    : "ChatGPT replied without closing the turn";
+                    ? `${serviceName()} stopped with ${open} task${open === 1 ? "" : "s"} still open on its list`
+                    : `${serviceName()} replied without closing the turn`;
       logger.info("protocol", "no block in reply; nudging", {
         attempt: protocolCorrections,
         variant,
@@ -837,14 +839,14 @@ export async function runTurn(
     // the tools were there and listed all along.
     if (repeated) {
       logger.info("protocol", "block-less reply repeated verbatim; accepting it", { proseChars: text.length });
-      events.onNotice?.("ChatGPT sent the same reply again — showing it as the answer.");
+      events.onNotice?.(`${serviceName()} sent the same reply again — showing it as the answer.`);
     } else if (variant === "denial") {
       logger.warn("agent", "model refused the tool protocol", {
         model: opts.model,
         nudges: protocolCorrections,
       });
       events.onNotice?.(
-        `ChatGPT would not use its tools even after ${protocolCorrections} reminders, so nothing was run. ` +
+        `${serviceName()} would not use its tools even after ${protocolCorrections} reminders, so nothing was run. ` +
           "The tools were attached the whole time — this is the model declining to follow them, which the lighter models do often. " +
           "Switch to a stronger model with the chip under the composer and send again; asking it to list its OnFlip tools also often breaks the deadlock."
       );
@@ -855,7 +857,7 @@ export async function runTurn(
         openTodos: open,
       });
       events.onNotice?.(
-        `ChatGPT gave no closing block after ${protocolCorrections} reminders — showing its reply as the answer.` +
+        `${serviceName()} gave no closing block after ${protocolCorrections} reminders — showing its reply as the answer.` +
           (open > 0 ? ` ${open} task${open === 1 ? "" : "s"} on its list ${open === 1 ? "is" : "are"} still open; say "continue" to carry on.` : "")
       );
     }
@@ -1012,7 +1014,7 @@ async function sendWithRetry(
         clearCooldown();
         return reply;
       }
-      lastError = new Error("ChatGPT returned an empty reply.");
+      lastError = new Error(`${serviceName()} returned an empty reply.`);
     } catch (e) {
       lastError = e;
       if (opts.signal.aborted) throw e;
@@ -1026,10 +1028,12 @@ async function sendWithRetry(
       // own advice text — see `FailureCode`.
       const failure = classifyFailure(message, failureCodeOf(e));
       if (failure.kind === "cooldown") {
-        startCooldown(failure.seconds, failure.reason);
-        events.onNotice?.(
-          `${failure.reason} Pausing for ${describeWait(failure.seconds * 1000)} — retrying now would extend it.`
-        );
+        startCooldown(failure.seconds, failure.reason, isThrottle(message, failureCodeOf(e)));
+        const pause = `Pausing for ${describeWait(failure.seconds * 1000)} — retrying now would extend it.`;
+        // A coded failure's reason is its own message, which the error shows
+        // in full a moment later: printed here too, the one new fact — how
+        // long — sat at the end of the same paragraph said twice.
+        events.onNotice?.(failure.reason === message ? pause : `${failure.reason} ${pause}`);
         throw e;
       }
       if (failure.kind === "fatal") throw e;
@@ -1070,7 +1074,7 @@ async function sendWithRetry(
   // thirty seconds. A fast model does not reach that limit.
   if (/reached the model/.test(finalMessage) && /^auto$/i.test(String(opts.model ?? "").trim())) {
     throw new Error(
-      `${finalMessage} It failed ${MAX_TRANSPORT_RETRIES + 1} times in a row, each about thirty seconds in — the shape of a long reasoning pass timing out on ChatGPT's side. ` +
+      `${finalMessage} It failed ${MAX_TRANSPORT_RETRIES + 1} times in a row, each about thirty seconds in — the shape of a long reasoning pass timing out on ${serviceName()}'s side. ` +
         "The model is set to Auto, which can route into Pro thinking: pick GPT-5.6 Luna (or another fast model) in the chip under the composer and send again."
     );
   }
@@ -1145,18 +1149,28 @@ function settledAlone(name: string, result: ToolResult): string | null {
   return `\`${name}\` returns information to read first`;
 }
 
-/** The registry's own name for a tool, or the spelling folded without one. */
+/**
+ * The service answering, as the user's notices name it.
+ *
+ * Every notice here said "ChatGPT", which was true until DeepSeek and Qwen
+ * shared this loop: a DeepSeek session was told "ChatGPT stopped with 2
+ * tasks still open", about a service it was not using.
+ */
+function serviceName(): string {
+  return providerLabel();
+}
+
 /** What the user is told while the model is asked to make a change it claimed. */
 function unlandedNotice(changes: { path: string }[]): string {
   const names = changes.map((c) => c.path).join(", ");
-  return `ChatGPT said it was done, but its change to ${names} failed and was never made — asking it to make the change.`;
+  return `${serviceName()} said it was done, but its change to ${names} failed and was never made — asking it to make the change.`;
 }
 
 /** Said when a turn ends anyway with a change that never landed. */
 function warnUnlanded(changes: { path: string; reason: string }[], events: AgentEvents): void {
   if (changes.length === 0) return;
   const lines = changes.map((c) => `${c.path} (${c.reason})`).join("; ");
-  events.onNotice?.(`Heads up: a change ChatGPT tried to make did not land — ${lines}. The file is as it was.`);
+  events.onNotice?.(`Heads up: a change ${serviceName()} tried to make did not land — ${lines}. The file is as it was.`);
 }
 
 function canonicalName(tools: ToolRegistry, name: string): string {

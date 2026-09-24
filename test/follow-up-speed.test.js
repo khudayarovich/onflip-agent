@@ -567,3 +567,66 @@ test("a failed edit fixed by a later one needs no reminder", async () => {
   assert.equal(sent.length, 3);
   assert.equal(result.finalAnswer, "Switched the board to flex.");
 });
+
+test("the loop's notices name the service actually answering", async () => {
+  // A DeepSeek session was told "ChatGPT stopped with 2 tasks still open".
+  const cwd = project({ "a.txt": "a\n" });
+  const session = createSessionState();
+  const notices = [];
+  const { transport } = scripted(["I'll build it now.", done("Built.")]);
+  process.env.ONFLIP_PROVIDER = "deepseek";
+  try {
+    await turn(cwd, session, transport, [said("system", "prompt"), said("user", "build it")], {
+      events: { onNotice: (text) => notices.push(text) },
+    });
+  } finally {
+    delete process.env.ONFLIP_PROVIDER;
+  }
+  assert.ok(notices.some((n) => /^DeepSeek replied without closing the turn/.test(n)), notices.join("\n"));
+  assert.ok(!notices.some((n) => /ChatGPT/.test(n)), notices.join("\n"));
+});
+
+/** A transport that fails every send the same way. */
+function failing(message, code) {
+  return {
+    name: "api",
+    async send() {
+      const e = new Error(message);
+      if (code) e.code = code;
+      throw e;
+    },
+    reset() {},
+  };
+}
+
+test("a cooldown's notice says how long, without repeating the error beside it", async () => {
+  // Qwen's risk hold was printed twice in full — the notice, then the error —
+  // with the one new fact, the length of the pause, at the end of the first.
+  const { clearCooldown, cooldownPassesByItself } = require("../dist/chatgpt/backoff");
+  const cwd = project({ "a.txt": "a\n" });
+  const run = async (message, code) => {
+    clearCooldown();
+    const notices = [];
+    await assert.rejects(
+      turn(cwd, createSessionState(), failing(message, code), [said("system", "prompt"), said("user", "build it")], {
+        events: { onNotice: (text) => notices.push(text) },
+      })
+    );
+    return { notices, passes: cooldownPassesByItself() };
+  };
+  try {
+    const held = await run("Qwen is holding messages for now — overcrowded (retry-after 600).", "throttled");
+    assert.ok(held.notices.includes("Pausing for 10 minutes — retrying now would extend it."), held.notices.join("\n"));
+    assert.ok(!held.notices.some((n) => /holding messages/.test(n)), held.notices.join("\n"));
+    assert.equal(held.passes, true, "a throttle's pause is recorded as one that passes by itself");
+    // A reason of its own is still worth saying: it is not what the error says.
+    const flagged = await run('HTTP 403 {"detail":"Unusual activity has been detected from your device"}');
+    assert.ok(
+      flagged.notices.some((n) => /^ChatGPT flagged the request as unusual activity\..*Pausing for 15 minutes/.test(n)),
+      flagged.notices.join("\n")
+    );
+    assert.equal(flagged.passes, false, "an abuse flag's pause is not one that passes by itself");
+  } finally {
+    clearCooldown();
+  }
+});

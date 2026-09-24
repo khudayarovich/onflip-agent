@@ -1,5 +1,6 @@
 import { loadConfig, saveConfig } from "../config";
 import { logger } from "../log";
+import { providerLabel } from "../providers/id";
 
 /**
  * Knowing when to stop.
@@ -208,7 +209,76 @@ export function classifyFailure(message: string, code?: FailureCode): Classifica
     return { kind: "fatal", seconds: 0, reason: m };
   }
 
+  // The refusal to send during a cooldown. Nothing was sent, and nothing
+  // will be until the cooldown ends — retrying it only spent six seconds
+  // on two more refusals before the turn ended anyway.
+  if (COOLING_DOWN.test(m)) {
+    return { kind: "fatal", seconds: 0, reason: m };
+  }
+
   return { kind: "retry", seconds: 0, reason: m };
+}
+
+/**
+ * Seconds a `Retry-After` header asks for, or null when it names none.
+ *
+ * The header is either a number of seconds or an HTTP date. Honouring it is
+ * the difference between a cooldown the server set and one OnFlip guessed:
+ * every 429 used to cool down for a flat five minutes (three, from the page's
+ * notice), whatever the server had said. Every driver reads it through here.
+ */
+export function parseRetryAfter(value: string | undefined | null, now = Date.now()): number | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return null;
+  return Math.max(0, Math.ceil((at - now) / 1000));
+}
+
+/**
+ * Is this failure a rate throttle — something that passes by itself —
+ * rather than a refusal a person has to clear?
+ *
+ * The difference decides whether OnFlip may carry on by itself when the
+ * cooldown ends. A throttle may: waiting is the whole remedy — Qwen's risk
+ * hold ("overcrowded, please try again later") is one, measured lifting by
+ * itself. An abuse flag or a 403 challenge may not: another automatic send
+ * is exactly what it is watching for, and a person has to clear it.
+ */
+export function isThrottle(message: string, code?: FailureCode): boolean {
+  if (code) return code === "throttled";
+  return /HTTP 429|too many requests|rate.?limit/i.test(message || "") && !/unusual activity/i.test(message || "");
+}
+
+/** `assertNotCoolingDown`'s refusal, whichever service it names. */
+const COOLING_DOWN = /Waiting out an? .{1,24} cooldown/i;
+
+/**
+ * Seconds a service's own words say to wait, or null when they name no time.
+ *
+ * DeepSeek and Qwen state their limits in the page, not in a header: Qwen's
+ * daily cap reads "Вы достигли дневного лимита использования. Пожалуйста,
+ * подождите 4 часов" in Russian and "please wait 4 hours" in English. That
+ * sentence was shown and then ignored — the cooldown behind it was the flat
+ * five-minute default, so the next send went back into a limit that had
+ * hours left to run. English, Russian and Chinese, the languages the
+ * services' own pages were read in; the first number with a unit wins.
+ */
+export function statedWaitSeconds(text: string): number | null {
+  if (!text) return null;
+  const units: [RegExp, number][] = [
+    [/(\d{1,3})\s*(?:hours?|hrs?\b|час\S*|个?小时|個?小時)/i, 3600],
+    [/(\d{1,4})\s*(?:minutes?|mins?\b|минут\S*|分钟|分鐘)/i, 60],
+    [/(\d{1,5})\s*(?:seconds?|secs?\b|секунд\S*|秒)/i, 1],
+  ];
+  for (const [pattern, unit] of units) {
+    const m = pattern.exec(text);
+    if (!m) continue;
+    const n = Number(m[1]);
+    if (n > 0) return n * unit;
+  }
+  return null;
 }
 
 /**
@@ -236,7 +306,7 @@ export function isResumableFailure(message: string, code?: FailureCode): boolean
   // and saying so beats trying.
   if (code === "signed-out") return false;
   if (!code && /\bInterrupted\b|\baborted\b/i.test(m)) return false;
-  if (/Waiting out a ChatGPT cooldown/i.test(m)) return false;
+  if (COOLING_DOWN.test(m)) return false;
   return classifyFailure(m, code).kind !== "cooldown";
 }
 /**
@@ -319,13 +389,27 @@ export function serviceMessage(text: string): string | null {
 // ---------------------------------------------------------------------------
 
 /** Persisted, so a restart cannot walk straight back into the block. */
-export function startCooldown(seconds: number, reason: string): void {
+export function startCooldown(seconds: number, reason: string, passesByItself = false): void {
   const until = Date.now() + seconds * 1_000;
   const existing = loadConfig().cooldownUntil ?? 0;
   // Never shorten one that is already running.
   if (until <= existing) return;
-  saveConfig({ cooldownUntil: until });
-  logger.warn("transport", "cooldown started", { seconds, until, reason });
+  saveConfig({ cooldownUntil: until, cooldownPassesByItself: passesByItself || undefined });
+  logger.warn("transport", "cooldown started", { seconds, until, reason, passesByItself });
+}
+
+/**
+ * Is the cooldown running now a throttle, which passes by itself?
+ *
+ * Kept with the cooldown, because the refusal to send during one says
+ * nothing about why it began. Live on Qwen: a risk hold ended the turn and
+ * OnFlip promised to carry on in ten minutes; the next message typed was
+ * refused like any send during a cooldown, and since typing cancels the
+ * pending resume and a refusal is no throttle, nothing ever carried on — the
+ * promise broken by the person doing the obvious thing.
+ */
+export function cooldownPassesByItself(): boolean {
+  return cooldownRemainingMs() > 0 && loadConfig().cooldownPassesByItself === true;
 }
 
 export function cooldownRemainingMs(): number {
@@ -334,7 +418,10 @@ export function cooldownRemainingMs(): number {
 }
 
 export function clearCooldown(): void {
-  if (loadConfig().cooldownUntil) saveConfig({ cooldownUntil: undefined });
+  const config = loadConfig();
+  if (config.cooldownUntil || config.cooldownPassesByItself) {
+    saveConfig({ cooldownUntil: undefined, cooldownPassesByItself: undefined });
+  }
 }
 
 export function describeWait(ms: number): string {
@@ -367,7 +454,7 @@ let lastSendAt = 0;
  * conversation, spent sleeping on work the user had just cancelled. Checking
  * the flag before arming the listener is the whole fix.
  */
-function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
+export function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
   return new Promise<void>((resolve) => {
     const timer = setTimeout(resolve, ms);
@@ -460,7 +547,9 @@ export function __resetPacingForTest(): void {
 export function assertNotCoolingDown(): void {
   const remaining = cooldownRemainingMs();
   if (remaining <= 0) return;
+  // Named for the service it belongs to: the cooldown is scoped per service,
+  // and DeepSeek's and Qwen's transports ask here too now.
   throw new Error(
-    `Waiting out a ChatGPT cooldown — ${describeWait(remaining)} left. Sending now would extend it.`
+    `Waiting out a ${providerLabel()} cooldown — ${describeWait(remaining)} left. Sending now would extend it.`
   );
 }

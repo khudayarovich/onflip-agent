@@ -3,7 +3,7 @@ import { chromium, BrowserContext, Page } from "playwright";
 import { logger } from "../../log";
 import type { FailureCode } from "../../chatgpt/backoff";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
-import { paceNewChat, paceSend } from "../../chatgpt/backoff";
+import { paceNewChat, paceSend, parseRetryAfter, statedWaitSeconds } from "../../chatgpt/backoff";
 import { EXTRACT_REPLY as EXTRACT_REPLY_SCRIPT, normalizeNodes, toMarkdown } from "./extract";
 import {
   QWEN_CHAT_URL,
@@ -459,7 +459,43 @@ export interface OpenOptions {
  * request — and handed to whoever has to explain the silence. Only failures,
  * and only one at a time: this is a diagnosis, not a log.
  */
-let lastApiFailure: { status: number; path: string; body: string; at: number } | null = null;
+let lastApiFailure: {
+  status: number;
+  path: string;
+  body: string;
+  at: number;
+  /** A 429's own `Retry-After`, in seconds, when it sent one. */
+  retryAfter?: number | null;
+  /** Alibaba's risk control answered in the answer's place: see `riskCheckHeld`. */
+  heldByRiskCheck?: boolean;
+} | null = null;
+
+/** The request an answer streams on. */
+const ANSWER_PATH = /\/api\/v\d+\/chat\/completions(?:\?|$)/;
+
+/**
+ * How long to leave Qwen alone after its risk control holds a message. It
+ * names no time; measured, the hold had lifted within about fifteen minutes.
+ */
+export const RISK_HOLD_SECONDS = 600;
+
+/**
+ * Did Alibaba's risk control answer in the answer's place?
+ *
+ * Measured on this machine, on a profile that had answered normally days
+ * before: every `chat/completions` request came back 200 with a small JSON
+ * body instead of an event stream — `{"success":true,"result":{"sig":"from
+ * bx"}}`, and in a later probe `{"ret":
+ * ["FAIL_SYS_USER_VALIDATE","RGV587_ERROR::SM::哎哟喂,被挤爆啦,请稍后重试"]}` and a
+ * `_____tmd_____/punish` URL: Alibaba's risk control. The page showed an
+ * empty answer and a stuck Stop control, and OnFlip, seeing a 200, waited
+ * four minutes, resent, and resent again — then auto-resume started the
+ * whole thing over. Every resend is what that check is watching for; left
+ * alone, it lifted by itself.
+ */
+export function riskCheckHeld(body: string): boolean {
+  return /"sig"\s*:\s*"from bx"|RGV587_ERROR|FAIL_SYS_USER_VALIDATE|_____tmd_____|\/punish\?|被挤爆/.test(body ?? "");
+}
 
 export function watchApi(ctx: BrowserContext): void {
   ctx.on("response", (res) => {
@@ -467,6 +503,24 @@ export function watchApi(ctx: BrowserContext): void {
       const url = res.url();
       if (!url.startsWith(QWEN_ORIGIN) || !/\/api\//.test(url)) return;
       const status = res.status();
+      // The one refusal that arrives as a success: see `riskCheckHeld`.
+      if (status >= 200 && status < 300 && ANSWER_PATH.test(url)) {
+        const type = res.headers()["content-type"] ?? "";
+        if (/event-stream/i.test(type)) return;
+        void res
+          .text()
+          .then((body) => {
+            if (!riskCheckHeld(body)) return;
+            const path = url.slice(QWEN_ORIGIN.length).split("?")[0];
+            lastApiFailure = { status, path, body: body.slice(0, 300), at: Date.now(), heldByRiskCheck: true };
+            logger.warn("qwen", "Qwen's risk check held the message instead of answering", {
+              path,
+              body: body.slice(0, 200),
+            });
+          })
+          .catch(() => {});
+        return;
+      }
       if (status >= 200 && status < 400) return;
       // A read the page makes on the side — a setting, a model list — can
       // fail without the turn failing, and it was taken as the turn's
@@ -475,15 +529,24 @@ export function watchApi(ctx: BrowserContext): void {
       // or an answer about the credential or the rate, whatever asked.
       if (res.request().method() === "GET" && ![401, 403, 429].includes(status)) return;
       const path = url.slice(QWEN_ORIGIN.length).split("?")[0];
+      // Read so that a missing header can never cost the refusal itself.
+      let retryAfter: number | null = null;
+      if (status === 429) {
+        try {
+          retryAfter = parseRetryAfter(res.headers()["retry-after"]);
+        } catch {
+          retryAfter = null;
+        }
+      }
       void res
         .text()
         .then((body) => {
-          lastApiFailure = { status, path, body: body.slice(0, 300), at: Date.now() };
-          logger.warn("qwen", "the service refused a request", { status, path });
+          lastApiFailure = { status, path, body: body.slice(0, 300), at: Date.now(), retryAfter };
+          logger.warn("qwen", "the service refused a request", { status, path, retryAfter });
         })
         .catch(() => {
-          lastApiFailure = { status, path, body: "", at: Date.now() };
-          logger.warn("qwen", "the service refused a request", { status, path });
+          lastApiFailure = { status, path, body: "", at: Date.now(), retryAfter };
+          logger.warn("qwen", "the service refused a request", { status, path, retryAfter });
         });
     } catch {
       // A listener that can throw is a listener that can take the turn down.
@@ -513,7 +576,12 @@ export function __lastApiFailureForTest(): typeof lastApiFailure {
  * words; otherwise it is the risk control, which a person clears and a
  * resend makes worse.
  */
-export function refusalCode(failure: { status: number; body: string }): FailureCode {
+export function refusalCode(failure: { status: number; body: string; heldByRiskCheck?: boolean }): FailureCode {
+  // A throttle in practice: measured, the hold lifted by itself within
+  // about fifteen minutes with nobody passing any check, and the words are
+  // "overcrowded, please try again later". Waiting is the remedy; resending
+  // every few minutes, as a silence and a retry did, is the harm.
+  if (failure.heldByRiskCheck || riskCheckHeld(failure.body)) return "throttled";
   if (failure.status === 401) return "signed-out";
   if (failure.status === 429) return "throttled";
   if (failure.status === 403) {
@@ -523,17 +591,55 @@ export function refusalCode(failure: { status: number; body: string }): FailureC
 }
 
 export function recentApiFailure(
-  failure: { status: number; path: string; body: string; at: number } | null,
+  failure: {
+    status: number;
+    path: string;
+    body: string;
+    at: number;
+    retryAfter?: number | null;
+    heldByRiskCheck?: boolean;
+  } | null,
   since: number,
   now: number = Date.now()
 ): string | null {
   if (!failure || failure.at < since || failure.at > now) return null;
+  if (failure.heldByRiskCheck || riskCheckHeld(failure.body)) {
+    return (
+      "Qwen is holding messages for now — its risk control answered \"overcrowded, please try again later\" " +
+      `instead of an answer (retry-after ${RISK_HOLD_SECONDS}). Sending again makes it worse, so OnFlip waits ` +
+      "before trying again; switch to DeepSeek or ChatGPT to keep working meanwhile."
+    );
+  }
   const detail = failure.body.replace(/\s+/g, " ").trim().slice(0, 140);
-  return `Qwen answered ${failure.status} on ${failure.path}${detail ? ` — ${detail}` : ""}.`;
+  // The server's own wait, in the words the classifier reads it from — or
+  // failing that, one the body states in words ("try again in 10 minutes").
+  const wait = failure.retryAfter ?? (failure.status === 429 ? statedWaitSeconds(failure.body) : null);
+  return `Qwen answered ${failure.status} on ${failure.path}${detail ? ` — ${detail}` : ""}${
+    typeof wait === "number" ? ` (retry-after ${wait})` : ""
+  }.`;
 }
 
-export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContext> {
-  if (context) return context;
+/**
+ * The launch in progress, which every caller that arrives meanwhile shares.
+ *
+ * `context` is only set once a launch has finished, so two callers at once
+ * each launched a browser on the same profile — and on a Mac the second
+ * one's `releaseProfileLock` closes whatever holds the profile, which was
+ * the first one's browser, moments old. DeepSeek's driver had the same gap.
+ */
+let launching: Promise<BrowserContext> | null = null;
+
+export function openBrowser(opts: OpenOptions = {}): Promise<BrowserContext> {
+  if (context) return Promise.resolve(context);
+  if (!launching) {
+    launching = launchBrowser(opts).finally(() => {
+      launching = null;
+    });
+  }
+  return launching;
+}
+
+async function launchBrowser(opts: OpenOptions): Promise<BrowserContext> {
   const dir = qwenProfileDir();
   mkdirPrivate(dir);
   // Chromium allows one process per profile directory and refuses the
@@ -658,13 +764,28 @@ export function isUsableChatUrl(url: string): boolean {
   return true;
 }
 
+/**
+ * The first navigation to the chat, which every caller that arrives meanwhile
+ * shares — two callers at start sending one fresh page there at once abort
+ * each other, as DeepSeek's driver measured. Finding or making the page is
+ * shared too, or with none open each caller would make its own.
+ */
+let landing: Promise<Page> | null = null;
+
 export async function chatPage(opts: OpenOptions = {}): Promise<Page> {
   const ctx = await openBrowser(opts);
-  const page = ctx.pages()[0] ?? (await ctx.newPage());
-  if (!isUsableChatUrl(page.url())) {
-    await gotoChat(page);
+  const open = ctx.pages()[0];
+  if (open && isUsableChatUrl(open.url())) return open;
+  if (!landing) {
+    landing = (async () => {
+      const page = ctx.pages()[0] ?? (await ctx.newPage());
+      if (!isUsableChatUrl(page.url())) await gotoChat(page);
+      return page;
+    })().finally(() => {
+      landing = null;
+    });
   }
-  return page;
+  return landing;
 }
 
 /** Read the session out of a page's localStorage. */
@@ -1557,8 +1678,14 @@ export async function sendTurn(
             // The wait, when the service named one. "Four hours" is the
             // difference between waiting and retrying into a wall.
             const wait = retryHintFrom(said.text);
+            // And the same wait in the words the classifier reads, so the
+            // cooldown is the service's four hours rather than a default
+            // five minutes that ends in another refusal.
+            const seconds = said.code === "throttled" ? statedWaitSeconds(said.text) : null;
             throw new QwenError(
-              `Qwen says: ${said.text}${wait ? ` Nothing will get through for ${wait}.` : ""}`,
+              `Qwen says: ${said.text}${wait ? ` Nothing will get through for ${wait}.` : ""}${
+                seconds ? ` (retry-after ${seconds})` : ""
+              }`,
               said.code
             );
           }

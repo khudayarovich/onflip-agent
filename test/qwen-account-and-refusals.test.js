@@ -99,3 +99,35 @@ test("a failed side read is not the turn's refusal; a failed send is", async () 
   await settle();
   assert.equal(qwen.__lastApiFailureForTest()?.status, 401, "a refused credential counts whatever asked");
 });
+
+test("the risk hold that answers 200 is caught at the wire; a streamed answer is not", async () => {
+  // Measured: Qwen's risk control answers the completion request with a 200
+  // and a JSON verdict instead of a stream, and the page shows an empty
+  // answer and a Stop button forever.
+  const context = new EventEmitter();
+  qwen.watchApi(context);
+  const answer = (type, body) =>
+    context.emit("response", {
+      url: () => "https://chat.qwen.ai/api/v2/chat/completions?chat_id=1",
+      status: () => 200,
+      headers: () => ({ "content-type": type }),
+      request: () => ({ method: () => "POST" }),
+      text: async () => body,
+    });
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  const before = qwen.__lastApiFailureForTest();
+  answer("text/event-stream", 'data: {"sig":"from bx"}');
+  await settle();
+  assert.equal(qwen.__lastApiFailureForTest(), before, "a streamed answer was read as a hold");
+  answer("application/json", '{"success":true,"data":{"id":"1"}}');
+  await settle();
+  assert.equal(qwen.__lastApiFailureForTest(), before, "an ordinary 200 was read as a hold");
+
+  answer("application/json", '{"code":0,"result":{"code":0,"sig":"from bx"},"success":true}');
+  await settle();
+  const held = qwen.__lastApiFailureForTest();
+  assert.equal(held?.heldByRiskCheck, true);
+  assert.equal(held?.path, "/api/v2/chat/completions");
+  assert.equal(qwen.refusalCode(held), "throttled");
+});

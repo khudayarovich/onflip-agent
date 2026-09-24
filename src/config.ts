@@ -204,6 +204,13 @@ export interface OnFlipConfig {
    */
   cooldownUntil?: number;
 
+  /**
+   * Whether the cooldown running now is a throttle, which passes by itself,
+   * rather than a refusal a person has to clear. Decides whether OnFlip may
+   * carry on by itself once it ends: see `cooldownPassesByItself`.
+   */
+  cooldownPassesByItself?: boolean;
+
   /** Run the automation browser with a visible window. */
   headed?: boolean;
   /** Reuse a persistent browser profile between runs. */
@@ -277,6 +284,7 @@ const PROVIDER_SETTINGS = [
   // cooldown made ChatGPT refuse to send ("Waiting out a ChatGPT cooldown")
   // and turned off auto-resume there, for a limit ChatGPT never set.
   "cooldownUntil",
+  "cooldownPassesByItself",
   // Picking a Qwen model pinned ChatGPT's choice, so ChatGPT stopped
   // adopting its account's default.
   "modelPinned",

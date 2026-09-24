@@ -181,3 +181,62 @@ for (const [name, driver, Transport, chat, root, patches] of [
     await driver.closeBrowser();
   });
 }
+
+/**
+ * Two callers at start — the sign-in check and the first message — used to
+ * launch a browser each on one profile (on a Mac the second launch closes
+ * the first's), then send one fresh page to the chat twice at once.
+ */
+for (const [name, driver, root] of [
+  ["DeepSeek", deepseek, "https://chat.deepseek.com/"],
+  ["Qwen", qwen, "https://chat.qwen.ai/"],
+]) {
+  test(`${name}: two callers at once share one launch`, async () => {
+    const ctx = arrange(root);
+    // A second launch would find nothing arranged and throw.
+    const [a, b] = await Promise.all([driver.openBrowser(), driver.openBrowser()]);
+    assert.equal(a, ctx);
+    assert.equal(b, ctx);
+    await driver.closeBrowser();
+  });
+
+  test(`${name}: two callers at once share one page and one trip to the chat`, async () => {
+    const pages = [];
+    const trips = [];
+    let made = 0;
+    const handlers = {};
+    const tick = () => new Promise((r) => setImmediate(r));
+    arranged = {
+      pages: () => pages,
+      newPage: async () => {
+        made++;
+        await tick();
+        const page = {
+          at: "about:blank",
+          url() {
+            return this.at;
+          },
+          async goto(next) {
+            trips.push(next);
+            await tick();
+            this.at = next;
+          },
+          async waitForTimeout() {},
+          async waitForSelector() {},
+        };
+        pages.push(page);
+        return page;
+      },
+      on: (event, fn) => {
+        handlers[event] = fn;
+      },
+      close: async () => handlers.close?.(),
+    };
+    const [a, b] = await Promise.all([driver.chatPage(), driver.chatPage()]);
+    assert.equal(a, b, "each caller was handed a different page");
+    assert.equal(made, 1, "a page was made per caller");
+    assert.deepEqual(trips, [root]);
+    assert.equal(a.url(), root);
+    await driver.closeBrowser();
+  });
+}

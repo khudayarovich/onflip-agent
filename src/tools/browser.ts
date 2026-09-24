@@ -1,11 +1,13 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium, BrowserContext, Page } from "playwright";
 import { ToolDefinition, ToolResult } from "../types";
 import { configDir, loadConfig } from "../config";
 import { logger } from "../log";
 import { err, ok, denied, asArray, asBool, asNumber, clip } from "./util";
 import { ensureBundledBrowser } from "../chatgpt/browser-client";
+import { realPath } from "../agent/permissions";
 
 /**
  * A browser the agent drives itself.
@@ -765,6 +767,40 @@ async function allowed(
   return decision.allow ? null : denied("Browser action", decision.reason);
 }
 
+/**
+ * A page in the working folder, opened as a file — or null when `raw` is not
+ * one, so it is read as a web address instead.
+ *
+ * A small page, tool or game is now written as plain HTML that opens without
+ * a build, and the first thing the model did with one was try to look at it:
+ * `file:///…/index.html`, refused as an unsupported protocol, leaving a local
+ * web server — a command, an approval and a background job — as the only way
+ * to see the page it had just written. Only inside the working folder, whose
+ * files the agent can already read; anything else is refused by name. Both
+ * sides go through `realPath`, as a write's do: a link inside the folder can
+ * point out of it, and a short 8.3 name is the same folder as its long one.
+ */
+export function localPageUrl(raw: string, cwd: string): { url: URL } | { error: string } | null {
+  let file: string | null = null;
+  if (/^file:/i.test(raw)) {
+    try {
+      file = fileURLToPath(new URL(raw));
+    } catch {
+      return { error: `Not a valid file URL: ${raw}` };
+    }
+  } else if (!/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) && /\.x?html?$/i.test(raw.split(/[?#]/)[0])) {
+    // A bare path to a page, such as `index.html` or `C:\game\index.html`.
+    const candidate = path.resolve(cwd, raw.split(/[?#]/)[0]);
+    if (fs.existsSync(candidate)) file = candidate;
+  }
+  if (file === null) return null;
+  const rel = path.relative(realPath(cwd), realPath(file));
+  if (rel.startsWith("..") || path.isAbsolute(rel)) {
+    return { error: `Only files in the working folder can be opened in the browser; ${file} is outside it.` };
+  }
+  return { url: pathToFileURL(file) };
+}
+
 /** Everything settles into the same answer: what the page looks like now. */
 async function respond(p: Page, note: string): Promise<ToolResult> {
   // A click usually starts a navigation or a re-render; give it a moment
@@ -806,7 +842,10 @@ export const browserOpenTool: ToolDefinition = {
   parameters: {
     type: "object",
     properties: {
-      url: { type: "string", description: "Absolute http(s) URL, or `back` / `forward`" },
+      url: {
+        type: "string",
+        description: "http(s) URL, a working-folder page by path (index.html), or `back`/`forward`",
+      },
     },
     required: ["url"],
   },
@@ -824,17 +863,27 @@ export const browserOpenTool: ToolDefinition = {
       return respond(p, `Went ${raw}.`);
     }
 
+    const local = localPageUrl(raw, ctx.cwd);
+    if (local && "error" in local) return err(local.error);
     let url: URL;
     try {
-      url = new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`);
+      url = local ? local.url : new URL(/^[a-z]+:\/\//i.test(raw) ? raw : `https://${raw}`);
     } catch {
       return err(`Not a valid URL: ${raw}`);
     }
-    if (url.protocol !== "http:" && url.protocol !== "https:") {
-      return err(`Unsupported protocol: ${url.protocol}. Only http and https are allowed.`);
+    if (url.protocol !== "http:" && url.protocol !== "https:" && url.protocol !== "file:") {
+      return err(
+        `Unsupported protocol: ${url.protocol}. Use an http(s) URL, or a file in the working folder by its path.`
+      );
     }
 
-    const stop = await allowed(ctx, "browser_open", url.href, [`host: ${url.host}`], url.href);
+    const stop = await allowed(
+      ctx,
+      "browser_open",
+      url.href,
+      [url.protocol === "file:" ? "a file in the working folder" : `host: ${url.host}`],
+      url.href
+    );
     if (stop) return stop;
 
     logger.info("browser-tool", "navigating", { url: url.href });

@@ -42,5 +42,5 @@ test("the prompt carries the limit only when it is given one", () => {
 test("an empty folder gets a page that opens without a build", () => {
   // Run A of the Free-account test chose React and Vite for a small game:
   // npm install and three builds, each one an approval in "ask" mode.
-  assert.match(buildSystemPrompt(base), /In an empty folder there is nothing to match: a small page, tool or game is plain HTML, CSS and JavaScript/);
+  assert.match(buildSystemPrompt(base), /In an empty folder, a small page, tool or game is plain HTML, CSS and JavaScript/);
 });

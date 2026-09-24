@@ -78,3 +78,54 @@ test("the body is trimmed, not pasted", () => {
   );
   assert.ok(!said.includes(String.fromCharCode(10)), "the body kept its newlines");
 });
+
+test("a 429 carries its wait to the cooldown, from the header or from the words", () => {
+  const { classifyFailure } = require("../dist/chatgpt/backoff");
+  const fromHeader = recentApiFailure(
+    { status: 429, path: "/api/v2/chat/completions", body: "", at: TURN_STARTED + 1, retryAfter: 120 },
+    TURN_STARTED,
+    TURN_STARTED + 2
+  );
+  assert.match(fromHeader, /\(retry-after 120\)/);
+  assert.equal(classifyFailure(fromHeader, "throttled").seconds, 120);
+  const fromWords = recentApiFailure(
+    { status: 429, path: "/api/v2/chat/completions", body: '{"msg":"Too many requests, try again in 10 minutes"}', at: TURN_STARTED + 1 },
+    TURN_STARTED,
+    TURN_STARTED + 2
+  );
+  assert.match(fromWords, /\(retry-after 600\)/);
+  // A refusal that is not a throttle states no wait.
+  const other = recentApiFailure(
+    { status: 500, path: "/api/x", body: "try again in 10 minutes", at: TURN_STARTED + 1 },
+    TURN_STARTED,
+    TURN_STARTED + 2
+  );
+  assert.doesNotMatch(other, /retry-after/);
+});
+
+const { riskCheckHeld, refusalCode, RISK_HOLD_SECONDS } = require("../dist/providers/qwen/browser");
+
+test("Qwen's risk hold, which arrives as a 200, is recognised in both shapes seen", () => {
+  // Measured: the answer request came back 200 with JSON instead of a stream.
+  const fromBx = '{"code":0,"dt":"success","ec":200,"result":{"code":0,"sig":"from bx"},"success":true}';
+  const punish =
+    '{"ret":["FAIL_SYS_USER_VALIDATE","RGV587_ERROR::SM::哎哟喂,被挤爆啦,请稍后重试"],"data":{"url":"https://chat.qwen.ai:443//api/v2/chat/completions/_____tmd_____/punish?x5sec=abc"}}';
+  assert.equal(riskCheckHeld(fromBx), true);
+  assert.equal(riskCheckHeld(punish), true);
+  // An ordinary success, and an ordinary error, are neither.
+  assert.equal(riskCheckHeld('{"success":true,"data":{"id":"x"}}'), false);
+  assert.equal(riskCheckHeld('{"detail":"Not Found"}'), false);
+});
+
+test("a risk hold is a throttle with its own wait, said plainly and without sending again", () => {
+  const { classifyFailure, isThrottle } = require("../dist/chatgpt/backoff");
+  const failure = { status: 200, path: "/api/v2/chat/completions", body: '{"sig":"from bx"}', at: TURN_STARTED + 1, heldByRiskCheck: true };
+  assert.equal(refusalCode(failure), "throttled");
+  const said = recentApiFailure(failure, TURN_STARTED, TURN_STARTED + 2);
+  assert.match(said, /Qwen is holding messages for now/);
+  assert.match(said, /switch to DeepSeek or ChatGPT/);
+  const verdict = classifyFailure(said, "throttled");
+  assert.equal(verdict.kind, "cooldown");
+  assert.equal(verdict.seconds, RISK_HOLD_SECONDS);
+  assert.equal(isThrottle(said, "throttled"), true);
+});

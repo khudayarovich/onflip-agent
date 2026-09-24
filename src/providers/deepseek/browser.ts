@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { chromium, BrowserContext, Page } from "playwright";
 import { logger } from "../../log";
-import type { FailureCode } from "../../chatgpt/backoff";
+import { paceNewChat, paceSend, sleepUnlessAborted, statedWaitSeconds, type FailureCode } from "../../chatgpt/backoff";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { EXTRACT_REPLY as EXTRACT_REPLY_SCRIPT, toMarkdown } from "./extract";
 import {
@@ -192,6 +192,16 @@ async function bodyText(page: Page): Promise<string> {
 }
 
 /**
+ * The failure a service message stands for. A limit that names its own
+ * length sets the cooldown to it, in the words the classifier reads a wait
+ * from — Qwen's "wait 4 hours" was otherwise a five-minute default.
+ */
+function serviceError(said: { text: string; code: FailureCode }): DeepSeekError {
+  const wait = said.code === "throttled" ? statedWaitSeconds(said.text) : null;
+  return new DeepSeekError(`DeepSeek says: ${said.text}${wait ? ` (retry-after ${wait})` : ""}`, said.code);
+}
+
+/**
  * The service's own words about this send, when the page is showing some.
  *
  * Only lines that appeared since `before` and are not part of what was
@@ -221,8 +231,28 @@ export interface OpenOptions {
   headed?: boolean;
 }
 
-export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContext> {
-  if (context) return context;
+/**
+ * The launch in progress, which every caller that arrives meanwhile shares.
+ *
+ * `context` is only set once a launch has finished, so two callers at once —
+ * the start-up sign-in check and the first message, or a wake after the
+ * browser was parked — each launched a browser on the same profile. On a Mac
+ * that is worse than a wasted launch: `releaseProfileLock` closes whatever
+ * browser holds the profile, which was the other caller's, half a second old.
+ */
+let launching: Promise<BrowserContext> | null = null;
+
+export function openBrowser(opts: OpenOptions = {}): Promise<BrowserContext> {
+  if (context) return Promise.resolve(context);
+  if (!launching) {
+    launching = launchBrowser(opts).finally(() => {
+      launching = null;
+    });
+  }
+  return launching;
+}
+
+async function launchBrowser(opts: OpenOptions): Promise<BrowserContext> {
   const dir = deepseekProfileDir();
   mkdirPrivate(dir);
   // Chromium allows one process per profile directory and refuses the
@@ -246,6 +276,7 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
     timeout: 30_000,
   });
   const opened = context;
+  watchAnswers(opened);
   opened.on("close", () => {
     // Only for the browser this handler belongs to: a replacement may
     // already be open by the time an old one finishes closing.
@@ -254,6 +285,217 @@ export async function openBrowser(opts: OpenOptions = {}): Promise<BrowserContex
     forgetConversation();
   });
   return context;
+}
+
+/**
+ * The request an answer arrives on, which stays open while DeepSeek writes.
+ *
+ * DeepSeek's page offers nothing semantic that changes while it writes — the
+ * send and stop controls are one hashed-class element — so the end of an
+ * answer was "the text stopped changing for 2.1 seconds": a pause longer
+ * than that ended the turn early, and the next message would be typed into a
+ * page still writing. The answer's own request says plainly when the answer
+ * is over, and measured on the live page it also says it sooner — the
+ * stream closed at 4.7s and the text rule took until 7.1s.
+ *
+ * (The ninety-second lost sends seen on the same runs were a different
+ * thing: DeepSeek's unannounced rate. See `rateWaitMs`.)
+ */
+export const ANSWER_REQUEST = /\/api\/v\d+\/chat\/completion(?:\?|$)/;
+
+/** Answer requests the page has open right now, and when the last one began. */
+let answersOpen = 0;
+let answerStartedAt = 0;
+/** Answer requests seen since launch: proof the watcher sees them at all. */
+let answersSeen = 0;
+
+function watchAnswers(ctx: BrowserContext): void {
+  answersOpen = 0;
+  const ended = (url: string, how: string, detail?: string) => {
+    if (!ANSWER_REQUEST.test(url)) return;
+    answersOpen = Math.max(0, answersOpen - 1);
+    logger.info("deepseek", "answer request ended", {
+      how,
+      ms: Date.now() - answerStartedAt,
+      ...(detail ? { detail } : {}),
+    });
+  };
+  ctx.on("request", (req) => {
+    if (!ANSWER_REQUEST.test(req.url())) return;
+    answersOpen += 1;
+    answersSeen += 1;
+    answerStartedAt = Date.now();
+    logger.info("deepseek", "answer request started", { open: answersOpen });
+  });
+  ctx.on("response", (res) => {
+    // The proof-of-work challenge the page fetches before every answer: when
+    // an answer never starts, whether this happened is the first question.
+    if (/\/api\/v\d+\/chat\/create_pow_challenge/.test(res.url())) {
+      logger.info("deepseek", "proof-of-work challenge", { status: res.status() });
+      return;
+    }
+    if (!ANSWER_REQUEST.test(res.url()) || res.status() < 400) return;
+    logger.warn("deepseek", "the answer request was refused", { status: res.status() });
+  });
+  ctx.on("requestfinished", (req) => ended(req.url(), "finished"));
+  ctx.on("requestfailed", (req) => ended(req.url(), "failed", req.failure()?.errorText));
+}
+
+/**
+ * DeepSeek's own rate, kept by OnFlip rather than discovered by losing a
+ * message to it.
+ *
+ * Measured on the chess-game runs: exactly ten answers between every lost
+ * send, six times in a row, and across 132 sends the rule "at most ten in
+ * the last 55-60 seconds" predicted all but two of them. The eleventh message
+ * in a minute is taken by the page — its bubble appears, the composer
+ * empties — and simply never answered; OnFlip used to wait ninety seconds
+ * before resending it, and a fast tool loop reached the eleventh every forty
+ * seconds. Nine in sixty-five seconds keeps a margin on both numbers, and
+ * costs a few seconds on a fast streak where the drop cost ninety.
+ */
+export const DEEPSEEK_SENDS_PER_WINDOW = 9;
+export const DEEPSEEK_WINDOW_MS = 65_000;
+
+let recentSends: number[] = [];
+
+/** How long a send must wait to stay inside DeepSeek's rate, given when the others went. */
+export function rateWaitMs(
+  sends: readonly number[],
+  now = Date.now(),
+  limit = DEEPSEEK_SENDS_PER_WINDOW,
+  windowMs = DEEPSEEK_WINDOW_MS
+): number {
+  const inWindow = sends.filter((at) => now - at < windowMs).sort((a, b) => a - b);
+  if (inWindow.length < limit) return 0;
+  // The send that has to age out of the window before this one fits.
+  return inWindow[inWindow.length - limit] + windowMs - now;
+}
+
+/**
+ * Wait until a send fits DeepSeek's rate, then count it.
+ *
+ * A stopped turn ends here rather than being counted: `paceSend` before it
+ * returns quietly on an aborted signal, and a send that will never happen
+ * must not use up a place in the window.
+ */
+export async function keepToRate(signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
+  const wait = rateWaitMs(recentSends);
+  if (wait > 0) {
+    logger.info("deepseek", "keeping to DeepSeek's rate", {
+      waitMs: wait,
+      inLastMinute: recentSends.filter((at) => Date.now() - at < DEEPSEEK_WINDOW_MS).length,
+    });
+    await sleepUnlessAborted(wait, signal);
+    if (signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
+  }
+  const now = Date.now();
+  recentSends = [...recentSends.filter((at) => now - at < DEEPSEEK_WINDOW_MS), now];
+}
+
+/**
+ * Was this send's answer request never made?
+ *
+ * Eight times across two chess-game runs DeepSeek took a message — the
+ * composer emptied — and never started an answer; ninety seconds later it
+ * was reported as not landed, and the resend was answered in three. That was
+ * the rate `keepToRate` now stays under, but a limit OnFlip has only
+ * inferred can move, so this stays as the backstop: the answer request is
+ * the page's own first step, and its absence long after the send says the
+ * answer is not coming. Only trusted once this browser has seen an answer
+ * request at all: a watcher that sees none would otherwise fail every send.
+ */
+export function answerNeverStarted(
+  seen: number,
+  startedAt: number,
+  sentAt: number,
+  now = Date.now(),
+  graceMs = 25_000
+): boolean {
+  return seen > 0 && startedAt < sentAt && now - sentAt > graceMs;
+}
+
+/**
+ * Is DeepSeek still writing an answer, as far as the wire says?
+ *
+ * Bounded, because a request that never reports its end — a listener that
+ * missed the event — must not hold every later send for ever.
+ */
+export function answerStillOpen(open: number, startedAt: number, now = Date.now(), ceiling = 10 * 60_000): boolean {
+  return open > 0 && now - startedAt < ceiling;
+}
+
+/**
+ * Has an answer whose text has held still for `stillMs` really ended?
+ *
+ * Yes once its request has closed. Otherwise only after a minute of
+ * stillness, so an answer request that never reports its end cannot hold
+ * the turn open.
+ */
+export function answerSettled(open: number, startedAt: number, stillMs: number, now = Date.now()): boolean {
+  return !answerStillOpen(open, startedAt, now) || stillMs >= 60_000;
+}
+
+/**
+ * Check that Enter actually sent the turn, and send it by the button if not.
+ *
+ * DeepSeek empties its composer the moment it takes a message, so a composer
+ * still full two seconds after Enter is a send that did not happen — which
+ * the driver used to learn ninety seconds later, as a reply that never came.
+ * Qwen's driver learned to check within a second; this one never checked.
+ * The page's own notice is read before pressing again, because a refusal
+ * that says why — a rate limit — must not be answered with a second send.
+ */
+async function confirmSent(page: Page, explain: () => Promise<DeepSeekError | null>): Promise<void> {
+  const empty = `(() => { const el = document.querySelector(${JSON.stringify(COMPOSER)}); return !el || el.value.length === 0; })()`;
+  const sent = async (ms: number): Promise<boolean> =>
+    page
+      .waitForFunction(empty, undefined, { timeout: ms, polling: 100 })
+      .then(async (handle) => {
+        await handle.dispose().catch(() => {});
+        return true;
+      })
+      .catch(() => false);
+  if (await sent(2_000)) return;
+  // A page that refused the message may say why — a rate limit is the one
+  // that matters, since a resend is exactly what deepens it.
+  const why = await explain();
+  if (why) throw why;
+  logger.warn("deepseek", "Enter did not send the turn; pressing the send button");
+  await page.click(STOP_BUTTON, { timeout: 3_000 }).catch(() => {});
+  if (await sent(3_000)) return;
+  throw (await explain()) ?? new DeepSeekError(
+    "DeepSeek's composer would not send the turn — neither Enter nor the send button took it.",
+    "composer-refused"
+  );
+}
+
+/**
+ * Let the previous answer finish before typing the next message.
+ *
+ * Past the ceiling the answer is stopped — what a person does with a page
+ * that will not finish — rather than typed over.
+ */
+async function waitForAnswerToEnd(page: Page, signal?: AbortSignal, ceilingMs = 90_000): Promise<void> {
+  if (!answerStillOpen(answersOpen, answerStartedAt)) return;
+  const began = Date.now();
+  while (answerStillOpen(answersOpen, answerStartedAt)) {
+    if (signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
+    if (Date.now() - began > ceilingMs) {
+      logger.warn("deepseek", "the previous answer was still being written; stopping it before sending", {
+        waitedMs: Date.now() - began,
+      });
+      await stopGenerating(page);
+      await page.waitForTimeout(500);
+      answersOpen = 0;
+      return;
+    }
+    await page.waitForTimeout(250);
+  }
+  logger.info("deepseek", "waited for the previous answer to finish before sending", {
+    ms: Date.now() - began,
+  });
 }
 
 export async function closeBrowser(): Promise<void> {
@@ -270,14 +512,32 @@ export async function closeBrowser(): Promise<void> {
   }
 }
 
+/**
+ * The first navigation to the chat, which every caller that arrives meanwhile
+ * shares. With the launch shared, two callers at start — the sign-in check
+ * and the first message — each found the fresh page off the chat and sent it
+ * there at once; one navigation aborted the other (`ERR_ABORTED`, measured at
+ * 0.6s into a run) and the send had to be retried. Finding or making the page
+ * is inside the shared part too: with no page open, two callers would each
+ * make one, and the second would be handed a page nobody navigated.
+ */
+let landing: Promise<Page> | null = null;
+
 /** The page to work in, on DeepSeek, created if the context has none. */
 export async function chatPage(opts: OpenOptions = {}): Promise<Page> {
   const ctx = await openBrowser(opts);
-  const page = ctx.pages()[0] ?? (await ctx.newPage());
-  if (!page.url().startsWith(DEEPSEEK_CHAT_URL)) {
-    await gotoChat(page);
+  const open = ctx.pages()[0];
+  if (open && open.url().startsWith(DEEPSEEK_CHAT_URL)) return open;
+  if (!landing) {
+    landing = (async () => {
+      const page = ctx.pages()[0] ?? (await ctx.newPage());
+      if (!page.url().startsWith(DEEPSEEK_CHAT_URL)) await gotoChat(page);
+      return page;
+    })().finally(() => {
+      landing = null;
+    });
   }
-  return page;
+  return landing;
 }
 
 /** Read the session out of a page's localStorage. */
@@ -545,6 +805,14 @@ const COMPOSER = "textarea";
  * screen as it arrives.
  */
 const SETTLE_POLLS = 6;
+/**
+ * The same stillness once the answer's own request has closed.
+ *
+ * Measured: the stream ended at 4.72s and the answer was taken at 7.14s —
+ * 2.1 seconds of stillness spent confirming what the wire had already said.
+ * Two polls cover the page rendering the last frame.
+ */
+const SETTLE_POLLS_ANSWERED = 2;
 const POLL_MS = 350;
 /** How long the page may show nothing new before the send is called failed. */
 const SILENCE_MS = 90_000;
@@ -618,12 +886,24 @@ export async function sendTurn(
   } = {}
 ): Promise<SendResult> {
   const started = Date.now();
+  // The floor between messages that ChatGPT's and Qwen's drivers have kept
+  // since an account was told it was sending too quickly. This driver had
+  // none: a tool loop that finished in milliseconds sent its next message in
+  // milliseconds, which is a rate no person reaches and a limiter notices.
+  await paceSend(opts.signal);
+  // And the rate DeepSeek enforces without saying so: see `rateWaitMs`.
+  await keepToRate(opts.signal);
   let page = await chatPage(opts);
   if (pendingNewChat) {
     pendingNewChat = false;
+    // Opening a conversation is the expensive request, and a compaction, a
+    // lost thread or a recovery each open one — paced like the others.
+    await paceNewChat(opts.signal);
     await gotoChat(page);
     await page.waitForTimeout(2_000);
   }
+  // Never type into a page that is still writing the last answer.
+  await waitForAnswerToEnd(page, opts.signal);
   // Both signals, because neither is sufficient alone. The node count is not
   // monotonic — DeepSeek renders the transcript into a virtual list and
   // unmounts what scrolls out of view, measured at four visible nodes after
@@ -664,8 +944,15 @@ export async function sendTurn(
   }
   await page.waitForTimeout(300);
   await page.keyboard.press("Enter");
+  const sentAt = Date.now();
+  await confirmSent(page, async () => {
+    const said = await serviceMessage(page, pageBefore, text);
+    return said ? serviceError(said) : null;
+  });
 
   const deadline = Date.now() + (opts.timeoutMs ?? 10 * 60_000);
+  /** When the reply's text last changed, as opposed to when it last differed from before the send. */
+  let textChangedAt = Date.now();
   let last: string | null = null;
   let quiet = 0;
   let recovered = false;
@@ -694,12 +981,18 @@ export async function sendTurn(
         if (!last && Date.now() - lastServiceCheck > SERVICE_CHECK_MS) {
           lastServiceCheck = Date.now();
           const said = await serviceMessage(page, pageBefore, text);
-          if (said) {
-            throw new DeepSeekError(
-              `DeepSeek says: ${said.text}`,
-              said.code
-            );
-          }
+          if (said) throw serviceError(said);
+        }
+        // No answer request long after the send: the answer is not coming,
+        // and waiting out the full window only delays the resend that works.
+        if (!last && answerNeverStarted(answersSeen, answerStartedAt, sentAt)) {
+          logger.warn("deepseek", "the message was taken but no answer request went out", {
+            sinceSendMs: Date.now() - sentAt,
+          });
+          throw new DeepSeekError(
+            "DeepSeek took the message but never started answering it. Sending it again.",
+            "send-not-landed"
+          );
         }
         // Nothing has moved. A reply that has not started at all within the
         // silence window is a failure worth reporting, not something to sit
@@ -728,12 +1021,21 @@ export async function sendTurn(
       if (now.text === last) quiet++;
       else {
         quiet = 0;
+        textChangedAt = Date.now();
         // Only on a change, so a settled answer is not re-emitted three times
         // while the loop confirms it has stopped growing.
         opts.onProgress?.(now.text);
       }
       last = now.text;
-      if (quiet >= SETTLE_POLLS) break;
+      // Still text is only the end when the answer's request has closed
+      // too: a pause mid-answer is not an ending (see `ANSWER_REQUEST`).
+      // This send's answer request has come and gone: the wire says the
+      // answer is over, and the text only has to finish rendering.
+      const answered = answerStartedAt >= sentAt - 1_000 && !answerStillOpen(answersOpen, answerStartedAt);
+      const need = answered ? SETTLE_POLLS_ANSWERED : SETTLE_POLLS;
+      if (quiet >= need && answerSettled(answersOpen, answerStartedAt, Date.now() - textChangedAt)) {
+        break;
+      }
     } catch (e) {
       // A renderer that died mid-answer, seen once on a long conversation.
       // The turn was already sent, so this reopens and reads rather than

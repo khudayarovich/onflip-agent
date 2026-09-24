@@ -158,6 +158,10 @@ export function loopbackOrigin(url: string | undefined): string | null {
   } catch {
     return null;
   }
+  // A page opened from a file is this machine's too — `browser_open` only
+  // opens files inside the working folder — and every file page shares one
+  // origin as far as remembering goes.
+  if (parsed.protocol === "file:") return "file://";
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
   const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
   const loopback =

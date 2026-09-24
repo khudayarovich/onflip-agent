@@ -244,6 +244,20 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
     }
   }
 
+  // ---- 3c. DeepSeek's own tool-call markup ---------------------------------
+  // Live on DeepSeek: in the middle of a task a reply ended with the model's
+  // native function-calling markup instead of a block — `<｜DSML｜invoke
+  // name="job_output">` and a `parameter` for the id — which matched nothing,
+  // was shown to the user as garbled text, and cost a nudge and a round trip
+  // for a call whose intent was perfectly plain. Known tools only.
+  if (calls.length === 0) {
+    const { calls: native, prose } = parseDsmlCalls(text, known);
+    if (native.length) {
+      calls.push(...native);
+      text = prose;
+    }
+  }
+
   // ---- 4. a whole reply that is one flattened block ------------------------
   // Nothing above matched and the reply has no line structure left to match
   // against — recover it as a collapsed block rather than losing the call.
@@ -269,6 +283,45 @@ export function parseTurn(raw: string, knownTools?: KnownTools): ParsedTurn {
   }
 
   return dropped.length ? { text: tidied, calls, dropped: dropped[0] } : { text: tidied, calls };
+}
+
+// ---------------------------------------------------------------------------
+// DeepSeek's native markup
+// ---------------------------------------------------------------------------
+
+/** The bar in DeepSeek's markup: fullwidth (U+FF5C) as the model writes it, or ASCII, once or twice. */
+const DSML_BAR = "[\\uFF5C|]{1,2}";
+const DSML = `${DSML_BAR}\\s*DSML\\s*${DSML_BAR}\\s*`;
+const DSML_INVOKE = new RegExp(
+  `<${DSML}invoke\\s+name\\s*=\\s*"([^"]+)"\\s*>([\\s\\S]*?)<\\/${DSML}invoke\\s*>`,
+  "gi"
+);
+const DSML_PARAMETER = new RegExp(
+  `<${DSML}parameter\\s+name\\s*=\\s*"([^"]+)"[^>]*>([\\s\\S]*?)<\\/${DSML}parameter\\s*>`,
+  "gi"
+);
+const DSML_WRAPPER = new RegExp(`<\\/?${DSML}[a-z_]*calls\\s*>`, "gi");
+
+/**
+ * Calls written in DeepSeek's own function-calling markup, and the prose left
+ * once they are taken out. Only tools this registry knows are taken; anything
+ * else stays in the prose, where the ordinary nudge will deal with it.
+ */
+export function parseDsmlCalls(text: string, known: (name: string) => boolean): { calls: ToolCall[]; prose: string } {
+  if (!/DSML/.test(text)) return { calls: [], prose: text };
+  const calls: ToolCall[] = [];
+  const prose = text.replace(DSML_INVOKE, (whole, name: string, body: string) => {
+    const tool = name.trim();
+    if (!known(tool)) return whole;
+    const args: Record<string, unknown> = {};
+    for (const [, key, value] of body.matchAll(DSML_PARAMETER)) {
+      args[key.trim()] = value.replace(/^\n/, "").replace(/\n\s*$/, "");
+    }
+    calls.push({ tool, arguments: args });
+    return "";
+  });
+  if (calls.length === 0) return { calls: [], prose: text };
+  return { calls, prose: prose.replace(DSML_WRAPPER, "").trim() };
 }
 
 // ---------------------------------------------------------------------------

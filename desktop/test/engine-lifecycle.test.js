@@ -493,3 +493,77 @@ test("with temporary chats nothing is filed, so no project is listed or made", {
     providers.createProject = real.create;
   }
 });
+
+test("a limit measured in hours is not resumed by itself", { skip: needsBuild, timeout: 20_000 }, async () => {
+  // Qwen's daily cap says "wait 4 hours"; a turn that starts itself hours
+  // later is one nobody is watching, and an hour is the classifier's cap.
+  const { clearCooldown } = require(path.join(ROOT, "dist", "chatgpt", "backoff.js"));
+  clearCooldown();
+  const sent = [];
+  const { engine, events } = makeEngine(async (history) => {
+    sent.push(history[history.length - 1].content);
+    throw throttled(3600);
+  });
+  engine.send("build the board");
+  await waitIdle(engine);
+  assert.ok(
+    notices(events).some((n) => /will not carry on by itself/.test(n)),
+    notices(events).join("\n")
+  );
+  assert.equal(engine.cooldownResume, null);
+  clearCooldown();
+});
+
+test("an abuse flag's cooldown is waited out, never resent into by itself", { skip: needsBuild, timeout: 20_000 }, async () => {
+  // A throttle passes by itself; the abuse check is watching for exactly the
+  // automatic send a resume would be.
+  const { clearCooldown, assertNotCoolingDown } = require(path.join(ROOT, "dist", "chatgpt", "backoff.js"));
+  clearCooldown();
+  const sent = [];
+  const { engine, events } = makeEngine(async (history) => {
+    assertNotCoolingDown(); // what every real transport does first
+    sent.push(history[history.length - 1].content);
+    const e = new Error('ChatGPT refused the request: HTTP 403 {"detail":"Unusual activity has been detected from your device"}');
+    e.code = "unusual-activity";
+    throw e;
+  });
+  engine.send("build the board");
+  await waitIdle(engine);
+  assert.equal(sent.length, 1);
+  assert.equal(engine.cooldownResume, null);
+  // Nor does a message typed during it: refused, and left for the person.
+  engine.send("try again");
+  await waitIdle(engine);
+  assert.equal(sent.length, 1);
+  assert.equal(engine.cooldownResume, null);
+  assert.ok(!notices(events).some((n) => /carry on by itself when the pause ends/.test(n)), notices(events).join("\n"));
+  clearCooldown();
+});
+
+test("a message typed during a throttle's pause is carried when it ends, not dropped", { skip: needsBuild, timeout: 20_000 }, async () => {
+  // Live on Qwen: a risk hold ended the turn and OnFlip promised to carry on
+  // in ten minutes. The next message typed was refused like any send in a
+  // cooldown, typing it had cancelled the resume, and nothing carried on.
+  const { clearCooldown, assertNotCoolingDown } = require(path.join(ROOT, "dist", "chatgpt", "backoff.js"));
+  clearCooldown();
+  const sent = [];
+  const { engine, events } = makeEngine(async (history) => {
+    assertNotCoolingDown(); // what every real transport does first
+    sent.push(history.map((m) => m.content));
+    if (sent.length === 1) throw throttled(3);
+    return { content: DONE, conversationId: null };
+  });
+  engine.send("build the board");
+  await waitIdle(engine);
+  engine.send("and make the dark squares blue");
+  await waitIdle(engine);
+  assert.equal(sent.length, 1, "nothing is sent into the pause");
+  assert.ok(engine.cooldownResume, notices(events).join("\n"));
+  const deadline = Date.now() + 12_000;
+  while (sent.length < 2 && Date.now() < deadline) await sleep(100);
+  await waitIdle(engine);
+  assert.equal(sent.length, 2, "the work carried on once the pause was over");
+  assert.ok(sent[1].some((c) => /make the dark squares blue/.test(c)), "carrying the message typed during it");
+  assert.ok(notices(events).some((n) => /^The ChatGPT pause is over/.test(n)), notices(events).join("\n"));
+  clearCooldown();
+});

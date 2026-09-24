@@ -2,6 +2,7 @@ import { ChatMessage } from "../../types";
 import { buildTurnPrompt } from "../../agent/protocol";
 import { logger } from "../../log";
 import type { SendOptions, Transport, TransportReply } from "../../chatgpt/transport";
+import { assertNotCoolingDown } from "../../chatgpt/backoff";
 import {
   newChat,
   sendTurn,
@@ -42,6 +43,10 @@ export class QwenTransport implements Transport {
   private sentThrough = 0;
 
   async send(history: ChatMessage[], opts: SendOptions): Promise<TransportReply> {
+    // A cooldown Qwen earned is Qwen's to wait out: the cooldown was
+    // recorded when Qwen said "limit reached", and the very next message
+    // went back into it anyway, because only ChatGPT's transport asked.
+    assertNotCoolingDown();
     // A thread that went away — a crash, a reset, a first run — has seen
     // nothing, so the whole transcript goes out again.
     // Asked of the page itself, not of a remembered id: see
