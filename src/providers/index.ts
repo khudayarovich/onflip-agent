@@ -188,6 +188,16 @@ export function currentConversationId(): string | null {
 
 // --- what they do not have -------------------------------------------------
 
+/**
+ * Whether a chat OnFlip opens can be filed into a project at all.
+ *
+ * Only ChatGPT has projects, and only its ordinary chats enter them: a
+ * Temporary Chat — the default — never reaches the account's history.
+ */
+export function chatsAreFiled(): boolean {
+  return driver() ? false : !chatgpt.temporaryChats();
+}
+
 /** Projects are ChatGPT's; neither of the others has an equivalent. */
 export async function listProjects(cookies: SessionCookie[]): Promise<chatgpt.RemoteProject[]> {
   return driver() ? [] : chatgpt.listProjects(cookies);

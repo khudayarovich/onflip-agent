@@ -405,3 +405,91 @@ test("a file left out for the shared budget is not blamed on its own size", { sk
   assert.doesNotMatch(said[0], /over the 32KB limit for instruction files/);
   assert.match(said[1], /CLAUDE\.md is 40KB, over the 32KB limit for instruction files/);
 });
+
+// --- a throttle is a pause, not the end of the work ---------------------------
+
+// A one-second throttle is what these tests can afford to wait out; the
+// shipped floor is thirty seconds.
+process.env.ONFLIP_MIN_THROTTLE_SECONDS = "1";
+
+/** What ChatGPT's 429 looks like by the time it reaches the loop. */
+function throttled(seconds) {
+  const e = new Error(
+    `ChatGPT is throttling this account (too many requests: status 429 on /backend-api/f/conversation, retry-after ${seconds}). Waiting before sending again; retrying now would extend the block.`
+  );
+  e.code = "throttled";
+  return e;
+}
+
+const notices = (events) => events.filter((e) => e.event === "item" && e.data?.type === "notice").map((e) => e.data.text);
+
+test("after a 429 the work carries on by itself once the cooldown has passed", { skip: needsBuild, timeout: 20_000 }, async () => {
+  const { clearCooldown } = require(path.join(ROOT, "dist", "chatgpt", "backoff.js"));
+  clearCooldown();
+  const sent = [];
+  const { engine, events } = makeEngine(async (history) => {
+    sent.push(history[history.length - 1].content);
+    if (sent.length === 1) throw throttled(1);
+    return { content: DONE, conversationId: null };
+  });
+  engine.send("build the board");
+  await waitIdle(engine);
+  assert.equal(sent.length, 1, "nothing is sent into the throttle");
+  assert.ok(notices(events).some((n) => /carry on by itself when the pause ends/.test(n)), notices(events).join("\n"));
+  // The one-second cooldown, the margin after it, and the resumed turn.
+  const deadline = Date.now() + 10_000;
+  while (sent.length < 2 && Date.now() < deadline) await sleep(100);
+  await waitIdle(engine);
+  assert.equal(sent.length, 2);
+  assert.match(sent[1], /continue/);
+  assert.ok(notices(events).some((n) => /pause is over/.test(n)));
+  clearCooldown();
+});
+
+test("stop cancels the resume a cooldown is waiting to send", { skip: needsBuild, timeout: 20_000 }, async () => {
+  const { clearCooldown } = require(path.join(ROOT, "dist", "chatgpt", "backoff.js"));
+  clearCooldown();
+  const sent = [];
+  const { engine } = makeEngine(async (history) => {
+    sent.push(history[history.length - 1].content);
+    if (sent.length === 1) throw throttled(1);
+    return { content: DONE, conversationId: null };
+  });
+  engine.send("build the board");
+  await waitIdle(engine);
+  engine.interrupt();
+  await sleep(4_000);
+  assert.equal(sent.length, 1, "nothing was resumed after stop");
+  clearCooldown();
+});
+
+test("with temporary chats nothing is filed, so no project is listed or made", { skip: needsBuild, timeout: 20_000 }, async () => {
+  // A fresh install listed the account's projects and created an "OnFlip"
+  // one before its first message — two requests, and a project in the
+  // user's account — for chats that never reach the account's history.
+  const providers = require(path.join(ROOT, "dist", "providers", "index.js"));
+  const real = { list: providers.listProjects, create: providers.createProject };
+  const calls = [];
+  providers.listProjects = async () => {
+    calls.push("list");
+    return [];
+  };
+  providers.createProject = async (_c, name) => {
+    calls.push("create");
+    return { id: "g-p-1", shortUrl: "g-p-1-onflip", name };
+  };
+  try {
+    const { engine } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+    engine.transport.name = "browser";
+    engine.auth = { cookies: [], accessToken: "", sessionToken: "" };
+    // Who is signed in is asked of a real page after a browser turn; this
+    // test has none to ask.
+    engine.accountVerified = true;
+    engine.send("hello");
+    await waitIdle(engine);
+    assert.deepEqual(calls, []);
+  } finally {
+    providers.listProjects = real.list;
+    providers.createProject = real.create;
+  }
+});

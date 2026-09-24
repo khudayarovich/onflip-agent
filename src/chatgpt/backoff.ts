@@ -72,6 +72,17 @@ export type FailureCode =
 /** Default quiet period when the server does not name one. */
 const DEFAULT_COOLDOWN_SECONDS = 15 * 60;
 
+/**
+ * The shortest pause a throttle gets, whatever the server said.
+ *
+ * `ONFLIP_MIN_THROTTLE_SECONDS` lowers it for a test that has to watch a
+ * whole cooldown pass; read live, so each test answers for its own setting.
+ */
+function minThrottleSeconds(): number {
+  const override = Number(process.env.ONFLIP_MIN_THROTTLE_SECONDS);
+  return Number.isFinite(override) && override > 0 ? override : 30;
+}
+
 /** How each code is treated, when one is present. */
 const BY_CODE: Record<FailureCode, { kind: FailureKind; seconds: number }> = {
   "unusual-activity": { kind: "cooldown", seconds: DEFAULT_COOLDOWN_SECONDS },
@@ -118,10 +129,15 @@ export function classifyFailure(message: string, code?: FailureCode): Classifica
   // still what the user reads; it just no longer decides anything.
   if (code) {
     const { kind, seconds } = BY_CODE[code];
-    // A throttle may name its own delay, and honouring it beats a default.
+    // A throttle may name its own delay, and honouring it beats a default —
+    // with a floor, now that the figure comes straight off the server's
+    // header: a `Retry-After: 0` would otherwise make the "cooldown" end
+    // the moment it began, and the next send would go into the throttle.
     if (code === "throttled") {
       const after = /retry[- ]after[":\s]+(\d+)/i.exec(m);
-      if (after) return { kind, seconds: Math.min(3600, Number(after[1])), reason: m };
+      if (after) {
+        return { kind, seconds: Math.min(3600, Math.max(minThrottleSeconds(), Number(after[1]))), reason: m };
+      }
     }
     return { kind, seconds, reason: m };
   }

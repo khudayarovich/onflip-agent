@@ -28,7 +28,14 @@ export interface PlanProfile {
 }
 
 const PLANS: PlanProfile[] = [
-  { id: "free", label: "Free", contextTokens: 8_000 },
+  // 32k, not the 8k the published table once said. Measured on a Free
+  // account in September 2026: its model list reported 34,834 tokens for
+  // GPT-5.6 Luna, and one typed message of 89,811 characters was read to
+  // its last line. At 8k the budget left after OnFlip's own instructions
+  // came to 2,000 characters, so a Free session summarised itself — and
+  // opened a new chat — on almost every step. Only the fallback now: the
+  // model list's own figure, when the account has given one, wins.
+  { id: "free", label: "Free", contextTokens: 32_000 },
   { id: "plus", label: "Plus", contextTokens: 32_000 },
   // Longer ids sort first in the contained match below, so "prolite" must
   // be listed explicitly or it lands on "pro".
@@ -186,8 +193,8 @@ const UNKNOWN_PLAN_UPLOAD_BUDGET = 45_000;
  * alone — compaction cannot reclaim the prompt, so it is excluded from the
  * count — but the *send* carries both, and the window has to hold both.
  * Measured with all 23 tools attached: a 17,080-character prompt plus the
- * 17,600 that the Free row allowed came to 34,680 against a 32,000-character
- * window. Every turn on that plan overflowed by 2,680 characters, and what
+ * 17,600 that the Free row allowed came to 34,680 against the 32,000-character
+ * window that row then claimed. Every turn overflowed by 2,680 characters, and what
  * falls out of a full window first is the oldest content — the prompt, the
  * one part of the payload that explains the tools. Free accounts reporting
  * that the agent "has no tools" were being told so by arithmetic.
@@ -198,18 +205,16 @@ export function compactionBudget(
   modelTokens?: number | null,
   systemChars = 0
 ): number {
-  // A model with a published window outranks the plan table: the table's
-  // rows date from the GPT-4 era, and Sol's real window is thirty times the
-  // Plus row. Only meaningful with uploads — a transcript this size cannot
-  // be typed.
-  if (canUpload && modelTokens && modelTokens > 0) {
+  // A known window for the model outranks the plan table, typed or uploaded:
+  // the table's rows date from the GPT-4 era — Sol's real window is thirty
+  // times the Plus row, and a Free account's Luna reported 34,834 tokens
+  // where the Free row said 8,000. Typing still caps it at what one message
+  // can carry; the window only decides when it is the smaller of the two.
+  if (modelTokens && modelTokens > 0) {
     const window = modelTokens * CHARS_PER_TOKEN;
     const fromModel = Math.floor((window - systemChars) * USABLE_FRACTION);
-    return fit(
-      Math.max(12_000, Math.min(fromModel, LARGE_MODEL_UPLOAD_CEILING_CHARS)),
-      window,
-      systemChars
-    );
+    const ceiling = canUpload ? LARGE_MODEL_UPLOAD_CEILING_CHARS : COMPOSER_CEILING_CHARS;
+    return fit(Math.max(12_000, Math.min(fromModel, ceiling)), window, systemChars);
   }
   const ceiling = canUpload ? UPLOAD_CEILING_CHARS : COMPOSER_CEILING_CHARS;
   const profile = planProfile(planId);
@@ -304,6 +309,22 @@ export function normalizePlanId(planId: string | undefined): string {
 export function rationedPlan(planId: string | undefined): boolean {
   const id = normalizePlanId(planId);
   return id === "free" || id === "go";
+}
+
+/**
+ * How long one reply can safely be on a rationed plan, in characters.
+ *
+ * Measured on a Free account in September 2026: a reply carrying four whole
+ * files stopped at 13,336 characters, sixty-six seconds in, with its message
+ * still in progress and no finish reason — the last file cut off mid-rule.
+ * The prompt asks for replies under this, with room to spare below the cut.
+ * Paid plans are not asked: nothing there has been measured, and a limit
+ * nobody hits would only cost round trips.
+ */
+export const RATIONED_REPLY_LIMIT_CHARS = 10_000;
+
+export function replyLimitFor(planId: string | undefined): number | undefined {
+  return rationedPlan(planId) ? RATIONED_REPLY_LIMIT_CHARS : undefined;
 }
 
 /**

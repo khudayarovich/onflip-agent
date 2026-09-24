@@ -222,10 +222,40 @@ export interface StreamView {
 
 let streamSeqCounter = 0;
 let latestStream: StreamTurn | null = null;
-/** The last HTTP 429 the page received from ChatGPT's API, while the watcher is on. */
-let lastThrottle: { at: number; url: string } | null = null;
+/**
+ * The last HTTP 429 the page received on a request a send depends on, while
+ * the watcher is on. Only those: the page's own telemetry and sidebar calls
+ * are throttled on their own schedule, and one of them refused was being read
+ * as the account being throttled — a cooldown the sends had not earned.
+ */
+let lastThrottle: { at: number; url: string; retryAfter: number | null } | null = null;
 /** The last conversation request the server refused, while the watcher is on. */
-let lastRequestFailure: { at: number; url: string; status: number } | null = null;
+let lastRequestFailure: { at: number; url: string; status: number; retryAfter: number | null } | null = null;
+
+/**
+ * Seconds a `Retry-After` header asks for, or null when it names none.
+ *
+ * The header is either a number of seconds or an HTTP date. Honouring it is
+ * the difference between a cooldown the server set and one OnFlip guessed:
+ * every 429 used to cool down for a flat five minutes (three, from the page's
+ * notice), whatever the server had said.
+ */
+export function parseRetryAfter(value: string | undefined | null, now = Date.now()): number | null {
+  const raw = (value ?? "").trim();
+  if (!raw) return null;
+  if (/^\d+$/.test(raw)) return Number(raw);
+  const at = Date.parse(raw);
+  if (!Number.isFinite(at)) return null;
+  return Math.max(0, Math.ceil((at - now) / 1000));
+}
+
+/** A header by name, whatever case the server sent it in. */
+function headerValue(headers: Record<string, unknown> | undefined, name: string): string | undefined {
+  if (!headers) return undefined;
+  const key = Object.keys(headers).find((k) => k.toLowerCase() === name);
+  const value = key === undefined ? undefined : headers[key];
+  return typeof value === "string" ? value : undefined;
+}
 /**
  * Set when the server refused a request with 401/403: the next send puts
  * the session back into the profile before anything else, since the page's
@@ -236,7 +266,9 @@ let sessionSuspect = false;
 const CONVERSATION_REQUEST =
   /\/backend-api\/(?:f\/)?conversation(?:\/prepare|\/init)?(?:\?|$)|\/backend-api\/sentinel\/(?:chat-requirements|req)\b/;
 
-function requestFailureSince(at: number): { url: string; status: number } | null {
+function requestFailureSince(
+  at: number
+): { url: string; status: number; retryAfter: number | null } | null {
   return lastRequestFailure && lastRequestFailure.at >= at ? lastRequestFailure : null;
 }
 /** Set once Chrome refused to stream a body, so the refusal is not repeated per reply. */
@@ -245,6 +277,25 @@ let streamingUnsupported = false;
 /** How many reply streams have started since the browser was launched. */
 function streamSeq(): number {
   return streamSeqCounter;
+}
+
+/**
+ * Did the stream close while the message it was writing was still going?
+ *
+ * ChatGPT marks a reply cut at its length limit with `finish_details`
+ * `max_tokens`, and that was the only cut this looked for. Measured on a Free
+ * account, a 13,336-character reply carrying four file writes simply stopped:
+ * the stream closed with the message still `in_progress` and no finish at
+ * all, the page went idle, and the reply was accepted whole — so the last
+ * file was written with its second half missing (a stylesheet that ended at
+ * `.player.top{`), the build still passed, and the game shipped with no board
+ * styling. A message that never finished is a cut, whatever did the cutting.
+ */
+export function endedMidMessage(
+  state: string,
+  visible: { status: string; finishType: string | null } | null
+): boolean {
+  return state !== "streaming" && visible !== null && visible.status === "in_progress" && !visible.finishType;
 }
 
 /** The newest reply stream that started after `after`, summarised, or null. */
@@ -256,7 +307,7 @@ function streamView(after: number): StreamView | null {
     seq: turn.seq,
     state: turn.state,
     visible,
-    truncated: visible?.finishType === "max_tokens",
+    truncated: visible?.finishType === "max_tokens" || endedMidMessage(turn.state, visible),
     interrupted: visible?.finishType === "interrupted",
     error: turn.error,
     lastFrameAt: turn.lastFrameAt,
@@ -307,9 +358,16 @@ async function attachStreamWatch(p: Page, ctx: BrowserContext): Promise<void> {
       // The throttle, as the server states it. The page's notice for it is
       // a toast in the page's own language that is gone in seconds; the
       // status code is neither.
+      const retryAfter =
+        e.response.status === 429
+          ? parseRetryAfter(headerValue(e.response.headers as Record<string, unknown>, "retry-after"))
+          : null;
       if (e.response.status === 429 && /\/backend-api\//.test(e.response.url)) {
-        lastThrottle = { at: Date.now(), url: e.response.url.replace(/^https?:\/\/[^/]+/, "") };
-        logger.warn("browser", "chatgpt answered HTTP 429", { url: lastThrottle.url });
+        // Logged whatever the request, since a 429 anywhere is worth seeing;
+        // counted as the account's throttle only on a request a send needs.
+        const url = e.response.url.replace(/^https?:\/\/[^/]+/, "");
+        logger.warn("browser", "chatgpt answered HTTP 429", { url, retryAfter });
+        if (CONVERSATION_REQUEST.test(e.response.url)) lastThrottle = { at: Date.now(), url, retryAfter };
       }
       // A send whose request the server refused shows nothing but a spinner
       // — the page's optimistic UI has no failure state the DOM rules can
@@ -321,6 +379,7 @@ async function attachStreamWatch(p: Page, ctx: BrowserContext): Promise<void> {
           at: Date.now(),
           url: e.response.url.replace(/^https?:\/\/[^/]+/, "").replace(/\?.*$/, ""),
           status: e.response.status,
+          retryAfter,
         };
         logger.warn("browser", "chatgpt refused a conversation request", lastRequestFailure);
       }
@@ -531,7 +590,7 @@ function endStream(turn: StreamTurn, state: "done" | "error"): void {
   turn.state = state;
   turn.endedAt = Date.now();
   const visible = visibleMessage(turn);
-  logger.info("browser", "reply stream ended", {
+  (endedMidMessage(state, visible) ? logger.warn : logger.info)("browser", "reply stream ended", {
     seq: turn.seq,
     state,
     ms: turn.endedAt - turn.startedAt,
@@ -882,8 +941,31 @@ async function launchWithFallback<T>(
   }
 }
 
-async function ensurePage(cookies: SessionCookie[]): Promise<Page> {
-  if (page && !page.isClosed()) return page;
+/**
+ * The launch in progress, which every caller that arrives meanwhile shares.
+ *
+ * `page` is only set once a launch has finished, and an engine start asks for
+ * the page from three places at once — the plan, the model list and the first
+ * send. Each of them found no page and launched its own browser on the same
+ * profile. Measured on a fresh Free account: the second launch could not read
+ * the session the first had just seen, decided the profile had none, and
+ * wrote another browser's session over it; the plan read and the first send
+ * then aborted each other's navigation, so the session ran without its plan
+ * and opened its first chat on the wrong model.
+ */
+let launching: Promise<Page> | null = null;
+
+function ensurePage(cookies: SessionCookie[]): Promise<Page> {
+  if (page && !page.isClosed()) return Promise.resolve(page);
+  if (!launching) {
+    launching = launchPage(cookies).finally(() => {
+      launching = null;
+    });
+  }
+  return launching;
+}
+
+async function launchPage(cookies: SessionCookie[]): Promise<Page> {
   // Diagnostic: a browser relaunching mid-session resets the conversation,
   // which shows up as "it starts a new chat every time".
   logger.debug("browser", "launching a browser", { hadPage: Boolean(page) });
@@ -2731,8 +2813,11 @@ async function submitMessage(
     const throttle = await throttleNotice(p);
     if (!throttle) return;
     logger.warn("browser", "chatgpt is throttling this account", { notice: throttle });
+    // The server's wait when a 429 carried one; the page's notice names
+    // none, and three minutes is what it has meant when measured.
+    const wait = lastThrottle && Date.now() - lastThrottle.at < 90_000 ? lastThrottle.retryAfter : null;
     throw new ChatGPTBrowserError(
-      `ChatGPT is throttling this account — the page says "${throttle}" (too many requests, retry-after 180). ` +
+      `ChatGPT is throttling this account — the page says "${throttle}" (too many requests, retry-after ${wait ?? 180}). ` +
         "Waiting before sending again; retrying now would extend the block.",
       "throttled"
     );
@@ -3124,6 +3209,52 @@ async function sendOn(p: Page, message: string, opts?: BrowserSendOptions): Prom
   }
 }
 
+/**
+ * Is a reply stream on this page still being written?
+ *
+ * Only the wire is asked, not the page's stop control: that control lingers
+ * and its looser selectors match other things (see `waitForComposerReady`),
+ * and a guard that trusted it would hold every send. A stream with no frame
+ * for a while is not trusted to still be going either.
+ */
+export function replyStillStreaming(
+  stream: { state: string; lastFrameAt: number } | null,
+  now = Date.now()
+): boolean {
+  return stream?.state === "streaming" && now - stream.lastFrameAt < 15_000;
+}
+
+/**
+ * Let the previous reply finish before typing the next message.
+ *
+ * Measured on a Free account: a correction was typed while the reply before
+ * it was still streaming. The composer took it and cleared, its bubble even
+ * appeared — and no reply was ever generated for it, so the turn waited four
+ * minutes for an answer to nothing, then abandoned the chat and replayed the
+ * whole transcript into a new one. Bounded: past the ceiling the old reply is
+ * stopped, which is what a person does with a page that will not finish.
+ */
+async function waitForPreviousReply(p: Page, signal?: AbortSignal): Promise<void> {
+  if (!replyStillStreaming(latestStream)) return;
+  const started = Date.now();
+  const ceiling = started + 90_000;
+  while (replyStillStreaming(latestStream)) {
+    throwIfAborted(signal);
+    if (Date.now() > ceiling) {
+      logger.warn("browser", "the previous reply was still being written; stopping it before sending", {
+        waitedMs: Date.now() - started,
+      });
+      await stopGeneration(p);
+      await p.waitForTimeout(500);
+      return;
+    }
+    await p.waitForTimeout(250);
+  }
+  logger.info("browser", "waited for the previous reply to finish before sending", {
+    ms: Date.now() - started,
+  });
+}
+
 async function sendOnce(
   p: Page,
   message: string,
@@ -3134,6 +3265,7 @@ async function sendOnce(
 
   logger.info("browser", "sending", shapeOf(payload));
   logger.debug("browser", "outgoing payload", { payload });
+  await waitForPreviousReply(p, opts?.signal);
 
   lastReplyMeta = null;
   const priorTurns = await assistantTurns(p);
@@ -3383,6 +3515,8 @@ export async function waitForReply(
    */
   const QUIET_MS = 6_000;      // unchanged this long: the reply is done
   const IDLE_QUIET_MS = 1_200; // ...and the composer looks idle: done sooner
+  /** Unchanged text is believed over a stream still sending frames only after this. */
+  const STREAMING_QUIET_CAP_MS = 180_000;
   /**
    * "Working" with nothing on screen and nothing changing: a dead stream.
    *
@@ -3605,18 +3739,37 @@ export async function waitForReply(
       }
       // Backstop: the text simply stopped growing. This is what guarantees the
       // loop terminates no matter what the page chrome is doing.
-      const quietNeed =
-        generating || streaming
+      //
+      // Frames still arriving outrank the stillness of what is on screen: the
+      // model is working on something the page does not show yet — thinking
+      // after a one-line preamble — and the words already there are not the
+      // reply. Measured on a Free account: "I'll build this as a polished,
+      // responsive chess web app…" held still for thirty seconds while the
+      // stream carried on for another thirteen and ended with the real
+      // answer; OnFlip took the preamble, called it a reply with no block,
+      // and typed a correction into a page that was still writing — which
+      // never became a message, and the turn then waited four minutes for a
+      // reply to nothing. Still bounded, so a stream that keeps ticking
+      // without ever changing the text cannot hold the loop open. The window
+      // is longer than `streaming`'s, because thinking pauses between frames
+      // and a pause of a few seconds is not an ending.
+      const streamWorking = stream?.state === "streaming" && now - stream.lastFrameAt < 15_000;
+      const quietNeed = streamWorking
+        ? STREAMING_QUIET_CAP_MS
+        : generating
           ? Math.max(QUIET_MS, 30_000)
           : shortReply
             ? Math.max(QUIET_MS, 12_000)
             : QUIET_MS;
       if (quietFor >= quietNeed) {
-        logger.debug("browser", "reply complete (text settled)", {
+        // At info when the stream was still going: that is the cap firing,
+        // and a reply taken over a live stream is the one worth finding later.
+        (streamWorking ? logger.info : logger.debug)("browser", "reply complete (text settled)", {
           quietFor,
           chars: text.length,
           stillGenerating: generating,
           streaming,
+          streamWorking,
         });
         return accept("text-settled", generating);
       }
@@ -3754,7 +3907,11 @@ export async function waitForReply(
  * the stated interval, and anything else — a server error — retries, and
  * moves to a fresh chat on the second attempt via "reached the model".
  */
-export function refusedRequestError(refused: { url: string; status: number }): ChatGPTBrowserError {
+export function refusedRequestError(refused: {
+  url: string;
+  status: number;
+  retryAfter?: number | null;
+}): ChatGPTBrowserError {
   const { url, status } = refused;
   // Coded, so the classifier never reads this sentence. Uncoded, "status
   // 403" matched none of its 403 wording and was retried — and each retry
@@ -3781,8 +3938,11 @@ export function refusedRequestError(refused: { url: string; status: number }): C
     );
   }
   if (status === 429) {
+    // The server's own wait, when it named one, in the words the classifier
+    // reads it from; without one the classifier's default stands.
+    const wait = typeof refused.retryAfter === "number" ? `, retry-after ${refused.retryAfter}` : "";
     return new ChatGPTBrowserError(
-      `ChatGPT is throttling this account (too many requests: status 429 on ${url}). Waiting before sending again; retrying now would extend the block.`,
+      `ChatGPT is throttling this account (too many requests: status 429 on ${url}${wait}). Waiting before sending again; retrying now would extend the block.`,
       "throttled"
     );
   }

@@ -207,3 +207,11 @@ function abortedSignal() {
   c.abort();
   return c.signal;
 }
+
+test("a throttle that names almost no wait still gets a real pause", () => {
+  // The figure comes straight off the server's Retry-After header now, and
+  // a 0 would end the cooldown the moment it began.
+  assert.equal(classifyFailure("retry-after 0", "throttled").seconds, 30);
+  assert.equal(classifyFailure("retry-after 5", "throttled").seconds, 30);
+  assert.equal(classifyFailure("retry-after 31", "throttled").seconds, 31);
+});

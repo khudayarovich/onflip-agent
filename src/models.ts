@@ -250,6 +250,8 @@ export interface CachedModel {
   slug: string;
   title: string;
   description: string;
+  /** The account's context window on this model, in tokens, when it said. */
+  maxTokens?: number;
 }
 
 export function cacheModels(models: CachedModel[]): void {
@@ -286,16 +288,28 @@ export function defaultModel(planId?: string): string {
 }
 
 /**
- * A model's published context window, when one is known.
+ * A model's context window, when one is known.
  *
- * Matched against the slug and the account's own title for it, because the
- * web app spells the same model many ways (`gpt-5-6`, `gpt-5-6-thinking`
- * and `gpt-5.6-sol-wm` are all titled "GPT-5.6 Sol"). Only windows that
- * are actually published get claimed — anything else answers null and the
- * plan table decides. Sol: 1,050,000 tokens (announced August 2026).
+ * The account's own figure first: the model list reports a `max_tokens` per
+ * model, and it is per account — the same Luna is a different window on
+ * different plans. It is also the only figure that was ever measured against
+ * this app's reality. A Free account reported 34,834 for GPT-5.6 Luna in
+ * September 2026, and a single typed message of 89,811 characters was read
+ * to its last line there, while the plan table below it still said 8,000 —
+ * a Free session was being compacted at 2,000 characters, which is every
+ * step, and every compaction opened another chat.
+ *
+ * Without one, matched against the slug and the account's title for it,
+ * because the web app spells the same model many ways (`gpt-5-6`,
+ * `gpt-5-6-thinking` and `gpt-5.6-sol-wm` are all titled "GPT-5.6 Sol").
+ * Only windows that are actually published get claimed — anything else
+ * answers null and the plan table decides. Sol: 1,050,000 tokens
+ * (announced August 2026).
  */
 export function modelContextTokens(slug: string | undefined): number | null {
   if (!slug) return null;
+  const reported = loadConfig().discoveredModels?.find((m) => m.slug === slug)?.maxTokens;
+  if (typeof reported === "number" && Number.isFinite(reported) && reported > 0) return reported;
   if (slug === "auto") {
     // Regular chat on a paid plan routes every 5.6 request to Sol, and the
     // account's own model list says whether this is such an account: a free

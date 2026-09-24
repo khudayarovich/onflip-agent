@@ -747,14 +747,21 @@ async function locate(p: Page, rawRef: unknown): Promise<{ ref: string } | { err
   return { ref };
 }
 
-/** Gate a browser action the way a network request is gated. */
+/**
+ * Gate a browser action the way a network request is gated.
+ *
+ * `page` is the address the action acts on — the page being clicked, or the
+ * one being opened — which is what "always allow" can remember when it is
+ * this machine's own server (see `loopbackOrigin` in the permissions).
+ */
 async function allowed(
   ctx: Parameters<ToolDefinition["run"]>[1],
   tool: string,
   subject: string,
-  detail?: string[]
+  detail?: string[],
+  page?: string
 ): Promise<ToolResult | null> {
-  const decision = await ctx.requestPermission({ kind: "network", tool, subject, detail });
+  const decision = await ctx.requestPermission({ kind: "network", tool, subject, detail, origin: page });
   return decision.allow ? null : denied("Browser action", decision.reason);
 }
 
@@ -827,7 +834,7 @@ export const browserOpenTool: ToolDefinition = {
       return err(`Unsupported protocol: ${url.protocol}. Only http and https are allowed.`);
     }
 
-    const stop = await allowed(ctx, "browser_open", url.href, [`host: ${url.host}`]);
+    const stop = await allowed(ctx, "browser_open", url.href, [`host: ${url.host}`], url.href);
     if (stop) return stop;
 
     logger.info("browser-tool", "navigating", { url: url.href });
@@ -887,7 +894,7 @@ export const browserClickTool: ToolDefinition = {
     if ("error" in found) return found.error;
 
     const label = String(args.description ?? "").trim() || found.ref;
-    const stop = await allowed(ctx, "browser_click", `click ${label}`, [`page: ${p.url()}`]);
+    const stop = await allowed(ctx, "browser_click", `click ${label}`, [`page: ${p.url()}`], p.url());
     if (stop) return stop;
 
     try {
@@ -995,7 +1002,8 @@ export const browserTypeTool: ToolDefinition = {
         ...(single ? [] : refs.map((ref, i) => `${ref}: ${shown[i]}`)),
         `page: ${p.url()}`,
         submit ? "and press Enter" : "without submitting",
-      ]
+      ],
+      p.url()
     );
     if (stop) return stop;
 
@@ -1044,9 +1052,13 @@ export const browserKeyTool: ToolDefinition = {
     if (!key) return err("`key` must be non-empty, e.g. Enter or PageDown.");
     const times = Math.min(20, Math.max(1, asNumber(args.repeat) ?? 1));
 
-    const stop = await allowed(ctx, "browser_key", `press ${key}${times > 1 ? ` ×${times}` : ""}`, [
-      `page: ${p.url()}`,
-    ]);
+    const stop = await allowed(
+      ctx,
+      "browser_key",
+      `press ${key}${times > 1 ? ` ×${times}` : ""}`,
+      [`page: ${p.url()}`],
+      p.url()
+    );
     if (stop) return stop;
 
     try {

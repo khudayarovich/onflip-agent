@@ -133,6 +133,40 @@ export interface PermissionRequest {
   targetPath?: string;
   /** Extra detail shown in the prompt (diff preview, full command). */
   detail?: string[];
+  /**
+   * For an action in the agent's browser: the origin of the page it acts on
+   * (or opens), such as `http://127.0.0.1:5173`. What "always allow" can
+   * remember for a browser action — see `loopbackOrigin`.
+   */
+  origin?: string;
+}
+
+/**
+ * The origin of a URL when it is this machine's own server, else null.
+ *
+ * Only these are remembered by "always allow". Checking a page the agent
+ * has just started with `npm run dev` asked once per click — four prompts
+ * for one look at a chess board — and a person approves every one, because
+ * the page is theirs. A site on the internet is not, and the agent's
+ * browser keeps whatever logins were made in it, so those keep asking.
+ */
+export function loopbackOrigin(url: string | undefined): string | null {
+  if (!url) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") return null;
+  const host = parsed.hostname.replace(/^\[|\]$/g, "").toLowerCase();
+  const loopback =
+    host === "localhost" ||
+    host.endsWith(".localhost") ||
+    host === "::1" ||
+    host === "0.0.0.0" ||
+    /^127(?:\.\d{1,3}){3}$/.test(host);
+  return loopback ? parsed.origin : null;
 }
 
 export type PermissionDecision =
@@ -567,12 +601,14 @@ export interface PolicyState {
   workspace: string;
   /** Per-command rules, which outrank the mode. */
   bashRules?: BashRules;
+  /** This machine's own origins where browser actions are pre-cleared. */
+  allowedOrigins?: Set<string>;
 }
 
 export function createPolicy(
   workspace: string,
   mode: ApprovalMode,
-  seed?: { commands?: string[]; writeDirs?: string[]; bashRules?: BashRules }
+  seed?: { commands?: string[]; writeDirs?: string[]; bashRules?: BashRules; origins?: string[] }
 ): PolicyState {
   return {
     mode,
@@ -583,6 +619,11 @@ export function createPolicy(
     allowedCommands: new Set((seed?.commands ?? []).filter(isStorableCommandKey)),
     allowedWriteDirs: new Set((seed?.writeDirs ?? []).map((d) => path.resolve(d))),
     bashRules: seed?.bashRules,
+    // Filtered for the same reason, and so a hand-edited config cannot
+    // clear a site on the internet through a list meant for local ones.
+    allowedOrigins: new Set(
+      (seed?.origins ?? []).map((o) => loopbackOrigin(o)).filter((o): o is string => o !== null)
+    ),
   };
 }
 
@@ -734,6 +775,10 @@ export function evaluate(policy: PolicyState, req: PermissionRequest): PolicyVer
 
   // network
   if (policy.mode === "yolo" || policy.mode === "full-auto") return { outcome: "allow" };
+  const origin = loopbackOrigin(req.origin);
+  if (origin && policy.allowedOrigins?.has(origin)) {
+    return { outcome: "allow", reason: `the browser on ${origin} was previously approved` };
+  }
   return { outcome: "ask", reason: "network request", dangerous: false };
 }
 
@@ -750,6 +795,9 @@ export function remember(policy: PolicyState, req: PermissionRequest): void {
   } else if (req.kind === "write" && req.targetPath) {
     const dir = rememberableWriteDir(req.targetPath);
     if (dir) policy.allowedWriteDirs.add(dir);
+  } else if (req.kind === "network") {
+    const origin = loopbackOrigin(req.origin);
+    if (origin) (policy.allowedOrigins ??= new Set()).add(origin);
   }
 }
 

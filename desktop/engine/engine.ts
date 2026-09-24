@@ -39,6 +39,7 @@ import {
   planLimitCard,
   promptCrowdsPlan,
   rationedPlan,
+  replyLimitFor,
 } from "onflip/dist/chatgpt/plans";
 import { activeProvider, isBrowserProvider, providerLabel } from "onflip/dist/providers/id";
 import {
@@ -73,6 +74,7 @@ import {
   pageSessionUser,
   deleteConversations,
   checkSelectorsLive,
+  chatsAreFiled,
   RemoteProject,
   // Through the provider seam rather than naming ChatGPT directly. Today it
   // re-exports exactly these functions unchanged; a second provider makes it
@@ -122,6 +124,7 @@ import {
   commandKey,
   rememberableWriteDir,
   isInstructionFile,
+  loopbackOrigin,
   PolicyState,
   BashRules,
   isRuleAction,
@@ -142,7 +145,12 @@ import {
   snapshotContentsAvailable,
 } from "onflip/dist/agent/store";
 import { openLog, closeLog, logger, logFile, diagnosticLogLines } from "onflip/dist/log";
-import { isResumableFailure, cooldownRemainingMs, failureCodeOf } from "onflip/dist/chatgpt/backoff";
+import {
+  isResumableFailure,
+  cooldownRemainingMs,
+  describeWait,
+  failureCodeOf,
+} from "onflip/dist/chatgpt/backoff";
 import { runDoctor, runDeepDoctor, type DoctorReport } from "onflip/dist/chatgpt/doctor";
 import { lastBrowserReport } from "onflip/dist/auth/session";
 import type { ChatMessage, SessionState, ToolCall, ToolResult, ToolDisplay } from "onflip/dist/types";
@@ -203,6 +211,14 @@ const SILENCE_RESUME_MS = 420_000;
 
 /** Consecutive unattended resumes before OnFlip stops and says so. */
 const MAX_AUTO_RESUMES = 3;
+
+/**
+ * How long the first turn waits for the start-up checks — the sign-in probe,
+ * the plan and the model list — before going ahead without them. They take
+ * a few seconds on a cold start, most of it the browser launch the first
+ * turn needs anyway.
+ */
+const WARMING_WAIT_MS = 30_000;
 
 /**
  * Steps a turn may take before it stops and asks to carry on.
@@ -509,6 +525,7 @@ export class Engine {
       commands: this.config.allowedCommands,
       writeDirs: this.config.allowedWriteDirs,
       bashRules: this.config.bashRules as BashRules | undefined,
+      origins: this.config.allowedBrowserOrigins,
     });
     // createPolicy drops stored entries that are not commands, but only in
     // memory - so an install carrying junk stayed ugly on disk until some
@@ -548,8 +565,16 @@ export class Engine {
     // is a separate OS window that cannot be embedded, so the panel is fed
     // frames captured after each action.
     setBrowserFrameSink((frame: BrowserFrame) => this.peer.emit("browser-frame", frame));
-    void this.checkSignInState();
-    void this.learnAccountModels();
+    // One after the other, and the first send waits for both (see
+    // `awaitWarming`): all three drive the same page. Left to race, a
+    // Free account's first start read no plan — the plan's navigation
+    // and the first chat's aborted each other — so the session was sized
+    // as an unknown plan and its first chat opened on the built-in model
+    // rather than the account's own.
+    this.warming = (async () => {
+      await this.checkSignInState().catch(() => {});
+      await this.learnAccountModels().catch(() => {});
+    })();
 
     this.pushTranscript();
     const status = this.statusPayload();
@@ -596,6 +621,9 @@ export class Engine {
           const was = cfg.planType;
           saveConfig({ planType: plan });
           this.config = loadConfig();
+          // The prompt says different things to a rationed plan (a reply
+          // size to stay under), and it was seeded before the plan was known.
+          this.seedSystemPrompt();
           if (was) {
             logger.warn("engine", "the stored plan was out of date", {
               was,
@@ -633,7 +661,18 @@ export class Engine {
     // Refreshing is the once-per-machine half. Deciding the default is not:
     // it depends on the plan, and the plan can change under an account that
     // has known its models for months.
-    if (!cfg.discoveredModels?.length) {
+    //
+    // Also refreshed once when the stored list is from before the list
+    // carried each model's context window, and whenever the plan has
+    // changed: the list is the account's, not the model's — `gpt-5-6` is
+    // Luna with 34,834 tokens on a Free account and Sol on a paid one — so
+    // a list learned on one plan sizes the other's budget wrongly.
+    const listed = loadConfig().discoveredModels ?? [];
+    const stale =
+      listed.length === 0 ||
+      !listed.some((m) => typeof m.maxTokens === "number") ||
+      (cfg.planType !== undefined && loadConfig().planType !== cfg.planType);
+    if (stale) {
       try {
         await this.refreshModels();
       } catch (e) {
@@ -989,6 +1028,8 @@ export class Engine {
       tools: registry.list,
       context: this.context,
       approvalMode: this.approvalMode,
+      // ChatGPT's plans only: the browser-driven services have none.
+      replyLimitChars: isBrowserProvider() ? undefined : replyLimitFor(loadConfig().planType),
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
       // The prompt says different things to different services: only
       // ChatGPT has drawings OnFlip can carry into the folder, and only
@@ -1315,6 +1356,7 @@ export class Engine {
         saveConfig({
           allowedCommands: [...this.policy.allowedCommands],
           allowedWriteDirs: [...this.policy.allowedWriteDirs],
+          allowedBrowserOrigins: [...(this.policy.allowedOrigins ?? [])],
         });
       }
       return { allow: true };
@@ -1356,6 +1398,13 @@ export class Engine {
       if (!dir) return undefined;
       const rel = path.relative(this.cwd, dir).replace(/\\/g, "/") || ".";
       return `Always allow writes in ${rel}`;
+    }
+    // Only this machine's own pages are remembered (`loopbackOrigin`): a
+    // site on the internet keeps asking, so offering "always" there would
+    // be a promise the next click breaks.
+    if (req.kind === "network") {
+      const origin = loopbackOrigin(req.origin);
+      return origin ? `Always allow the browser on ${origin.replace(/^https?:\/\//, "")}` : undefined;
     }
     return undefined;
   }
@@ -1440,6 +1489,8 @@ export class Engine {
   send(text: string, attachments?: string[], origin?: "telegram"): { queued: boolean } {
     if (!this.connected) throw new Error("The engine is still connecting — try again in a moment.");
     this.autoResumes = 0;
+    // The person has taken over; what they sent decides what happens next.
+    this.cancelCooldownResume();
     // A switch waiting on the browser holds sends the way a turn does: see
     // `holdingSends`.
     if (this.busy || this.switching) {
@@ -1500,6 +1551,54 @@ export class Engine {
    * Every attempt says so in the transcript, so a run that healed itself
    * overnight can still be read back afterwards.
    */
+  /** The resume waiting for a cooldown to pass, if one is. */
+  private cooldownResume: ReturnType<typeof setTimeout> | null = null;
+
+  private cancelCooldownResume(): void {
+    if (this.cooldownResume) clearTimeout(this.cooldownResume);
+    this.cooldownResume = null;
+  }
+
+  /**
+   * Carry on by itself once a throttle has passed.
+   *
+   * A 429 ends the turn with a cooldown that outlives the process, and what a
+   * person then does is wait it out and type "continue" — so that is all this
+   * does, once, when the wait is over. Reported from a Free account as the
+   * app "making 429 cooldowns": the pause is ChatGPT's and has to be taken,
+   * but it need not also be the end of the work. Never before the cooldown
+   * ends — sending into a throttle is what deepens it — only with automatic
+   * resume on, and not if anything has happened since: a message sent, a
+   * session switched, a stop pressed.
+   */
+  private resumeAfterCooldown(): void {
+    if (loadConfig().autoResume === false) return;
+    const wait = cooldownRemainingMs();
+    if (wait <= 0) return;
+    this.cancelCooldownResume();
+    const sessionId = this.session?.id;
+    const length = this.history.length;
+    this.notice(`OnFlip will carry on by itself when the pause ends, in ${describeWait(wait)}. Stop cancels that.`);
+    const timer = setTimeout(() => {
+      this.cooldownResume = null;
+      if (this.busy || this.switching || this.queue.length > 0) return;
+      if (this.session?.id !== sessionId || this.history.length !== length) return;
+      // Extended in the meantime, by this app in another window or by a
+      // restart that read the same stored cooldown: wait again.
+      if (cooldownRemainingMs() > 0) {
+        this.resumeAfterCooldown();
+        return;
+      }
+      if (this.autoResumes >= MAX_AUTO_RESUMES) return;
+      this.autoResumes += 1;
+      logger.info("session", "resuming after a cooldown", { attempt: this.autoResumes });
+      this.notice("The ChatGPT pause is over — carrying on.");
+      void this.runOneTurn(RESUME_PROMPT, undefined, undefined);
+    }, wait + 2_000);
+    timer.unref?.();
+    this.cooldownResume = timer;
+  }
+
   private queueAutoResume(reason: string): void {
     if (loadConfig().autoResume === false) return;
     if (cooldownRemainingMs() > 0) return;
@@ -1542,7 +1641,9 @@ export class Engine {
 
   interrupt(): void {
     // A resume OnFlip queued for itself is not something the user asked for.
-    // Stop means stop: it goes, along with the turn it was going to follow.
+    // Stop means stop: it goes, along with the turn it was going to follow —
+    // and so does one still waiting for a cooldown to pass.
+    this.cancelCooldownResume();
     const auto = this.queue.filter((q) => q.auto).length;
     if (auto > 0) this.queue = this.queue.filter((q) => !q.auto);
     this.stallRestart = false;
@@ -1737,6 +1838,7 @@ export class Engine {
     // deliverables even when nothing on disk changed this turn.
     let finalAnswer = "";
     try {
+      await this.awaitWarming();
       // Before anything can open a chat: the project the chat files into.
       await this.ensureOnFlipProject();
       const result = await runTurn(this.history, this.agentOptions());
@@ -1810,6 +1912,7 @@ export class Engine {
       } satisfies ChatItem);
       this.peer.emit("turn", { state: "end", error: message });
       if (resumable) this.queueAutoResume(message);
+      else if (!this.abort.signal.aborted && cooldownRemainingMs() > 0) this.resumeAfterCooldown();
     } finally {
       this.silence.stop();
       this.clearForceStop();
@@ -2782,6 +2885,7 @@ export class Engine {
       commands: [...this.policy.allowedCommands],
       writeDirs: [...this.policy.allowedWriteDirs],
       bashRules: this.policy.bashRules,
+      origins: [...(this.policy.allowedOrigins ?? [])],
     });
   }
 
@@ -2804,7 +2908,14 @@ export class Engine {
     // engine short of ready and every message sits at "sending".
     if (isBrowserProvider()) return allModels();
     const result = await discoverModels(this.auth);
-    cacheModels(result.models.map((m) => ({ slug: m.slug, title: m.title, description: m.description })));
+    cacheModels(
+      result.models.map((m) => ({
+        slug: m.slug,
+        title: m.title,
+        description: m.description,
+        ...(m.maxTokens ? { maxTokens: m.maxTokens } : {}),
+      }))
+    );
     return allModels();
   }
 
@@ -3404,6 +3515,31 @@ export class Engine {
     this.pushStatus();
   }
 
+  /** The start-up checks, until the first turn has waited for them. */
+  private warming: Promise<void> | null = null;
+
+  /**
+   * Let the start-up checks finish before the first turn uses the page.
+   *
+   * Bounded, because a check that hangs must not hold a message for ever:
+   * after the ceiling the turn goes ahead, which is what every turn did
+   * before this existed.
+   */
+  private async awaitWarming(): Promise<void> {
+    const warming = this.warming;
+    if (!warming) return;
+    let timer: NodeJS.Timeout | undefined;
+    const ceiling = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, WARMING_WAIT_MS);
+    });
+    try {
+      await Promise.race([warming, ceiling]);
+    } finally {
+      if (timer) clearTimeout(timer);
+      this.warming = null;
+    }
+  }
+
   /** Set once the project has been verified this run, so later sends are free. */
   private projectEnsured = false;
 
@@ -3417,6 +3553,14 @@ export class Engine {
   private async ensureOnFlipProject(): Promise<void> {
     if (this.projectEnsured) return;
     if (!this.transport || this.transport.name !== "browser") {
+      this.projectEnsured = true;
+      return;
+    }
+    // A Temporary Chat never enters the account's history, so there is
+    // nothing to file and the project is never used — yet a fresh install
+    // still listed the account's projects and created one, two requests
+    // and an "OnFlip" project nobody asked for, before its first message.
+    if (!chatsAreFiled()) {
       this.projectEnsured = true;
       return;
     }
@@ -3604,6 +3748,7 @@ export class Engine {
 
   async shutdown(): Promise<void> {
     this.stopSessionWatch();
+    this.cancelCooldownResume();
     this.abort.abort();
     this.saveNow();
     this.releaseHeldSession();

@@ -9,6 +9,11 @@ export interface SystemPromptOptions {
   tools: ToolDefinition[];
   context: ProjectContext;
   approvalMode: ApprovalMode;
+  /**
+   * The size past which a reply on this account is cut off, when it is
+   * small enough to plan around. Set on the rationed plans.
+   */
+  replyLimitChars?: number;
   shellEnabled: boolean;
   /**
    * Which service is answering.
@@ -291,10 +296,18 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "",
       "1. **Understand what you change — no more.** Find things with `find_symbol`, `grep` (with `context`) and `glob`, not by guessing paths, and read the part you will edit. A follow-up to this session's work goes straight to the lines involved: no re-listing the project, no re-reading whole files. An edit's result shows the changed lines as they now read — do not re-read to check it.",
       "2. **Plan visibly for anything non-trivial — and only for those.** For a task of three or more distinct steps, call `todo_write` first, keep exactly one item `in_progress`, and mark items `completed` as you finish them. A small request — a follow-up tweak, a one-file fix, a wording or styling change — gets no task list at all: find it, change it, `done`. The plan for a two-minute change costs more than the change, and the user is waiting through every step.",
-      "3. **Match the codebase.** Follow the surrounding naming, formatting, error handling and comment density. Check that a library is already a dependency before importing it.",
+      "3. **Match the codebase.** Follow the surrounding naming, formatting, error handling and comment density. Check that a library is already a dependency before importing it. In an empty folder there is nothing to match: a small page, tool or game is plain HTML, CSS and JavaScript that opens straight in a browser — no install, no build step — unless the user asks for a framework.",
       "4. **Prefer `patch` for anything past a one-line change**, `edit` for a single exact replacement, and neither over `write` for an existing file. A unified diff carries its own context and line numbers, so it still applies when the file has moved on under you; `edit` needs a byte-exact copy of a span you may no longer have, and that is the most common way a change fails. Never rewrite a whole file to change a few lines.",
       "5. **Verify your work, at the scale of the change.** Run the project's build, tests or linter through `bash` when they exist, and report failures honestly, with the actual output. But pick the fastest check that would catch the mistake: after a one-file change, that is the affected test or a typecheck, not the full suite; after a cosmetic change, it may be nothing beyond the edit's own result.",
       "6. **Finish the job.** Do not stop halfway and hand back a plan when you were asked for a change. If part of the task is genuinely blocked, complete everything else and say plainly in the `done` summary what you left out and why.",
+      // Measured on a Free account: a reply carrying four whole files was
+      // cut off at 13,336 characters, mid-stylesheet, and the half that
+      // arrived was all that could be used.
+      ...(opts.replyLimitChars
+        ? [
+            `7. **Keep every reply under about ${opts.replyLimitChars.toLocaleString("en-US")} characters.** On this account a longer reply is cut off, and nothing in a cut-off reply runs. Put a large file in several files, or \`write\` its first part and add the rest with \`edit\` in the next reply.`,
+          ]
+        : []),
       "",
       "Do not commit, push, or otherwise publish anything unless the user explicitly asked for it.",
     ].join("\n"),
@@ -785,6 +798,29 @@ export function doneWithOpenTodosNudge(ctx: {
     "",
     "`done` means the whole request is finished. Either continue with the next open item now — emit its tool block — or, if the remaining items are done or no longer needed, mark them completed or cancelled with todo_write and then send done again.",
     "If you send done again with items still open, the turn ends as it is and the user is told which items were left.",
+  ].join("\n");
+}
+
+/**
+ * Sent when `done` arrives while a change this turn tried to make never
+ * landed: the call failed and the file has not been touched since.
+ *
+ * Measured on a Free account: "make the dark squares of the board blue" —
+ * the edit failed with `old_string` not found, the model read the file, ran
+ * the build, and answered "Updated the chessboard dark squares to blue".
+ * Nothing had changed. The user's natural next move is to ask again, which
+ * is the loop they reported; the file's own modification time is what can
+ * tell, and it takes no reading of the model's words.
+ */
+export function unlandedChangeNudge(ctx: { changes: { path: string; reason: string }[] }): string {
+  const lines = ctx.changes.map(({ path, reason }) => `- ${path}: ${reason}`);
+  return [
+    AUTOMATED,
+    `You sent \`done\`, but ${ctx.changes.length === 1 ? "a change" : "changes"} you tried to make this turn never landed — the call failed and the file has not been modified since:`,
+    ...lines,
+    "",
+    "So the file does not contain what your summary describes. Read just the part you need (grep, then read with offset and limit), make the change, and send done once the edit has applied.",
+    "If you send done again without changing it, the turn ends as it is and the user is told the change did not land.",
   ].join("\n");
 }
 

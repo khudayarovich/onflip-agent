@@ -43,3 +43,31 @@ test("a 401 is a stale session and gets its one retry", () => {
 test("a server error is retried", () => {
   assert.equal(verdict(502).kind, "retry");
 });
+
+// --- how long a 429 waits -----------------------------------------------------
+
+const { parseRetryAfter } = require("../dist/chatgpt/browser-client");
+
+test("a 429 waits as long as the server said, not a flat five minutes", () => {
+  const said = (retryAfter) =>
+    classifyFailure(
+      refusedRequestError({ url: "https://chatgpt.com/backend-api/f/conversation", status: 429, retryAfter }).message,
+      "throttled"
+    ).seconds;
+  assert.equal(said(60), 60);
+  assert.equal(said(900), 900);
+  // No figure from the server: the default stands.
+  assert.equal(said(null), 5 * 60);
+  // A figure past an hour is still capped, as before.
+  assert.equal(said(86_400), 3600);
+});
+
+test("Retry-After is read as seconds or as a date", () => {
+  const now = Date.parse("2026-09-25T10:00:00Z");
+  assert.equal(parseRetryAfter("120", now), 120);
+  assert.equal(parseRetryAfter(" 7 ", now), 7);
+  assert.equal(parseRetryAfter("Fri, 25 Sep 2026 10:03:00 GMT", now), 180);
+  // A date already past asks for no wait, not a negative one.
+  assert.equal(parseRetryAfter("Fri, 25 Sep 2026 09:00:00 GMT", now), 0);
+  for (const junk of ["", "soon", undefined, null]) assert.equal(parseRetryAfter(junk, now), null, String(junk));
+});

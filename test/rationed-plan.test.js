@@ -80,8 +80,7 @@ test("a paid plan has nothing to explain", () => {
 // --- the compaction budget follows ------------------------------------------
 
 test("without uploads the composer sets the ceiling", () => {
-  // Free's window is small enough that the plan governs; the point here is
-  // that the no-upload branch is what runs.
+  // The point here is that the no-upload branch is what runs.
   const budget = compactionBudget("free", false);
   assert.ok(budget > 0);
   assert.ok(

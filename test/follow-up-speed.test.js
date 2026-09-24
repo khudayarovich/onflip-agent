@@ -511,3 +511,59 @@ test("the prompt tells the model a done may ride with the final check", () => {
   });
   assert.match(prompt, /It may share a reply with edits or a final build\/test run: the turn ends only if every edit applies and every command exits 0\./);
 });
+
+// --- a done that claims a change which never landed -------------------------
+
+test("done after a failed edit that was never redone is sent back once", async () => {
+  // Live, on a Free account: the edit failed, the model read the file, and
+  // then answered "Updated the chessboard dark squares to blue" with the
+  // file untouched. The reminder names the file; the real edit then lands.
+  const cwd = project({ "styles.css": ".board{display:grid}\n.player{height:68px}\n" });
+  const session = createSessionState();
+  const { sent, transport } = scripted([
+    block("edit", { path: "styles.css", old_string: ".sq.dark{background:#5b655c}", new_string: ".sq.dark{background:#315a78}" }),
+    block("read", { path: "styles.css" }),
+    done("Updated the dark squares to blue."),
+    block("edit", { path: "styles.css", old_string: ".player{height:68px}", new_string: ".player{height:68px}\n.sq.dark{background:#315a78}" }),
+    done("Added a blue rule for the dark squares."),
+  ]);
+  const result = await turn(cwd, session, transport, [said("system", "prompt"), said("user", "make the dark squares blue")]);
+  assert.equal(sent.length, 5);
+  assert.match(sent[3].last.content, /never landed/);
+  assert.match(sent[3].last.content, /styles\.css: `old_string` not found/);
+  assert.equal(result.finalAnswer, "Added a blue rule for the dark squares.");
+  assert.match(fs.readFileSync(path.join(cwd, "styles.css"), "utf8"), /#315a78/);
+});
+
+test("a second done after the reminder ends the turn, and the user is told", async () => {
+  // The model may be right that nothing more can be done; it is asked once,
+  // not held. What the user must not be left with is the belief that it
+  // happened.
+  const cwd = project({ "styles.css": ".board{display:grid}\n" });
+  const session = createSessionState();
+  const notices = [];
+  const { sent, transport } = scripted([
+    block("edit", { path: "styles.css", old_string: ".sq.dark{}", new_string: ".sq.dark{color:blue}" }),
+    done("Updated the dark squares."),
+    done("Updated the dark squares."),
+  ]);
+  const result = await turn(cwd, session, transport, [said("system", "prompt"), said("user", "blue squares")], {
+    events: { onNotice: (text) => notices.push(text) },
+  });
+  assert.equal(sent.length, 3);
+  assert.equal(result.endedBy, "done");
+  assert.ok(notices.some((n) => /did not land — styles\.css/.test(n)), notices.join("\n"));
+});
+
+test("a failed edit fixed by a later one needs no reminder", async () => {
+  const cwd = project({ "styles.css": ".board{display:grid}\n" });
+  const session = createSessionState();
+  const { sent, transport } = scripted([
+    block("edit", { path: "styles.css", old_string: ".board{ display:grid }", new_string: ".board{display:flex}" }),
+    block("edit", { path: "styles.css", old_string: ".board{display:grid}", new_string: ".board{display:flex}" }),
+    done("Switched the board to flex."),
+  ]);
+  const result = await turn(cwd, session, transport, [said("system", "prompt"), said("user", "flex it")]);
+  assert.equal(sent.length, 3);
+  assert.equal(result.finalAnswer, "Switched the board to flex.");
+});

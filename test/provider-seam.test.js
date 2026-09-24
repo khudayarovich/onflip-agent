@@ -117,3 +117,20 @@ test("queueing on one service does not leave anything for the other", () => {
   use("chatgpt");
   assert.equal(seam.takeComposerWarning(), null, "ChatGPT sees its own channel, not DeepSeek's");
 });
+
+// --- nothing to file into ----------------------------------------------------
+
+test("chats are filed only on ChatGPT, and only when they are not temporary", () => {
+  // A fresh install used to list the account's projects and create an
+  // "OnFlip" one before its first message, although a Temporary Chat — the
+  // default — never enters the account's history and so is never filed.
+  use("deepseek");
+  assert.equal(seam.chatsAreFiled(), false);
+  use("chatgpt");
+  assert.equal(seam.chatsAreFiled(), false, "temporary chats are the default");
+  fs.writeFileSync(
+    path.join(HOME, ".onflip", "config.json"),
+    JSON.stringify({ provider: "chatgpt", temporaryChats: false })
+  );
+  assert.equal(seam.chatsAreFiled(), true);
+});

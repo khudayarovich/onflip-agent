@@ -9,6 +9,7 @@ import {
   protocolCorrection,
   noBlockNudge,
   doneWithOpenTodosNudge,
+  unlandedChangeNudge,
   truncationNudge,
   briefReminder,
   compactInstruction,
@@ -16,6 +17,7 @@ import {
 } from "./system";
 import { logger } from "../log";
 import { pruneToolResults } from "./prune";
+import { ChangeLedger, recordChange, unlanded } from "./landed";
 import { recentWorkingSet, workingSetExcerpts, workingSetHint } from "./working-set";
 import {
   classifyFailure,
@@ -240,6 +242,10 @@ export async function runTurn(
   let totalNudges = 0;
   /** The one reminder a `done` with open task-list items gets. */
   let doneNudged = false;
+  /** File changes this turn that failed and were never made; see `landed.ts`. */
+  const failedChanges: ChangeLedger = new Map();
+  /** The one reminder a `done` gets while one of those is outstanding. */
+  let unlandedNudged = false;
   let truncationNudges = 0;
   /** Tool calls actually executed this turn; gates fabrication detection. */
   let executedCalls = 0;
@@ -497,6 +503,13 @@ export async function runTurn(
         if (!result.error && !result.denied) anyLanded = true;
         if (result.fullRead) fullReadPaths.push(result.fullRead);
         notSettled ??= settledAlone(canonicalName(opts.tools, call.tool), result);
+        recordChange(
+          failedChanges,
+          canonicalName(opts.tools, call.tool),
+          call.arguments,
+          result,
+          opts.cwd ?? process.cwd()
+        );
 
         // Watching a model send the same failing call four times in a row is
         // watching it spend the step budget on a result it has already been
@@ -548,22 +561,43 @@ export async function runTurn(
           `[OnFlip] Another block in that reply could not be read and was NOT run: ${dropped.replace(/\.$/, "")}. Send it again if it is still needed.`
         );
       }
+      // A change that failed earlier in the turn and was never made keeps a
+      // `done` from closing here too, and says so in the same breath — the
+      // one reminder it gets, as for a `done` sent alone.
+      const outstanding =
+        terminal !== null && terminalName(terminal) === "done" && !unlandedNudged ? unlanded(failedChanges) : [];
       const closesNow =
         !dropped &&
         terminal !== null &&
         terminalName(terminal) === "done" &&
         notSettled === null &&
+        outstanding.length === 0 &&
         openTodoCount(opts.session.todos) === 0;
       if (terminal && !closesNow) {
         const name = terminalName(terminal);
-        logger.info("protocol", "closing block ignored beside tool calls", { block: name, why: notSettled });
-        resultBlocks.push(
-          notSettled && notSettled.startsWith("failed:")
-            ? `[OnFlip] The ${name} block in that reply was not taken: ${notSettled.slice("failed:".length).trim()}. ` +
-                `Deal with that result first, and send ${name} once the work really is finished.`
-            : `[OnFlip] The ${name} block in that reply was ignored: it arrived beside tool calls whose results you had not seen. ` +
-                `Read the results above, and when the turn really is over send the ${name} block alone, in its own reply.`
-        );
+        logger.info("protocol", "closing block ignored beside tool calls", {
+          block: name,
+          why: notSettled ?? (outstanding.length ? "a failed change never landed" : null),
+        });
+        if (notSettled === null && outstanding.length > 0) {
+          unlandedNudged = true;
+          totalNudges++;
+          events.onNotice?.(unlandedNotice(outstanding));
+          resultBlocks.push(unlandedChangeNudge({ changes: outstanding }));
+        } else {
+          // Refused because a call beside it failed: when that call was a
+          // file change, the model is being told about exactly this, and a
+          // second reminder on its next `done` would repeat it — an honest
+          // "could not find it" would pay a round trip for the same news.
+          if (notSettled?.startsWith("failed:") && unlanded(failedChanges).length > 0) unlandedNudged = true;
+          resultBlocks.push(
+            notSettled && notSettled.startsWith("failed:")
+              ? `[OnFlip] The ${name} block in that reply was not taken: ${notSettled.slice("failed:".length).trim()}. ` +
+                  `Deal with that result first, and send ${name} once the work really is finished.`
+              : `[OnFlip] The ${name} block in that reply was ignored: it arrived beside tool calls whose results you had not seen. ` +
+                  `Read the results above, and when the turn really is over send the ${name} block alone, in its own reply.`
+          );
+        }
       }
 
       const results = newMessage("user", resultBlocks.join("\n\n"), { toolName: realCalls[0].tool });
@@ -581,6 +615,7 @@ export async function runTurn(
         logger.info("protocol", "done accepted beside calls that all succeeded", {
           calls: realCalls.map((c) => c.tool),
         });
+        warnUnlanded(unlanded(failedChanges), events);
         events.onFinal?.(final, { kind: "done", openTodos: 0 });
         return finish("done", final, iteration);
       }
@@ -664,6 +699,22 @@ export async function runTurn(
           stepLog.push("shaky");
           continue;
         }
+        // A change that failed and was never made: the summary is about to
+        // claim it. Said once, like the open list above; a second `done`
+        // ends the turn and the user is told what did not land.
+        const outstanding = unlanded(failedChanges);
+        if (outstanding.length > 0 && !unlandedNudged && totalNudges < MAX_NUDGES_PER_TURN) {
+          unlandedNudged = true;
+          totalNudges++;
+          logger.info("protocol", "done with a failed change that never landed; nudging", {
+            changes: outstanding.map((c) => c.path),
+          });
+          events.onNotice?.(unlandedNotice(outstanding));
+          history.push(newMessage("user", unlandedChangeNudge({ changes: outstanding })));
+          stepLog.push("shaky");
+          continue;
+        }
+        warnUnlanded(outstanding, events);
         const summary = stringArgument(terminal.arguments.summary);
         const final = composeFinal(pendingProse, text, summary) || "Done.";
         if (open > 0) {
@@ -1095,6 +1146,19 @@ function settledAlone(name: string, result: ToolResult): string | null {
 }
 
 /** The registry's own name for a tool, or the spelling folded without one. */
+/** What the user is told while the model is asked to make a change it claimed. */
+function unlandedNotice(changes: { path: string }[]): string {
+  const names = changes.map((c) => c.path).join(", ");
+  return `ChatGPT said it was done, but its change to ${names} failed and was never made — asking it to make the change.`;
+}
+
+/** Said when a turn ends anyway with a change that never landed. */
+function warnUnlanded(changes: { path: string; reason: string }[], events: AgentEvents): void {
+  if (changes.length === 0) return;
+  const lines = changes.map((c) => `${c.path} (${c.reason})`).join("; ");
+  events.onNotice?.(`Heads up: a change ChatGPT tried to make did not land — ${lines}. The file is as it was.`);
+}
+
 function canonicalName(tools: ToolRegistry, name: string): string {
   return typeof tools.canonical === "function"
     ? tools.canonical(name)

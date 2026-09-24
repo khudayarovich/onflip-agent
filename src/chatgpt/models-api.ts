@@ -21,17 +21,25 @@ export interface RemoteModel {
   description: string;
   /** Tags the backend attaches, e.g. entitlement or capability markers. */
   tags: string[];
+  /**
+   * The context window this account gets on this model, in tokens — the
+   * endpoint's `max_tokens`. Per account, not per model: measured in
+   * September 2026, a Free account reported 34,834 for GPT-5.6 Luna and
+   * 262,144 for its thinking variant.
+   */
+  maxTokens?: number;
 }
 
 const UA =
   "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36";
 
-interface ModelsResponse {
+export interface ModelsResponse {
   models?: {
     slug?: string;
     title?: string;
     description?: string;
     tags?: string[];
+    max_tokens?: unknown;
     // Some responses nest the human-readable bits.
     product_features?: unknown;
   }[];
@@ -42,11 +50,15 @@ interface ModelsResponse {
   }[];
 }
 
-function normalise(raw: ModelsResponse): RemoteModel[] {
+export function normalise(raw: ModelsResponse): RemoteModel[] {
   const out: RemoteModel[] = [];
   for (const m of raw.models ?? []) {
     const slug = typeof m.slug === "string" ? m.slug.trim() : "";
     if (!slug) continue;
+    const maxTokens =
+      typeof m.max_tokens === "number" && Number.isInteger(m.max_tokens) && m.max_tokens > 0
+        ? m.max_tokens
+        : undefined;
     out.push({
       slug,
       title: typeof m.title === "string" && m.title.trim() ? m.title.trim() : slug,
@@ -55,6 +67,7 @@ function normalise(raw: ModelsResponse): RemoteModel[] {
           ? m.description.trim().replace(/\s+/g, " ")
           : "",
       tags: Array.isArray(m.tags) ? m.tags.filter((t): t is string => typeof t === "string") : [],
+      ...(maxTokens ? { maxTokens } : {}),
     });
   }
   return out;

@@ -78,7 +78,7 @@ export interface OnFlipConfig {
    * Authoritative when present, since entitlements differ per plan and slugs
    * change faster than any list shipped in the binary.
    */
-  discoveredModels?: { slug: string; title: string; description: string }[];
+  discoveredModels?: { slug: string; title: string; description: string; maxTokens?: number }[];
   modelsRefreshedAt?: number;
 
   // -- agent behaviour ----------------------------------------------------
@@ -170,6 +170,8 @@ export interface OnFlipConfig {
   // -- persisted approvals ------------------------------------------------
   allowedCommands?: string[];
   allowedWriteDirs?: string[];
+  /** This machine's own origins where the agent's browser acts without asking. */
+  allowedBrowserOrigins?: string[];
   /**
    * Per-command shell rules, e.g. { "*": "ask", "git *": "allow", "rm *": "deny" }.
    * Patterns support * and ?; the last matching rule wins, so a catch-all goes
