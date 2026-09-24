@@ -298,6 +298,25 @@ export function endedMidMessage(
   return state !== "streaming" && visible !== null && visible.status === "in_progress" && !visible.finishType;
 }
 
+/**
+ * Has a reply stream in this browser been seen to finish in the ordinary way?
+ *
+ * `endedMidMessage` trusts the stream to report a message's status, and
+ * that is ChatGPT's wire format to change. Were it ever to stop sending the
+ * final status, every reply would look unfinished and be sent back as cut —
+ * so the rule only applies once this browser has shown it does report one.
+ */
+let sawFinishedStatus = false;
+
+/** Whether a reply's stream says it was cut off; see `endedMidMessage` and `sawFinishedStatus`. */
+export function cutByStream(
+  state: string,
+  visible: { status: string; finishType: string | null } | null,
+  statusesReported: boolean
+): boolean {
+  return visible?.finishType === "max_tokens" || (statusesReported && endedMidMessage(state, visible));
+}
+
 /** The newest reply stream that started after `after`, summarised, or null. */
 function streamView(after: number): StreamView | null {
   const turn = latestStream;
@@ -307,7 +326,7 @@ function streamView(after: number): StreamView | null {
     seq: turn.seq,
     state: turn.state,
     visible,
-    truncated: visible?.finishType === "max_tokens" || endedMidMessage(turn.state, visible),
+    truncated: cutByStream(turn.state, visible, sawFinishedStatus),
     interrupted: visible?.finishType === "interrupted",
     error: turn.error,
     lastFrameAt: turn.lastFrameAt,
@@ -590,6 +609,7 @@ function endStream(turn: StreamTurn, state: "done" | "error"): void {
   turn.state = state;
   turn.endedAt = Date.now();
   const visible = visibleMessage(turn);
+  if (visible?.status === "finished_successfully") sawFinishedStatus = true;
   (endedMidMessage(state, visible) ? logger.warn : logger.info)("browser", "reply stream ended", {
     seq: turn.seq,
     state,

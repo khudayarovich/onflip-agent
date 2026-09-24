@@ -43,3 +43,16 @@ test("the next message waits only while frames are still arriving", () => {
   assert.equal(replyStillStreaming({ state: "done", lastFrameAt: now }, now), false);
   assert.equal(replyStillStreaming(null, now), false);
 });
+
+const { cutByStream } = require("../dist/chatgpt/browser-client");
+
+test("the status rule is only trusted once the stream has shown it reports one", () => {
+  // Were ChatGPT to stop sending a message's final status, every reply would
+  // end "in progress" — and every reply would be sent back as cut.
+  const unfinished = { status: "in_progress", finishType: null };
+  assert.equal(cutByStream("done", unfinished, false), false);
+  assert.equal(cutByStream("done", unfinished, true), true);
+  // ChatGPT's own length marker needs no such proof.
+  assert.equal(cutByStream("done", { status: "finished_successfully", finishType: "max_tokens" }, false), true);
+  assert.equal(cutByStream("done", { status: "finished_successfully", finishType: "stop" }, true), false);
+});

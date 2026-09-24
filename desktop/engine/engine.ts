@@ -565,16 +565,18 @@ export class Engine {
     // is a separate OS window that cannot be embedded, so the panel is fed
     // frames captured after each action.
     setBrowserFrameSink((frame: BrowserFrame) => this.peer.emit("browser-frame", frame));
-    // One after the other, and the first send waits for both (see
-    // `awaitWarming`): all three drive the same page. Left to race, a
-    // Free account's first start read no plan — the plan's navigation
-    // and the first chat's aborted each other — so the session was sized
-    // as an unknown plan and its first chat opened on the built-in model
-    // rather than the account's own.
-    this.warming = (async () => {
+    // One after the other, and on ChatGPT the first send waits for both
+    // (see `awaitWarming`): all three drive the same page. Left to race, a
+    // Free account's first start read no plan — the plan's navigation and
+    // the first chat's aborted each other — so the session was sized as an
+    // unknown plan and its first chat opened on the built-in model rather
+    // than the account's own. DeepSeek and Qwen have no plan or model list
+    // to learn, only a sign-in probe, and are not held for it.
+    const warming = (async () => {
       await this.checkSignInState().catch(() => {});
       await this.learnAccountModels().catch(() => {});
     })();
+    this.warming = isBrowserProvider() ? null : warming;
 
     this.pushTranscript();
     const status = this.statusPayload();
