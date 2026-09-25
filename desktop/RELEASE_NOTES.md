@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.59
+# OnFlip Desktop 0.10.60
 
-**A ChatGPT sign-in holds, and DeepSeek's thinking is no longer mistaken for an error.**
+**ChatGPT replies in long chats are read again, a usage limit is a pause rather than a loop, and the plan follows the account you sign in with.**
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File |
 | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.59.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.59/OnFlip-Setup-0.10.59.exe) |
-| **macOS** · Apple Silicon | [OnFlip-0.10.59-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.59/OnFlip-0.10.59-mac-arm64.dmg) |
-| **macOS** · Intel | [OnFlip-0.10.59-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.59/OnFlip-0.10.59-mac-x64.dmg) |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.60.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.60/OnFlip-Setup-0.10.60.exe) |
+| **macOS** · Apple Silicon | [OnFlip-0.10.60-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.60/OnFlip-0.10.60-mac-arm64.dmg) |
+| **macOS** · Intel | [OnFlip-0.10.60-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.60/OnFlip-0.10.60-mac-x64.dmg) |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside, and the updater checks it for you.
 
@@ -20,24 +20,18 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 **ChatGPT**
 
-- **Signing in once is enough.** After signing in through OnFlip's sign-in window, some people were asked to sign in again as soon as they sent a message, or saw "the sent message never appeared". OnFlip was still reading the ChatGPT login from your everyday browser (Firefox, Safari or Chrome) every time it started, and could write that login — sometimes an old one, sometimes another account — over the one you had just made. After a sign-in through the window, OnFlip now uses only its own browser's session and leaves your other browsers alone. **If ChatGPT kept asking you to sign in, sign in once more after updating** — that sign-in is the one OnFlip keeps.
-- **"Signed out" only when ChatGPT says so.** OnFlip decided you were signed out from how the page looked, and a page can look signed out for a moment on a session that is fine. It now asks ChatGPT itself first, and if the session is fine it reloads the page instead of asking you to sign in.
-- **The sign-in window has the browser to itself.** OnFlip's start-up checks could open its own browser in the middle of a sign-in, on the same profile. They now wait until the sign-in window has closed.
-- **The account shown is the account in use.** The account bar could show the account from your everyday browser rather than the one OnFlip was signed in to.
-
-**DeepSeek and Qwen**
-
-- **The AI's thinking is no longer shown as an error.** With Deep Thinking on, DeepSeek writes its reasoning on the page before its answer, and OnFlip read that text looking for DeepSeek's own warnings such as "rate limit". A code review that mentioned "no rate limit" ended the turn with a red "DeepSeek says: …" error made of the AI's own sentence, and paused sending. OnFlip no longer reads the page for warnings while an answer is being written, and only a short standalone line counts as one. Qwen works the same way and gets the same fix.
-- **DeepSeek's answer is never stopped by accident.** DeepSeek's send button becomes a Stop button while it answers, and OnFlip could press it to re-send a message whose answer had already started. It now checks first.
+- **Replies in long chats are read again.** In a long chat ChatGPT now keeps only the last few messages on the page, and OnFlip sometimes could not see a reply ChatGPT had already finished. It waited a minute and a half, said "The sent message never appeared", and typed the whole conversation again into a new chat — ten times in one afternoon on one account, which is what used up its allowance. OnFlip now takes the reply from ChatGPT's own data when the page does not show it, and checks the page's copy against that data, so an older message is never taken for the new reply.
+- **A usage limit is a pause, not a loop.** When ChatGPT says something like "unavailable until usage resets at 3:42 PM", it also stops accepting messages. OnFlip did not recognise that, so it kept reloading the page and sending the conversation again. It now reads the time the limit lifts and says so. A short wait carries on by itself; a long one leaves the next step to you.
+- **The plan follows the account you sign in with.** After signing in with a different ChatGPT account — a Free account in place of a Pro Lite one, say — OnFlip kept using the previous account's plan and model list. It now reads both again after every sign-in and checks the plan after each reply. On a Free account that means the Free rules apply: replies kept to a size the plan allows, conversations sized for its limits, and no metered Thinking models. Nothing to do after updating: OnFlip checks when it starts.
 
 **Diagnostics**
 
-- **About → Copy diagnostics now shows what ChatGPT's browser saw.** For ChatGPT it picked the wrong log lines, so it could not show why a message failed or whether the page was signed in. If a ChatGPT problem remains, that paste is what finds it.
+- **The log says which model answered, and what ChatGPT did behind the scenes** — running code on its side, for example, which counts against a Free account's "files, images, and data analysis" allowance. If an allowance runs out again, the log shows what used it.
 
-Everything from 0.10.58 is included: Free ChatGPT accounts, DeepSeek and Qwen keep to their rate limits, and a pause is no longer the end of the work.
+Everything from 0.10.59 is included: a ChatGPT sign-in holds, and DeepSeek's thinking is not mistaken for an error.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT, DeepSeek or Qwen account — one, or all three. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.58...desktop-v0.10.59](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.58...desktop-v0.10.59)
+**Full changelog:** [desktop-v0.10.59...desktop-v0.10.60](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.59...desktop-v0.10.60)
