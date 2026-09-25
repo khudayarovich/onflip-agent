@@ -144,7 +144,7 @@ import {
   isPlaceholderTitle,
   snapshotContentsAvailable,
 } from "onflip/dist/agent/store";
-import { openLog, closeLog, logger, logFile, diagnosticLogLines } from "onflip/dist/log";
+import { openLog, closeLog, logger, logFile, diagnosticLogLines, diagnosticScopes } from "onflip/dist/log";
 import {
   isResumableFailure,
   cooldownPassesByItself,
@@ -3140,7 +3140,7 @@ export class Engine {
     const file = logFile();
     if (!file) return [];
     try {
-      return diagnosticLogLines(fs.readFileSync(file, "utf8"), [activeProvider(), "session"], 40);
+      return diagnosticLogLines(fs.readFileSync(file, "utf8"), diagnosticScopes(activeProvider()), 40);
     } catch {
       return [];
     }

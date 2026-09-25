@@ -18,7 +18,7 @@ import {
 } from "./session";
 import { mkdirPrivate } from "../../config";
 import { releaseProfileLock } from "../profile-lock";
-import { linesSince, pageLines } from "../page-news";
+import { linesSince, mayReadNotice, noticeLines, pageLines } from "../page-news";
 
 /**
  * The browser OnFlip drives Qwen with.
@@ -354,15 +354,12 @@ const SERVICE_MESSAGES: { pattern: RegExp; code: FailureCode }[] = [
  */
 export function matchServiceMessage(body: string): { text: string; code: FailureCode } | null {
   if (!body) return null;
+  // Only lines shaped like a notice: a model's reasoning that mentions a
+  // limit is a long sentence, and Qwen's own notices are short.
+  const lines = noticeLines(body);
   for (const rule of SERVICE_MESSAGES) {
-    const hit = rule.pattern.exec(body);
-    if (!hit) continue;
-    const line =
-      body
-        .split(String.fromCharCode(10))
-        .map((l) => l.trim())
-        .find((l) => rule.pattern.test(l)) ?? hit[0];
-    return { text: line, code: rule.code };
+    const line = lines.find((l) => rule.pattern.test(l));
+    if (line) return { text: line, code: rule.code };
   }
   return null;
 }
@@ -497,7 +494,39 @@ export function riskCheckHeld(body: string): boolean {
   return /"sig"\s*:\s*"from bx"|RGV587_ERROR|FAIL_SYS_USER_VALIDATE|_____tmd_____|\/punish\?|被挤爆/.test(body ?? "");
 }
 
+/**
+ * Answer requests open right now, and when the newest began — so the page's
+ * text is not read for a notice while the model is still writing its
+ * reasoning onto it (see `mayReadNotice`).
+ */
+let answersOpen = 0;
+let answerStartedAt = 0;
+
+/** Whether a request is one an answer streams on. */
+function isAnswerRequest(req: { method(): string; url(): string }): boolean {
+  return req.method() === "POST" && ANSWER_PATH.test(req.url());
+}
+
 export function watchApi(ctx: BrowserContext): void {
+  answersOpen = 0;
+  ctx.on("request", (req) => {
+    try {
+      if (!isAnswerRequest(req)) return;
+      answersOpen += 1;
+      answerStartedAt = Date.now();
+    } catch {
+      // A listener that can throw is a listener that can take the turn down.
+    }
+  });
+  const answerEnded = (req: { method(): string; url(): string }) => {
+    try {
+      if (isAnswerRequest(req)) answersOpen = Math.max(0, answersOpen - 1);
+    } catch {
+      // As above.
+    }
+  };
+  ctx.on("requestfinished", answerEnded);
+  ctx.on("requestfailed", answerEnded);
   ctx.on("response", (res) => {
     try {
       const url = res.url();
@@ -564,6 +593,11 @@ export function watchApi(ctx: BrowserContext): void {
 /** For tests: the refusal the watcher last recorded. */
 export function __lastApiFailureForTest(): typeof lastApiFailure {
   return lastApiFailure;
+}
+
+/** The answer-request count `watchApi` keeps, for a test to read. */
+export function __answersOpenForTest(): number {
+  return answersOpen;
 }
 
 /**
@@ -1671,7 +1705,12 @@ export async function sendTurn(
         // Before waiting the window out: is the page already saying why
         // nothing is coming? The login wall is the common one, and it is
         // readable in a second rather than in ninety.
-        if (!last && Date.now() - lastServiceCheck > SERVICE_CHECK_MS) {
+        // Not while the answer's request is open: the thinking panel puts
+        // the model's reasoning on the page first (see `mayReadNotice`).
+        if (
+          mayReadNotice(Boolean(last), answersOpen, answerStartedAt) &&
+          Date.now() - lastServiceCheck > SERVICE_CHECK_MS
+        ) {
           lastServiceCheck = Date.now();
           const said = await serviceMessage(page, pageBefore, text);
           if (said && said.code !== "signed-out") {

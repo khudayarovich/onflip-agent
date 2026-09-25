@@ -14,7 +14,7 @@ import {
 } from "./session";
 import { mkdirPrivate } from "../../config";
 import { releaseProfileLock } from "../profile-lock";
-import { linesSince, pageLines } from "../page-news";
+import { answerStillOpen, linesSince, mayReadNotice, noticeLines, pageLines } from "../page-news";
 
 /**
  * The browser OnFlip drives DeepSeek with.
@@ -136,15 +136,12 @@ const SERVICE_MESSAGES: { pattern: RegExp; code: FailureCode; retryable: boolean
  */
 export function matchServiceMessage(body: string): { text: string; code: FailureCode } | null {
   if (!body) return null;
+  // Only lines shaped like a notice: a model's reasoning that mentions a
+  // rate limit is a long sentence, and DeepSeek's own notices are short.
+  const lines = noticeLines(body);
   for (const rule of SERVICE_MESSAGES) {
-    const hit = rule.pattern.exec(body);
-    if (!hit) continue;
-    const line =
-      body
-        .split(String.fromCharCode(10))
-        .map((l) => l.trim())
-        .find((l) => rule.pattern.test(l)) ?? hit[0];
-    return { text: line, code: rule.code };
+    const line = lines.find((l) => rule.pattern.test(l));
+    if (line) return { text: line, code: rule.code };
   }
   return null;
 }
@@ -416,15 +413,9 @@ export function answerNeverStarted(
   return seen > 0 && startedAt < sentAt && now - sentAt > graceMs;
 }
 
-/**
- * Is DeepSeek still writing an answer, as far as the wire says?
- *
- * Bounded, because a request that never reports its end — a listener that
- * missed the event — must not hold every later send for ever.
- */
-export function answerStillOpen(open: number, startedAt: number, now = Date.now(), ceiling = 10 * 60_000): boolean {
-  return open > 0 && now - startedAt < ceiling;
-}
+// Shared with Qwen's driver, which reads its notices the same way; still
+// exported from here, where its callers and tests have always found it.
+export { answerStillOpen };
 
 /**
  * Has an answer whose text has held still for `stillMs` really ended?
@@ -447,7 +438,11 @@ export function answerSettled(open: number, startedAt: number, stillMs: number, 
  * The page's own notice is read before pressing again, because a refusal
  * that says why — a rate limit — must not be answered with a second send.
  */
-async function confirmSent(page: Page, explain: () => Promise<DeepSeekError | null>): Promise<void> {
+export async function confirmSent(
+  page: Page,
+  explain: () => Promise<DeepSeekError | null>,
+  landed: () => boolean
+): Promise<void> {
   const empty = `(() => { const el = document.querySelector(${JSON.stringify(COMPOSER)}); return !el || el.value.length === 0; })()`;
   const sent = async (ms: number): Promise<boolean> =>
     page
@@ -458,10 +453,15 @@ async function confirmSent(page: Page, explain: () => Promise<DeepSeekError | nu
       })
       .catch(() => false);
   if (await sent(2_000)) return;
+  // An answer already on its way is proof the message was taken, whatever
+  // the composer shows — and the one control here is send and stop at
+  // once, so pressing it now would stop that answer.
+  if (landed()) return;
   // A page that refused the message may say why — a rate limit is the one
   // that matters, since a resend is exactly what deepens it.
   const why = await explain();
   if (why) throw why;
+  if (landed()) return;
   logger.warn("deepseek", "Enter did not send the turn; pressing the send button");
   await page.click(STOP_BUTTON, { timeout: 3_000 }).catch(() => {});
   if (await sent(3_000)) return;
@@ -945,10 +945,14 @@ export async function sendTurn(
   await page.waitForTimeout(300);
   await page.keyboard.press("Enter");
   const sentAt = Date.now();
-  await confirmSent(page, async () => {
-    const said = await serviceMessage(page, pageBefore, text);
-    return said ? serviceError(said) : null;
-  });
+  await confirmSent(
+    page,
+    async () => {
+      const said = await serviceMessage(page, pageBefore, text);
+      return said ? serviceError(said) : null;
+    },
+    () => answerStartedAt >= sentAt
+  );
 
   const deadline = Date.now() + (opts.timeoutMs ?? 10 * 60_000);
   /** When the reply's text last changed, as opposed to when it last differed from before the send. */
@@ -978,7 +982,12 @@ export async function sendTurn(
         // nothing is coming? Checked on a slow timer rather than every
         // poll - reading the whole body three times a second to catch a
         // sentence that persists would cost more than it saves.
-        if (!last && Date.now() - lastServiceCheck > SERVICE_CHECK_MS) {
+        // Not while the answer's request is open: DeepThink writes the
+        // model's reasoning onto the page first (see `mayReadNotice`).
+        if (
+          mayReadNotice(Boolean(last), answersOpen, answerStartedAt) &&
+          Date.now() - lastServiceCheck > SERVICE_CHECK_MS
+        ) {
           lastServiceCheck = Date.now();
           const said = await serviceMessage(page, pageBefore, text);
           if (said) throw serviceError(said);

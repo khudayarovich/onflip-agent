@@ -114,3 +114,36 @@ test("it is a tail, not the whole log", () => {
   assert.equal(out.length, 40);
   assert.match(out[out.length - 1], /line 199/);
 });
+
+test("a ChatGPT paste carries its driver's lines, which it logs as the browser", () => {
+  // Asked for "chatgpt", a ChatGPT user's paste found almost nothing: the
+  // driver logs as `browser`, and those lines say why a send failed.
+  const { diagnosticScopes } = require("../dist/log");
+  const chatgpt = diagnosticScopes("chatgpt");
+  assert.ok(chatgpt.includes("browser") && chatgpt.includes("session"), chatgpt.join(","));
+  assert.ok(diagnosticScopes("qwen").includes("qwen"));
+  const line = JSON.stringify({
+    at: "2026-09-25T06:00:00.000Z",
+    level: "warn",
+    scope: "browser",
+    msg: "send never appeared — page state",
+    data: { url: "https://chatgpt.com/", matches: { composer: 1, history: 0, userTurn: 0 }, text: "Chat titles and other private text" },
+  });
+  const out = diagnosticLogLines(line, chatgpt).join("\n");
+  assert.match(out, /send never appeared/);
+  assert.match(out, /matches=\{"composer":1,"history":0,"userTurn":0\}/);
+  assert.ok(!/private text/.test(out));
+});
+
+test("an allowed name cannot carry text inside an object", () => {
+  const line = JSON.stringify({
+    at: "2026-09-25T06:00:00.000Z",
+    level: "info",
+    scope: "browser",
+    msg: "putting the stored session into the profile",
+    data: { why: "the profile has no session of its own", matches: { note: "my password is hunter2" } },
+  });
+  const out = diagnosticLogLines(line, ["browser"]).join("\n");
+  assert.match(out, /why=the profile has no session of its own/);
+  assert.ok(!/hunter2/.test(out));
+});

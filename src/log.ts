@@ -187,7 +187,45 @@ const DIAGNOSTIC_FIELDS = [
   "generating",
   "replyChars",
   "channel",
+  // OnFlip's own reason for a decision — whether a session was put into the
+  // browser profile, for one — never anything a person or a page wrote.
+  "why",
+  // A page census: how many of each thing OnFlip drives were on the page
+  // when a send failed. Counts only (see `diagnosticValue`), and the one
+  // fact that tells a signed-out page from a changed one.
+  "matches",
 ] as const;
+
+/**
+ * A field's value as one short line, or null when it has none worth keeping.
+ *
+ * An object is kept only when every value in it is a number or a flag — a
+ * page census — because an allowed name must not become a way for text to
+ * ride along inside an object.
+ */
+function diagnosticValue(value: unknown): string | null {
+  if (value === undefined || value === null || value === "") return null;
+  if (typeof value === "object") {
+    const values = Object.values(value as Record<string, unknown>);
+    if (!values.every((v) => typeof v === "number" || typeof v === "boolean")) return null;
+    return JSON.stringify(value).slice(0, 200);
+  }
+  // One line each. A stack trace pasted into a chat helps nobody.
+  return String(value).split(String.fromCharCode(10))[0].slice(0, 120);
+}
+
+/**
+ * The log scopes where a service's driver says what it saw.
+ *
+ * DeepSeek's and Qwen's drivers log under their own names; ChatGPT's logs as
+ * `browser`. Asking for "chatgpt" found almost nothing, so a ChatGPT user's
+ * diagnostics paste had none of the lines that say why a send failed or
+ * whether the page was signed in — the first thing needed when a sign-in
+ * did not hold. The cooldowns are logged under `transport` for all three.
+ */
+export function diagnosticScopes(provider: string): string[] {
+  return provider === "chatgpt" ? ["browser", "transport", "session"] : [provider, "transport", "session"];
+}
 
 /**
  * The tail of a log, as lines safe to paste.
@@ -220,10 +258,8 @@ export function diagnosticLogLines(
     const data = entry.data;
     if (data && typeof data === "object") {
       for (const key of DIAGNOSTIC_FIELDS) {
-        const value = (data as Record<string, unknown>)[key];
-        if (value === undefined || value === null || value === "") continue;
-        // One line each. A stack trace pasted into a chat helps nobody.
-        bits.push(`${key}=${String(value).split(String.fromCharCode(10))[0].slice(0, 120)}`);
+        const value = diagnosticValue((data as Record<string, unknown>)[key]);
+        if (value !== null) bits.push(`${key}=${value}`);
       }
     }
     const at = typeof entry.at === "string" ? entry.at.slice(11, 19) : "--:--:--";
