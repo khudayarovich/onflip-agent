@@ -87,7 +87,7 @@ export interface SendOptions {
  */
 export interface ReplyMeta {
   /** Which completion rule accepted the reply. */
-  acceptedVia?: "stream" | "send-button" | "stop-gone" | "text-settled" | "deadline";
+  acceptedVia?: "stream" | "stream-text" | "send-button" | "stop-gone" | "text-settled" | "deadline";
   /** ChatGPT reported the reply stopped at its length limit. */
   truncated?: boolean;
   /** The page still showed a stop control when the text was accepted. */

@@ -27,7 +27,7 @@ import {
   TOAST_QUERY,
   joined,
 } from "./selectors";
-import { paceNewChat, parseRetryAfter } from "./backoff";
+import { paceNewChat, parseRetryAfter, secondsUntilClock, statedWaitSeconds } from "./backoff";
 import { logger, shapeOf } from "../log";
 
 /**
@@ -191,6 +191,11 @@ interface StreamMessage {
   endTurn: boolean | null;
   finishType: string | null;
   textLen: number;
+  /**
+   * The message's own text, as the server wrote it. Kept for the one case the
+   * page cannot answer — see `streamReplyText`.
+   */
+  text: string;
 }
 
 interface StreamTurn {
@@ -302,6 +307,77 @@ export function cutByStream(
   statusesReported: boolean
 ): boolean {
   return visible?.finishType === "max_tokens" || (statusesReported && endedMidMessage(state, visible));
+}
+
+/**
+ * The reply as the stream carried it, once it is safe to believe it over the
+ * page — or null.
+ *
+ * The page's copy is the one normally used. But ChatGPT now keeps only the
+ * last few turns of a long chat on the page, so their count stops rising, and
+ * its stop control no longer matches: live, ten replies in one session
+ * finished on the wire — `finished_successfully`, 52 to 4,430 characters,
+ * within ten seconds of the send — and none was read off the page. Each
+ * became "the sent message never appeared" ninety seconds later, a dropped
+ * chat and a replay of the whole transcript, forty to sixty thousand
+ * characters at a time, until the account's allowance ran out. The server's
+ * own copy is the model's markdown exactly as written, so once the stream has
+ * finished and the page has had a few seconds to show it, it is the reply.
+ */
+export function streamReplyText(
+  view: Pick<StreamView, "state" | "visible" | "endedAt"> | null,
+  now = Date.now(),
+  graceMs = 4_000
+): string | null {
+  if (!view || view.state !== "done" || view.endedAt === null) return null;
+  const visible = view.visible;
+  if (!visible || visible.status !== "finished_successfully") return null;
+  if (now - view.endedAt < graceMs) return null;
+  const text = visible.text.trim();
+  return text ? text : null;
+}
+
+/** Stand a finished (or live) reply stream up for a test that has no browser to watch. */
+export function __setStreamForTest(
+  turn: {
+    state: StreamTurn["state"];
+    text: string;
+    status?: string;
+    startedAt?: number;
+    lastFrameAt?: number;
+    endedAt?: number | null;
+  } | null
+): number {
+  if (!turn) {
+    latestStream = null;
+    return streamSeqCounter;
+  }
+  const message: StreamMessage = {
+    id: "test",
+    role: "assistant",
+    recipient: "all",
+    contentType: "text",
+    hidden: false,
+    status: turn.status ?? "finished_successfully",
+    endTurn: true,
+    finishType: "stop",
+    textLen: turn.text.length,
+    text: turn.text,
+  };
+  latestStream = {
+    seq: ++streamSeqCounter,
+    state: turn.state,
+    messages: new Map([[message.id, message]]),
+    current: message,
+    lastPath: "",
+    error: null,
+    startedAt: turn.startedAt ?? Date.now(),
+    lastFrameAt: turn.lastFrameAt ?? Date.now(),
+    endedAt: turn.endedAt === undefined ? Date.now() : turn.endedAt,
+    decoder: new StringDecoder("utf8"),
+    buffer: "",
+  };
+  return latestStream.seq;
 }
 
 /** The newest reply stream that started after `after`, summarised, or null. */
@@ -449,6 +525,26 @@ async function attachStreamWatch(p: Page, ctx: BrowserContext): Promise<void> {
 }
 
 /** Base64 chunk in, SSE frames out; each complete frame is applied at once. */
+/** Run server-sent frames through the parser, for a test with no browser; the visible reply as it reads. */
+export function __parseStreamForTest(sse: string): { text: string; textLen: number; status: string } | null {
+  const turn: StreamTurn = {
+    seq: 0,
+    state: "streaming",
+    messages: new Map(),
+    current: null,
+    lastPath: "",
+    error: null,
+    startedAt: 0,
+    lastFrameAt: 0,
+    endedAt: null,
+    decoder: new StringDecoder("utf8"),
+    buffer: "",
+  };
+  feedStream(turn, Buffer.from(sse, "utf8").toString("base64"));
+  const visible = visibleMessage(turn);
+  return visible ? { text: visible.text, textLen: visible.textLen, status: visible.status } : null;
+}
+
 function feedStream(turn: StreamTurn, base64: string): void {
   try {
     turn.buffer += turn.decoder.write(Buffer.from(base64, "base64"));
@@ -526,12 +622,16 @@ function applyStreamOp(turn: StreamTurn, op: Record<string, unknown>): void {
   if (!m) return;
 
   if (/^\/message\/content\/parts\/\d+$/.test(path)) {
-    if (typeof v === "string") m.textLen = o === "replace" ? v.length : m.textLen + v.length;
+    if (typeof v === "string") {
+      m.text = o === "replace" ? v : m.text + v;
+      m.textLen = m.text.length;
+    }
     return;
   }
   if (path === "/message/content" && envelope) {
     const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
-    m.textLen = parts.filter((x): x is string => typeof x === "string").join("").length;
+    m.text = parts.filter((x): x is string => typeof x === "string").join("");
+    m.textLen = m.text.length;
     const contentType = asString(envelope.content_type);
     if (contentType) m.contentType = contentType;
     return;
@@ -576,6 +676,7 @@ function registerMessage(turn: StreamTurn, message: Record<string, unknown>): vo
   const parts = Array.isArray(content.parts) ? content.parts : [];
   const metadata = asRecord(message.metadata) ?? {};
   const finish = asRecord(metadata.finish_details);
+  const text = parts.filter((x): x is string => typeof x === "string").join("");
   const m: StreamMessage = {
     id,
     role: asString(author?.role),
@@ -585,7 +686,8 @@ function registerMessage(turn: StreamTurn, message: Record<string, unknown>): vo
     status: asString(message.status, "in_progress"),
     endTurn: typeof message.end_turn === "boolean" ? message.end_turn : null,
     finishType: finish ? asString(finish.type) || null : null,
-    textLen: parts.filter((x): x is string => typeof x === "string").join("").length,
+    textLen: text.length,
+    text,
   };
   turn.messages.set(id, m);
   turn.current = m;
@@ -2831,6 +2933,18 @@ async function submitMessage(
   // requests. Measured: one throttled send became four new chats and a
   // dozen reloads in three minutes, and the account was told to wait.
   const refuseIfThrottled = async (): Promise<void> => {
+    // The account's allowance, with the time it comes back: a pause the page
+    // states, not a composer to reload (see `usageLimit`).
+    const limit = usageLimit((await p.evaluate(PAGE_NOTICE_TEXT).catch(() => "")) as string);
+    if (limit) {
+      const seconds = limit.seconds ?? statedWaitSeconds(limit.notice) ?? 30 * 60;
+      logger.warn("browser", "chatgpt says this account's usage has run out", { notice: limit.notice, seconds });
+      throw new ChatGPTBrowserError(
+        `ChatGPT has paused this account until its usage resets — the page says "${limit.notice}" (retry-after ${seconds}). ` +
+          "Nothing can be sent until then, and sending again only repeats the refusal.",
+        "throttled"
+      );
+    }
     const throttle = await throttleNotice(p);
     if (!throttle) return;
     logger.warn("browser", "chatgpt is throttling this account", { notice: throttle });
@@ -2927,6 +3041,31 @@ export const PAGE_NOTICE_TEXT = `(() => {
   const body = copy ? (copy.innerText || copy.textContent || "").slice(0, 6000) : "";
   return alerts.join("\\n") + "\\n" + body;
 })()`;
+
+/**
+ * ChatGPT's notice that an account has used its allowance until a stated
+ * time. Live, on a Free account: "Files, images, and data analysis are
+ * unavailable until usage resets at 3:42 PM. Continue chatting with text only,
+ * or upgrade for more access." — and under it the send control stayed
+ * disabled for plain text too, in every chat, new or not. OnFlip read that as
+ * a composer stumble: a reload, a fresh chat and the whole transcript typed
+ * again, every forty-five seconds for as long as it lasted. Consulted only
+ * once a send has been refused, so a notice that merely limits files never
+ * stops a message that would have gone through.
+ */
+export const USAGE_LIMIT_NOTICE = /until (?:your )?(?:usage|limits?) resets?/i;
+
+/** The notice, trimmed, and the seconds until the time it names — or null. Pure, for tests. */
+export function usageLimit(text: string, now: Date = new Date()): { notice: string; seconds: number | null } | null {
+  const match = USAGE_LIMIT_NOTICE.exec(text || "");
+  if (!match) return null;
+  const at = match.index ?? 0;
+  const notice = text
+    .slice(Math.max(0, at - 90), at + 130)
+    .replace(/\s+/g, " ")
+    .trim();
+  return { notice, seconds: secondsUntilClock(text.slice(at, at + 80), now) };
+}
 
 async function throttleNotice(p: Page): Promise<string | null> {
   if (lastThrottle && Date.now() - lastThrottle.at < 90_000) {
@@ -3693,6 +3832,23 @@ export async function waitForReply(
       notGeneratingPolls++;
     }
 
+    // A reply stream that began after this send is ChatGPT answering it:
+    // proof that the send landed and that generation happened, whatever the
+    // page's counts and controls say. Both had stopped saying it — ChatGPT
+    // keeps only the last few turns of a long chat on the page, so the user
+    // turn count stops rising, and its stop control no longer matches (seen
+    // in none of 135 sends in one session). See `streamReplyText`.
+    const answering = streamView(streamSeqBefore);
+    if (answering) {
+      hookSeen = true;
+      sawGeneration = true;
+      if (!sendLanded) {
+        sendLanded = true;
+        lastSignAt = now;
+      }
+      if (answering.state === "streaming") lastSignAt = now;
+    }
+
     let turns: { count: number; last: string };
     try {
       turns = await assistantTurnsCached(p, turnsCache);
@@ -3703,10 +3859,26 @@ export async function waitForReply(
     let candidate = text;
     if (turns.count > before) {
       candidate = turns.last;
-    } else if (turns.count === before && before > 0 && sawGeneration && turns.last !== opts?.lastBefore) {
-      // Some layouts reuse the last node rather than appending one — but
-      // only what has changed in it is this reply: see `lastBefore`.
+    } else if (before > 0 && sawGeneration && turns.last && turns.last !== opts?.lastBefore) {
+      // Some layouts reuse the last node rather than appending one, and a
+      // long chat keeps only its last few turns on the page, so the count
+      // holds — or drops — while a new reply arrives. Either way only what
+      // has changed in the newest node is this reply: see `lastBefore`.
       candidate = turns.last;
+    }
+
+    // The page has had its chance: the stream finished with the reply a few
+    // seconds ago and the page still shows nothing new (`streamReplyText`).
+    if (!candidate || candidate === opts?.lastBefore) {
+      const fromStream = streamReplyText(streamView(streamSeqBefore), now);
+      if (fromStream) {
+        logger.info("browser", "reply taken from the stream; the page did not show it", {
+          chars: fromStream.length,
+          assistantNodes: turns.count,
+        });
+        text = fromStream;
+        return accept("stream-text", generating);
+      }
     }
 
     // The page showing us our own message is not the model answering it.

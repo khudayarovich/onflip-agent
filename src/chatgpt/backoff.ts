@@ -251,6 +251,32 @@ export function isThrottle(message: string, code?: FailureCode): boolean {
   return /HTTP 429|too many requests|rate.?limit/i.test(message || "") && !/unusual activity/i.test(message || "");
 }
 
+/**
+ * Seconds until a clock time the service names — "until usage resets at
+ * 3:42 PM" — or null when it names none.
+ *
+ * ChatGPT states a usage limit's end as a time of day rather than a length,
+ * and in the page's local time, which is this machine's: the page runs here.
+ * A time already past today is tomorrow's.
+ */
+export function secondsUntilClock(text: string, now: Date = new Date()): number | null {
+  const m = /(?:at|after|until)\s+(\d{1,2}):(\d{2})\s*([AaPp]\.?\s?[Mm]\.?)?/.exec(text || "");
+  if (!m) return null;
+  let hours = Number(m[1]);
+  const minutes = Number(m[2]);
+  if (minutes > 59 || hours > 23) return null;
+  const meridiem = m[3]?.replace(/[^apAP]/g, "").toLowerCase();
+  if (meridiem) {
+    if (hours < 1 || hours > 12) return null;
+    if (meridiem === "p" && hours !== 12) hours += 12;
+    if (meridiem === "a" && hours === 12) hours = 0;
+  }
+  const target = new Date(now.getTime());
+  target.setHours(hours, minutes, 0, 0);
+  if (target.getTime() <= now.getTime()) target.setDate(target.getDate() + 1);
+  return Math.ceil((target.getTime() - now.getTime()) / 1000);
+}
+
 /** `assertNotCoolingDown`'s refusal, whichever service it names. */
 const COOLING_DOWN = /Waiting out an? .{1,24} cooldown/i;
 
