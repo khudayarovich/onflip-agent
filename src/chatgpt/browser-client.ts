@@ -351,9 +351,21 @@ export function streamReplyText(
  * not, and a page still drawing a reply has its beginning but not its end.
  * Below a dozen characters an opening proves nothing, so only the whole text
  * will do.
+ *
+ * A fence line counts by its language alone. The page shows a fence's info
+ * string as a header label with only the language on it, and the models
+ * write more there: live on 0.10.60, eleven replies in one session opened
+ * ```onflip id="k2m8qa", the page read ```onflip, and every one was called a
+ * different message and swapped for the stream's copy: the same reply, and a
+ * warning in the log that meant nothing.
  */
 export function sameReplyText(page: string, stream: string): boolean {
-  const squash = (t: string) => t.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const squash = (t: string) =>
+    t
+      .replace(/^([ \t]*`{3,}[ \t]*)([^\s`]+)[^\n]*$/gm, "$1$2")
+      .normalize("NFKC")
+      .toLowerCase()
+      .replace(/[^\p{L}\p{N}]+/gu, "");
   const a = squash(page);
   const b = squash(stream);
   if (Math.min(a.length, b.length) < 12) return a === b;

@@ -176,6 +176,15 @@ test("the page's copy and the stream's are the same reply whatever the markup", 
   // Too short for an opening to prove anything: only the whole text will do.
   assert.ok(browser.sameReplyText("Done.", "done"));
   assert.equal(browser.sameReplyText("OK", "OK, here is the file you asked for, in full."), false);
+  // A fence's info string past the language never reaches the page: live, the
+  // stream said ```onflip id="k2m8qa" where the page said ```onflip.
+  const block = "tool: read\npath: src/app.ts\n```";
+  assert.ok(browser.sameReplyText("```onflip\n" + block, '```onflip id="k2m8qa"\n' + block));
+  // An id anywhere else is still words, and different words still differ.
+  assert.equal(
+    browser.sameReplyText('Run it with id="k2m8qa" set, then read it back.', "Run it with the defaults, then read it back."),
+    false
+  );
 });
 
 test("the stream names the model that answered and what else the reply carried", () => {
