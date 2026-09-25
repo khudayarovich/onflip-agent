@@ -53,7 +53,9 @@ export const TERMINAL_TOOLS: ToolDefinition[] = [
   },
   {
     name: "ask_user",
-    description: 'End the turn with a question only the user can answer — see "Ending a turn". Never to ask permission for a tool call.',
+    // "Never to ask permission" is said under "Ending a turn" and again under
+    // "Approvals"; the prompt is at its ceiling, and a third copy bought nothing.
+    description: 'End the turn with a question only the user can answer — see "Ending a turn".',
     parameters: {
       type: "object",
       properties: {
@@ -64,7 +66,9 @@ export const TERMINAL_TOOLS: ToolDefinition[] = [
         options: {
           type: "array",
           items: { type: "string" },
-          description: "Optional answers to choose from, one per item.",
+          // The user clicks these in the window and on Telegram, so their
+          // shape is a picker's: see `parseChoices`.
+          description: 'Answers to click, one per item — see "Ending a turn".',
         },
       },
       required: ["question"],

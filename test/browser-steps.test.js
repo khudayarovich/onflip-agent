@@ -38,6 +38,15 @@ let failOn = null;
 
 const fakePage = {
   closed: false,
+  /** The page's own events — `pageerror` and `console` — by name. */
+  handlers: {},
+  on(event, fn) {
+    (this.handlers[event] ??= []).push(fn);
+    return this;
+  },
+  emit(event, value) {
+    for (const fn of this.handlers[event] ?? []) fn(value);
+  },
   isClosed() {
     return this.closed;
   },
@@ -75,8 +84,17 @@ const fakePage = {
   },
   async waitForLoadState() {},
   async waitForTimeout() {},
-  async goto() {},
+  async goto() {
+    onGoto?.();
+  },
+  mainFrame() {
+    return mainFrame;
+  },
 };
+/** The page's main frame, for `framenavigated`. */
+const mainFrame = { name: "main" };
+/** What happens between a navigation starting and ending; a test sets it. */
+let onGoto = null;
 const fakeContext = {
   pages: () => [fakePage],
   async newPage() {
@@ -142,6 +160,11 @@ test.after(() => closeAutomationBrowser());
 test("the stub is what the tool got", async () => {
   await onSignup();
   assert.equal(fakePage.closed, false);
+  // The page is watched from its first open — and that open succeeded: a
+  // listener that could not be attached used to fail it silently, and every
+  // later call went through on the page it had left behind.
+  assert.equal(fakePage.handlers.pageerror?.length, 1);
+  assert.equal(fakePage.handlers.console?.length, 1);
 });
 
 // ---------------------------------------------------------------------------
@@ -389,6 +412,104 @@ test("and the snapshot the model reads says the field is filled without saying w
   assert.equal(shot.elements[0].value, "••••••••");
   const empty = runSnapshot([{ type: "password", value: "", attrs: { "aria-label": "Password" } }]);
   assert.equal(empty.elements[0].value, "", "an empty field still reads as empty");
+});
+
+// ---------------------------------------------------------------------------
+// the page's console, for a page the agent built
+// ---------------------------------------------------------------------------
+
+/** A page on this machine's own server, the kind the agent builds and checks. */
+const devPage = () => ({
+  url: "http://localhost:5173/",
+  title: "Chess",
+  elements: [{ ref: "ref_1", role: "button", name: "New game" }],
+  hidden: 0,
+  text: "Chess",
+});
+const consoleError = (text, url, line, column) => ({
+  type: () => "error",
+  text: () => text,
+  location: () => ({ url, line, column, lineNumber: line, columnNumber: column }),
+});
+const thrown = (message, stack) => Object.assign(new TypeError(message), { stack });
+
+test("a page of this machine's own reports what it threw, where, and how often", async () => {
+  shot = devPage();
+  await reg.run("browser_open", { url: "http://localhost:5173/" });
+  const stack = `TypeError: board is null\n    at draw (http://localhost:5173/src/main.js:12:18)\n    at http://localhost:5173/src/main.js:40:3`;
+  for (let i = 0; i < 3; i++) fakePage.emit("pageerror", thrown("board is null", stack));
+  fakePage.emit(
+    "console",
+    consoleError("Failed to load resource: the server responded with a status of 404 (Not Found)", "http://localhost:5173/style.css", 0, 0)
+  );
+  fakePage.emit("console", { type: () => "warning", text: () => "a warning is not an error", location: () => ({ url: "" }) });
+  const out = (await reg.run("browser_click", { ref: "ref_1" })).output;
+  assert.match(out, /^console errors since the last snapshot \(2\):$/m);
+  assert.match(out, /^ {2}Uncaught TypeError: board is null — http:\/\/localhost:5173\/src\/main\.js:12:18 \(×3\)$/m);
+  assert.match(out, /^ {2}Failed to load resource: .*404 \(Not Found\) — http:\/\/localhost:5173\/style\.css$/m);
+  assert.doesNotMatch(out, /a warning is not an error/);
+  // Above the page text, where a long page cannot push it out of view.
+  assert.ok(out.indexOf("console errors") < out.indexOf("page text:"));
+  // Said once: the next snapshot reports what is new since.
+  shot = devPage();
+  shot.text = "Chess — your move";
+  const next = (await reg.run("browser_snapshot", {})).output;
+  assert.match(next, /^console errors since the last snapshot: none$/m);
+});
+
+test("an error since the last look is never answered with 'nothing has changed'", async () => {
+  shot = devPage();
+  await reg.run("browser_open", { url: "http://localhost:5173/" });
+  // A timer that fails after the page was read: the text is the same, the
+  // page is not, and looking again is exactly how that gets found.
+  fakePage.emit("console", consoleError("Uncaught (in promise) Error: fetch failed", "http://localhost:5173/src/api.js", 4, 9));
+  const again = (await reg.run("browser_snapshot", {})).output;
+  assert.doesNotMatch(again, /^Nothing has changed/);
+  assert.match(again, /^ {2}Uncaught \(in promise\) Error: fetch failed — http:\/\/localhost:5173\/src\/api\.js:5:10$/m);
+});
+
+test("what the page being left says on its way out is not blamed on the next one", async () => {
+  // Measured with a real browser: the old page's game loop threw three more
+  // times after the next page was asked for, and those landed in the new
+  // page's report under the old page's file.
+  shot = devPage();
+  await reg.run("browser_open", { url: "http://localhost:5173/" });
+  onGoto = () => {
+    fakePage.emit("pageerror", thrown("loop is broken", "TypeError: loop is broken\n    at http://localhost:5173/old.js:3:1"));
+    fakePage.emit("framenavigated", mainFrame);
+    fakePage.emit("pageerror", thrown("new page broke", "TypeError: new page broke\n    at http://localhost:5174/new.js:1:1"));
+  };
+  shot = { ...devPage(), url: "http://localhost:5174/" };
+  try {
+    const out = (await reg.run("browser_open", { url: "http://localhost:5174/" })).output;
+    assert.doesNotMatch(out, /loop is broken/);
+    assert.match(out, /^ {2}Uncaught TypeError: new page broke — http:\/\/localhost:5174\/new\.js:1:1$/m);
+  } finally {
+    onGoto = null;
+  }
+});
+
+test("a single-page app changing route keeps what happened before it", async () => {
+  // The false-positive half: only the navigation browser_open itself starts
+  // leaves a page. A click whose handler throws and then pushes a route is
+  // one page, and the error is the news.
+  shot = devPage();
+  await reg.run("browser_open", { url: "http://localhost:5173/" });
+  fakePage.emit("pageerror", thrown("move is not legal", "Error: move is not legal\n    at http://localhost:5173/src/rules.js:88:11"));
+  fakePage.emit("framenavigated", mainFrame);
+  const out = (await reg.run("browser_click", { ref: "ref_1" })).output;
+  assert.match(out, /^ {2}Uncaught TypeError: move is not legal — http:\/\/localhost:5173\/src\/rules\.js:88:11$/m);
+});
+
+test("a site on the internet keeps its console to itself", async () => {
+  // The false-positive half: a real site's trackers and blocked ads are
+  // nothing the agent can fix, and reading them costs every snapshot.
+  await onSignup();
+  fakePage.emit("console", consoleError("Refused to load the script 'https://ads.example/x.js'", "https://example.test/signup", 0, 0));
+  fakePage.emit("pageerror", thrown("ga is not defined", "TypeError: ga is not defined\n    at https://example.test/app.js:1:1"));
+  const out = (await reg.run("browser_click", { ref: "ref_4" })).output;
+  assert.doesNotMatch(out, /console errors/);
+  assert.doesNotMatch(out, /ga is not defined|Refused to load/);
 });
 
 test("the tool says when a snapshot is worth asking for", () => {

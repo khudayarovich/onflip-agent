@@ -444,7 +444,7 @@ export function parseBlockCall(body: string, problems?: string[]): ToolCall[] | 
     // how `todo_write` gets its task list, and without it the tool receives an
     // empty argument and rejects the call.
     if (rest.trim() === "" && isListAhead(lines, i + 1)) {
-      const { items, next } = parseList(lines, i + 1);
+      const { items, next } = parseList(lines, i + 1, key === "options" && ASKS_USER.test(toolName.trim()));
       i = next - 1;
       args[key] = items;
       continue;
@@ -474,6 +474,13 @@ const KEY_LINE = /^([A-Za-z_][\w.-]*)\s*:\s*(.*)$/;
 
 /** The free-text answer of each closing block, as `tool.key`. */
 const CLOSING_ANSWERS = new Set(["done.summary", "ask_user.question"]);
+
+/**
+ * `ask_user` under each name the registry folds onto it. Its options are
+ * answers written for a person, so they are read as text: "Yes: build all
+ * three" is an option, where a list parser takes it for a `yes` field.
+ */
+const ASKS_USER = /^(?:ask_user|ask|ask_followup_question|ask_question|question|clarify)$/i;
 
 /**
  * The leading whitespace every non-blank line starts with, as text.
@@ -771,8 +778,11 @@ function isListAhead(lines: string[], from: number): boolean {
  *
  * A `- key: value` opens a new item; more-indented `key: value` lines belong
  * to it. A list of bare scalars (`- one`) is returned as strings.
+ *
+ * `verbatim` reads every item as text, and a more-indented line after one as
+ * that item wrapping onto the next line.
  */
-function parseList(lines: string[], from: number): { items: unknown[]; next: number } {
+function parseList(lines: string[], from: number, verbatim = false): { items: unknown[]; next: number } {
   const items: unknown[] = [];
   let current: Record<string, unknown> | null = null;
   let i = from;
@@ -780,6 +790,14 @@ function parseList(lines: string[], from: number): { items: unknown[]; next: num
   for (; i < lines.length; i++) {
     const line = lines[i];
     if (!line.trim()) continue;
+
+    if (verbatim) {
+      const item = line.match(/^\s+-\s+(.*)$/);
+      if (item) items.push(item[1].trim());
+      else if (/^\s/.test(line) && items.length > 0) items[items.length - 1] = `${items[items.length - 1]} ${line.trim()}`;
+      else break;
+      continue;
+    }
 
     const bullet = line.match(/^\s+-\s+(.*)$/);
     if (bullet) {

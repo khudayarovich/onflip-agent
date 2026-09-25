@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { ChatMessage } from "onflip/dist/types";
 import { isUserRequest, parseTurn } from "onflip/dist/agent/protocol";
+import { stringList } from "onflip/dist/agent/run";
+import { parseChoices } from "onflip/dist/agent/choices";
 import { ChatItem, ToolCallDTO, ToolResultDTO } from "../shared/protocol";
 import { displayArgs, subjectFor } from "./subjects";
 
@@ -67,18 +69,15 @@ export function replayItems(history: ChatMessage[]): ChatItem[] {
         }));
       if (closing && calls.length === 0) {
         const kind = closingKind(closing.tool);
-        const options = argumentList(closing.arguments.options);
-        const body =
-          kind === "done"
-            ? argumentText(closing.arguments.summary)
-            : [argumentText(closing.arguments.question), ...options.map((o) => `- ${o}`)]
-                .filter(Boolean)
-                .join("\n");
+        // Read the way the live turn reads them, so a reopened session
+        // draws the same buttons it drew the first time.
+        const choices = kind === "ask_user" ? parseChoices(stringList(closing.arguments.options)) : [];
+        const body = argumentText(kind === "done" ? closing.arguments.summary : closing.arguments.question);
         const text = [parsed.text.trim(), body.trim()].filter(Boolean).join("\n\n");
         items.push(
           kind === "done"
             ? { type: "assistant", id: randomUUID(), text: text || "Done." }
-            : { type: "question", id: randomUUID(), text, options }
+            : { type: "question", id: randomUUID(), text, choices: choices.length ? choices : undefined }
         );
         continue;
       }
@@ -200,14 +199,6 @@ function argumentText(value: unknown): string {
     }
   }
   return String(value);
-}
-
-function argumentList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map((v) => argumentText(v).trim()).filter(Boolean);
-  return argumentText(value)
-    .split("\n")
-    .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim())
-    .filter(Boolean);
 }
 
 /**

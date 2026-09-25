@@ -8,6 +8,7 @@ import { logger } from "../log";
 import { err, ok, denied, asArray, asBool, asNumber, clip } from "./util";
 import { ensureBundledBrowser } from "../chatgpt/browser-client";
 import { realPath } from "../agent/permissions";
+import { ProblemLog, isOwnPage, problemSection, stackLocation } from "./page-problems";
 
 /**
  * A browser the agent drives itself.
@@ -176,6 +177,56 @@ let snapshotSerial = 0;
 let lastShown: { key: string; at: number; brief: boolean } | null = null;
 const SAME_PAGE_WINDOW_MS = 90_000;
 
+/**
+ * Errors from the page, between one snapshot and the next — see
+ * `page-problems.ts`. Listened for on every page this tool drives, from before
+ * its first navigation, so an exception on load is not missed.
+ */
+const problems = new ProblemLog();
+const watched = new WeakSet<Page>();
+/**
+ * Set by `browser_open` as it leaves a page. The page being left can keep
+ * failing until the next one commits — measured, a game loop on the old page
+ * threw three more times into the new page's report, under the old page's
+ * file — so its errors are dropped when the next document commits, not when
+ * the navigation starts. Only for `browser_open`'s own navigations: a click
+ * that changes the route of a single-page app is the same page, and an error
+ * just before it is still news.
+ */
+let leavingPage = false;
+
+function watchProblems(p: Page): void {
+  if (watched.has(p)) return;
+  watched.add(p);
+  p.on("pageerror", (error) => {
+    problems.add({ kind: "exception", text: `${error.name}: ${error.message}`, ...stackLocation(error.stack) }, p.url());
+  });
+  p.on("console", (message) => {
+    const type = message.type();
+    if (type !== "error" && type !== "assert") return;
+    // Playwright's positions are 0-based; an editor's are not. A message with
+    // no position — a resource that failed to load names only its URL —
+    // arrives as 0:0, which is not "line 1, column 1" and is not shown as it.
+    const at = message.location();
+    const known = at.line > 0 || at.column > 0;
+    problems.add(
+      {
+        kind: "console",
+        text: message.text(),
+        url: at.url || undefined,
+        line: known ? at.line + 1 : undefined,
+        column: known ? at.column + 1 : undefined,
+      },
+      p.url()
+    );
+  });
+  p.on("framenavigated", (frame) => {
+    if (!leavingPage || frame !== p.mainFrame()) return;
+    leavingPage = false;
+    problems.clear();
+  });
+}
+
 /** Everything the model reads from a snapshot, as one comparable string. */
 function snapshotKey(shot: Snapshot): string {
   return JSON.stringify([shot.url, shot.title, shot.elements, shot.hidden, shot.text]);
@@ -313,6 +364,7 @@ async function ensurePage(): Promise<Page> {
     if (attached) {
       page = attached;
       page.setDefaultTimeout(20_000);
+      watchProblems(page);
       // No screencast: the user is looking at the real view, and streaming
       // frames of a page already on screen is pure waste.
       return page;
@@ -329,6 +381,7 @@ async function ensurePage(): Promise<Page> {
   context = await launch(headless);
   page = context.pages()[0] ?? (await context.newPage());
   page.setDefaultTimeout(20_000);
+  watchProblems(page);
   logger.info("browser-tool", "opened the automation browser", {
     headless,
     viewport,
@@ -341,6 +394,7 @@ async function ensurePage(): Promise<Page> {
 /** Shut the automation browser down. Safe to call when it never started. */
 export async function closeAutomationBrowser(): Promise<void> {
   lastShown = null;
+  problems.clear();
   if (idleTimer) {
     clearTimeout(idleTimer);
     idleTimer = null;
@@ -701,13 +755,17 @@ async function snapshot(p: Page): Promise<Snapshot> {
   throw new Error("unreachable");
 }
 
-/** Render a snapshot as the text the model reads. */
-function describe(shot: Snapshot, note?: string): string {
+/**
+ * Render a snapshot as the text the model reads. The page's console errors go
+ * near the top, where a long page's text cannot push them out of view.
+ */
+function describe(shot: Snapshot, note?: string, errors?: string | null): string {
   snapshotSerial++;
   const lines: string[] = [];
   if (note) lines.push(note, "");
   lines.push(`url: ${shot.url}`);
   if (shot.title) lines.push(`title: ${shot.title}`);
+  if (errors) lines.push(errors);
   lines.push("");
 
   if (shot.elements.length) {
@@ -801,8 +859,11 @@ export function localPageUrl(raw: string, cwd: string): { url: URL } | { error: 
   return { url: pathToFileURL(file) };
 }
 
-/** Everything settles into the same answer: what the page looks like now. */
-async function respond(p: Page, note: string): Promise<ToolResult> {
+/**
+ * Everything settles into the same answer: what the page looks like now.
+ * `cwd` is the working folder, which the console's file paths are named from.
+ */
+async function respond(p: Page, note: string, cwd?: string): Promise<ToolResult> {
   // A click usually starts a navigation or a re-render; give it a moment
   // rather than snapshotting the page that is about to be replaced.
   await p.waitForLoadState("domcontentloaded", { timeout: 15_000 }).catch(() => {});
@@ -823,7 +884,7 @@ async function respond(p: Page, note: string): Promise<ToolResult> {
     );
   }
   lastShown = { key: snapshotKey(shot), at: Date.now(), brief: false };
-  return ok(describe(shot, note), { title: shot.title || shot.url });
+  return ok(describe(shot, note, problemSection(problems.drain(cwd), shot.url)), { title: shot.title || shot.url });
 }
 
 // ---------------------------------------------------------------------------
@@ -858,9 +919,11 @@ export const browserOpenTool: ToolDefinition = {
     if (raw === "back" || raw === "forward") {
       const stop = await allowed(ctx, "browser_open", `go ${raw}`);
       if (stop) return stop;
+      leavingPage = true;
       const moved = raw === "back" ? await p.goBack() : await p.goForward();
+      leavingPage = false;
       if (!moved) return err(`There is nothing ${raw} of this page in the history.`);
-      return respond(p, `Went ${raw}.`);
+      return respond(p, `Went ${raw}.`, ctx.cwd);
     }
 
     const local = localPageUrl(raw, ctx.cwd);
@@ -887,12 +950,21 @@ export const browserOpenTool: ToolDefinition = {
     if (stop) return stop;
 
     logger.info("browser-tool", "navigating", { url: url.href });
+    leavingPage = true;
     try {
       await p.goto(url.href, { waitUntil: "domcontentloaded", timeout: 45_000 });
     } catch (e) {
       return err(`Could not open ${url.href}: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      // Committed by now, so any later navigation is the page's own — a
+      // single-page app changing route — and must not wipe what it said.
+      leavingPage = false;
     }
-    return respond(p, `Opened ${url.href}`);
+    // A page of this machine's own is opened to be checked, and some of what
+    // can fail on it fails at `load` — its handler, the images it draws with.
+    // Bounded, so a page that never finishes loading is still read.
+    if (isOwnPage(url.href)) await p.waitForLoadState("load", { timeout: 5_000 }).catch(() => {});
+    return respond(p, `Opened ${url.href}`, ctx.cwd);
   },
 };
 
@@ -901,7 +973,7 @@ export const browserSnapshotTool: ToolDefinition = {
   description:
     "Re-read the current page in the agent's browser: its interactive elements with fresh refs, and its visible text. Every other browser tool already returns a fresh snapshot, so call this only when a ref has gone stale or the page changed on its own.",
   parameters: { type: "object", properties: {}, required: [] },
-  async run() {
+  async run(_args, ctx) {
     if (!automationBrowserOpen()) {
       return err("No page is open. Use browser_open first.");
     }
@@ -909,7 +981,12 @@ export const browserSnapshotTool: ToolDefinition = {
     const shot = await snapshot(p);
     const key = snapshotKey(shot);
     const age = lastShown ? Date.now() - lastShown.at : Infinity;
-    if (lastShown?.key === key && !lastShown.brief && age < SAME_PAGE_WINDOW_MS) {
+    // A page that has thrown since it was last read has changed, whatever its
+    // text says — and a look to see whether a timer or an animation frame
+    // failed is exactly what asking again is for.
+    const found = problems.drain(ctx.cwd);
+    const errors = problemSection(found, shot.url);
+    if (found.length === 0 && lastShown?.key === key && !lastShown.brief && age < SAME_PAGE_WINDOW_MS) {
       lastShown = { key, at: Date.now(), brief: true };
       const count = shot.elements.length;
       return ok(
@@ -918,7 +995,7 @@ export const browserSnapshotTool: ToolDefinition = {
       );
     }
     lastShown = { key, at: Date.now(), brief: false };
-    return ok(describe(shot), { title: shot.title || shot.url });
+    return ok(describe(shot, undefined, errors), { title: shot.title || shot.url });
   },
 };
 
@@ -953,7 +1030,7 @@ export const browserClickTool: ToolDefinition = {
         `Could not click ${found.ref}: ${e instanceof Error ? e.message : String(e)}. It may be covered by something else, or off screen — snapshot the page again.`
       );
     }
-    return respond(p, `Clicked ${label}.`);
+    return respond(p, `Clicked ${label}.`, ctx.cwd);
   },
 };
 
@@ -1075,7 +1152,8 @@ export const browserTypeTool: ToolDefinition = {
       p,
       single
         ? `Typed into ${last}${submit ? " and pressed Enter" : ""}.`
-        : `Filled ${refs.join(", ")}${submit ? `, and pressed Enter in ${last}` : ""}.`
+        : `Filled ${refs.join(", ")}${submit ? `, and pressed Enter in ${last}` : ""}.`,
+      ctx.cwd
     );
   },
 };
@@ -1190,7 +1268,7 @@ export const browserKeyTool: ToolDefinition = {
     } catch (e) {
       return err(`Could not press ${key}: ${e instanceof Error ? e.message : String(e)}`);
     }
-    return respond(p, `Pressed ${key}${times > 1 ? ` ${times} times` : ""}.`);
+    return respond(p, `Pressed ${key}${times > 1 ? ` ${times} times` : ""}.`, ctx.cwd);
   },
 };
 

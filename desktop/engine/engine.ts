@@ -107,6 +107,7 @@ import {
   ProjectContext,
 } from "onflip/dist/agent/context";
 import { newMessage } from "onflip/dist/agent/protocol";
+import { parseChoices } from "onflip/dist/agent/choices";
 import type { SubAgentRequest, SubAgentResult } from "onflip/dist/tools/task";
 import {
   runTurn,
@@ -2491,13 +2492,16 @@ export class Engine {
           this.archived = [...this.archived, ...dropped];
         },
         onFinal: (final, meta) => {
-          // A question is an answer that needs one back, and is drawn so.
+          // A question is an answer that needs one back, and is drawn so:
+          // its options as choices to click, so the text is the question
+          // alone rather than the question with the same options listed.
           if (meta?.kind === "ask_user") {
+            const choices = parseChoices(meta.options ?? []);
             this.peer.emit("item", {
               type: "question",
               id: randomUUID(),
-              text: final,
-              options: meta.options,
+              text: choices.length ? (meta.question ?? final) : final,
+              choices: choices.length ? choices : undefined,
             } satisfies ChatItem);
             return;
           }

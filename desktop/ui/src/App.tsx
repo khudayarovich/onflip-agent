@@ -1315,6 +1315,7 @@ export function App(): React.ReactElement {
             onRevise={busy || engineDown ? undefined : reviseMessage}
             onUnqueue={engineDown ? undefined : unqueueMessage}
             onResume={busy || engineDown ? undefined : resumeTurn}
+            onAnswer={busy || engineDown ? undefined : sendPrompt}
             searchOpen={searchOpen}
             onCloseSearch={() => setSearchOpen(false)}
           />

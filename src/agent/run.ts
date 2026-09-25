@@ -60,6 +60,12 @@ export interface FinalMeta {
   openTodos: number;
   /** Choices offered with an `ask_user` question. */
   options?: string[];
+  /**
+   * The question without its options: the final text lists them for a
+   * reader with nothing to click, and a window that draws them as buttons
+   * would otherwise show every one twice.
+   */
+  question?: string;
 }
 
 export interface AgentEvents {
@@ -742,7 +748,8 @@ export async function runTurn(
       const final =
         composeFinal(pendingProse, text, asked) ||
         `${serviceName()} ended the turn with a question but left it blank — say how to proceed.`;
-      events.onFinal?.(final, { kind: "ask_user", openTodos: open, options });
+      const prompt = composeFinal(pendingProse, text, question) || final;
+      events.onFinal?.(final, { kind: "ask_user", openTodos: open, options, question: prompt });
       return finish("ask_user", final, iteration);
     }
 
@@ -1263,8 +1270,8 @@ function stringArgument(value: unknown): string {
  * A list argument as strings: a real array, a block scalar with one item
  * per line (with or without `- `), or a single value.
  */
-function stringList(value: unknown): string[] {
-  if (Array.isArray(value)) return value.map((v) => stringArgument(v).trim()).filter(Boolean);
+export function stringList(value: unknown): string[] {
+  if (Array.isArray(value)) return value.map((v) => listItemText(v).trim()).filter(Boolean);
   const text = stringArgument(value).trim();
   if (!text) return [];
   // `options: |` with a JSON array under it arrives as text now that block
@@ -1281,6 +1288,25 @@ function stringList(value: unknown): string[] {
     .split("\n")
     .map((line) => line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, "").trim())
     .filter(Boolean);
+}
+
+/**
+ * One item of a list argument as text. An option written as an object —
+ * `{"label": …, "description": …}`, the shape a model that has seen other
+ * agents' question tools reaches for — is put into the one-line form the
+ * picker reads (`parseChoices`), rather than shown to the user as JSON.
+ */
+function listItemText(value: unknown): string {
+  if (value && typeof value === "object" && !Array.isArray(value)) {
+    const o = value as Record<string, unknown>;
+    const label = [o.label, o.text, o.title, o.value, o.option].find((v) => typeof v === "string" && v.trim());
+    if (typeof label === "string") {
+      const description = typeof o.description === "string" ? o.description.trim() : "";
+      const recommended = o.recommended === true || o.recommended === "true";
+      return `${label.trim()}${recommended ? " (Recommended)" : ""}${description ? ` — ${description}` : ""}`;
+    }
+  }
+  return stringArgument(value);
 }
 
 function squash(text: string): string {
@@ -1499,6 +1525,46 @@ const THEIR_PLACE =
 const TOOL_THEN_PLACE = new RegExp(`\\btools?\\b[^.]{0,40}\\b${THEIR_PLACE}`, "i");
 const PLACE_THEN_TOOL = new RegExp(`\\b${THEIR_PLACE}[^.]{0,60}\\btools?\\b`, "i");
 
+/**
+ * The model asking for its tools to be switched on — "Please enable the
+ * on-machine file tools for this session, then I can continue directly."
+ * Live, as an `ask_user` on a Free account, and missed by every denial
+ * pattern: nothing in it is negated, because it asks for the tools instead of
+ * saying they are missing. The question ended the turn and went to the user
+ * as a decision to make, with the work not started.
+ *
+ * What makes it a refusal is whose tools they are, so each shape pins that
+ * down: a kind of tool only OnFlip has, tools scoped to this session, the
+ * bare "the tools" with the model's own work waiting on them, or the same
+ * as a condition ("once the tools are enabled, I'll…"). "Enable the developer
+ * tools in Chrome" and "once the build tools are installed, run it again" are
+ * answers, and stay answers.
+ */
+const SWITCH_ON =
+  "(?:enable|re-?enable|turn on|switch on|activate|reactivate|allow|grant|give me|provide|expose|attach|connect|reconnect|unlock|unblock|restore)";
+const OUR_KIND_OF_TOOL =
+  "(?:on-?machine|machine-side|onflip|local[- ](?:file|machine|execution|shell|editing)|file(?:[- ]?(?:system|editing|writing|write|edit))?|filesystem|execution)(?:[- ](?:file|editing|execution))?";
+// "this" or "our", never "the": "the Git tools in the context menu" is an
+// answer about someone's editor.
+const THIS_SESSION = "(?:for|in|within|during|on) (?:this|our) (?:session|chat|conversation|turn|thread|context)";
+// The promise is what makes it the model's own work waiting — "allow the
+// tools and I recommend a restart" is advice.
+const THEN_I_WILL = "(?:so(?: that)?|then|and|after which|,) I(?:'ll| will| can| could| may)\\b";
+const ASKS_FOR_TOOLS = new RegExp(
+  [
+    `\\b${SWITCH_ON}\\b[^.]{0,30}\\b${OUR_KIND_OF_TOOL}\\s+tools?\\b`,
+    `\\b${SWITCH_ON}\\b[^.]{0,40}\\btools?\\b[^.]{0,30}\\b${THIS_SESSION}\\b`,
+    `\\b${SWITCH_ON}\\s+(?:(?:the|my|your|these|those|onflip'?s?)\\s+)?tools?\\b(?: access)?[^.]{0,30}${THEN_I_WILL}`,
+    `\\b(?:once|when|after|as soon as|if)\\s+(?:(?:the|my|your|onflip'?s?)\\s+)?(?:${OUR_KIND_OF_TOOL}\\s+)?tools?\\b(?: access)?\\s+(?:are|is|get|gets|have been|has been|become)\\s+(?:re-?)?(?:enabled|available|exposed|attached|connected|reconnected|turned on|granted|restored|back)\\b[^.]{0,30}\\bI(?:'ll| will| can| could)\\b`,
+  ].join("|"),
+  "i"
+);
+/** The same request in Russian and Uzbek, held to the first shape above. */
+const RU_ASKS_FOR_TOOLS =
+  /(?:включите|включить|активируйте|подключите|предоставьте|дайте|верните)[^.]{0,40}(?:инструмент\w*[^.]{0,30}(?:для\s+работы\s+с\s+файлами|файлов\w*|на\s+(?:машине|компьютере)|локальн\w*|onflip|(?:в|для)\s+(?:этой|этом|текущей|текущем)\s+(?:сессии|чате|разговоре|диалоге))|(?:локальн\w*|файлов\w*)\s+инструмент\w*|доступ\w*\s+к\s+инструмент\w*)/i;
+const UZ_ASKS_FOR_TOOLS =
+  /(?:(?:fayl|mashina|kompyuter|lokal|mahalliy|onflip)\w*\s+(?:vosita|asbob)\w*|bu\s+(?:sessiya|suhbat|chat)\s+uchun[^.]{0,30}(?:vosita|asbob)\w*)[^.]{0,30}(?:yoqing|yoqib\s+(?:qo'ying|bering)|faollashtiring|ulang|qayta\s+ulang|ruxsat\s+bering)/i;
+
 function openTodoCount(todos: SessionState["todos"] | undefined): number {
   return (todos ?? []).filter((t) => t.status === "pending" || t.status === "in_progress").length;
 }
@@ -1678,8 +1744,13 @@ export function detectToolDenial(text: string): boolean {
     // all — a confident description of a tool namespace the model went
     // looking for and did not find, which ends the turn just as dead.
     /\bnot\b[^.]{0,40}\bthe onflip\b[^.]{0,30}\btools?\b/i.test(t) ||
+    // "Please enable the on-machine file tools for this session." A request
+    // for the tools is the same misreading as a claim that they are missing.
+    ASKS_FOR_TOOLS.test(t) ||
     RU_DENIES_TOOLS.test(t) ||
-    UZ_DENIES_TOOLS.test(t)
+    UZ_DENIES_TOOLS.test(t) ||
+    RU_ASKS_FOR_TOOLS.test(t) ||
+    UZ_ASKS_FOR_TOOLS.test(t)
   );
 }
 

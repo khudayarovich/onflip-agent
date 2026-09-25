@@ -94,6 +94,27 @@ test("a tool with nowhere to deliver is not documented at all", () => {
   assert.ok(withBot.length > without.length, "and it costs what it costs");
 });
 
+test("a web page is checked in the browser, when there is a browser to check it in", () => {
+  // Reported: OnFlip built a page, started it, and finished without looking.
+  // The snapshot now carries the page's console errors; the prompt says to
+  // read them before `done` — and says nothing of the kind to a session whose
+  // browser tools are switched off, where the instruction could not be kept.
+  const withBrowser = build("chatgpt");
+  assert.match(withBrowser, /When you build a web page or change its scripts, open it with `browser_open`/);
+  assert.match(withBrowser, /fix the console errors its snapshot lists before `done`/);
+  assert.match(withBrowser, /for a page from this machine, its console errors/);
+  const offline = build("chatgpt", registry({ disableNetwork: true }));
+  assert.doesNotMatch(offline, /browser_open|console errors/);
+});
+
+test("a question offers answers to click, the recommended one first", () => {
+  const prompt = build("chatgpt");
+  assert.match(prompt, /- the local SQLite copy \(Recommended\) — fast, a day old\n {2}- the production replica — live, slower/);
+  assert.match(prompt, /Offer 2–4 `options` when there are obvious ones/);
+  // The rule the reported question broke is still stated where it is taught.
+  assert.match(prompt, /Never use it to ask for the tools to be enabled, exposed, reconnected or granted/);
+});
+
 test("the prompt shrinks where it stopped applying, and only there", () => {
   // The numbers this change is worth, pinned so a later edit that quietly
   // re-inflates the prompt shows up as a failing test rather than as a

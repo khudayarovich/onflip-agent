@@ -61,6 +61,41 @@ test("a denial whose subject is a channel, with the negation before the word too
   );
 });
 
+test("asking for the tools to be switched on is a denial too", () => {
+  // Live, as an `ask_user` on a Free account. Nothing in it is negated — it
+  // asks for the tools rather than saying they are missing — so every
+  // pattern above walked past it and the turn ended on it.
+  const asks = [
+    "I can build the Python backend + persistent game history + AI opponent, but I need to modify/create several project files. Please enable the on-machine file tools for this session, then I can continue directly.",
+    "Please turn on the file-editing tools so I can apply the changes.",
+    "Could you reconnect the OnFlip tools for this chat? Then I'll continue.",
+    "Enable tool access and I'll finish the backend.",
+    "Once the file tools are enabled, I can create the files.",
+    "Пожалуйста, включите инструменты для работы с файлами, и я продолжу.",
+    "Iltimos, bu sessiya uchun fayl vositalarini yoqing, keyin davom etaman.",
+  ];
+  for (const text of asks) {
+    assert.equal(fresh(text), "denial", text);
+    // After tools ran it is still not an answer: the live one came mid-task.
+    assert.equal(classifySlip(text, 7, 0), "denial", text);
+  }
+});
+
+test("switching on someone else's tools is an answer", () => {
+  const answers = [
+    "Enable the developer tools in Chrome with F12 and look at the Console tab.",
+    "You'll need to enable the build tools in the Visual Studio Installer first.",
+    "Once the build tools are installed, run npm install again.",
+    "When the tools are available in your CI image, the pipeline will pass.",
+    "I've enabled the file tools in the config, so uploads work now.",
+    "Enable the Git tools in the context menu of Explorer.",
+    "In the extension settings, allow the tools and I recommend restarting VS Code afterwards.",
+    "Включите инструменты разработчика в Chrome (F12).",
+    "Chrome'da dasturchi vositalarini yoqing (F12).",
+  ];
+  for (const text of answers) assert.equal(detectToolDenial(text), false, text);
+});
+
 test("a tool that belongs to the user's own project is an answer, not a denial", () => {
   // The disambiguator that keeps a real answer about someone's codebase from
   // being read as the model refusing its own tools.

@@ -105,11 +105,27 @@ export interface ToolResultDTO {
   display: DisplayPayload;
 }
 
+/**
+ * One answer a question offers, read out of the model's option line by the
+ * engine (`parseChoices`), so the window and Telegram draw the same thing.
+ */
+export interface QuestionChoice {
+  /** What the button says, and what is sent back when it is picked. */
+  label: string;
+  /** The line under the label, when the option came with one. */
+  description?: string;
+  /** The option the model said it would pick. */
+  recommended?: boolean;
+}
+
 export type ChatItem =
   | { type: "user"; id: string; text: string; attachments?: string[] }
   | { type: "assistant"; id: string; text: string }
-  /** The agent ended its turn with a question only the user can settle. */
-  | { type: "question"; id: string; text: string; options?: string[] }
+  /**
+   * The agent ended its turn with a question only the user can settle. `text`
+   * is the question alone; its answers, when it offered any, are `choices`.
+   */
+  | { type: "question"; id: string; text: string; choices?: QuestionChoice[] }
   | { type: "narration"; id: string; text: string }
   | { type: "tool"; id: string; call: ToolCallDTO; result?: ToolResultDTO }
   | { type: "image"; id: string; dataUrl: string; name: string }

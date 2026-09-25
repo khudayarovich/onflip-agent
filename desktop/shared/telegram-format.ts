@@ -15,6 +15,7 @@
  */
 
 import { serviceLabel } from "./providers";
+import type { QuestionChoice } from "./protocol";
 
 /** Telegram's own ceiling. Left a little slack for the chunk counter. */
 export const TELEGRAM_LIMIT = 4096;
@@ -331,6 +332,26 @@ export function toolLine(tool: string, subject: string | undefined, failed: bool
 /** The final answer, formatted and split. */
 export function answerMessages(text: string): string[] {
   return chunkHtml(toTelegramHtml(text.trim()));
+}
+
+/**
+ * An answer or a question, with the question's choices as buttons: the same
+ * labels the window draws, the recommended one starred, and the same answer
+ * sent back when one is tapped. A button holds a label and nothing more, so
+ * what each option means, when the model said, goes under the question.
+ */
+export function replyMessages(
+  text: string,
+  choices: readonly QuestionChoice[] = []
+): { parts: string[]; buttons: { text: string; answer: string }[] } {
+  const star = (c: QuestionChoice) => (c.recommended ? "⭐ " : "");
+  const meanings = choices.some((c) => c.description)
+    ? choices.map((c) => `- ${star(c)}**${c.label}**${c.description ? ` — ${c.description}` : ""}`).join("\n")
+    : "";
+  return {
+    parts: answerMessages([text, meanings].filter(Boolean).join("\n\n")),
+    buttons: choices.slice(0, 8).map((c) => ({ text: oneLine(`${star(c)}${c.label}`, 60), answer: c.label })),
+  };
 }
 
 /** A turn that ended badly. */

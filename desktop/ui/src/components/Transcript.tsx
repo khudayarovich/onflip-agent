@@ -5,7 +5,7 @@ import { ToolCard } from "./ToolCard";
 import logo from "../assets/logo.svg";
 import { LangContext, useT } from "../i18n";
 import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/skills";
-import { ChevronDown, Close, Info, Pencil, Reload, fileGlyph } from "./icons";
+import { ArrowRight, Check, ChevronDown, Close, Info, Pencil, Reload, fileGlyph } from "./icons";
 import { CopyButton } from "./CopyButton";
 import { composing } from "../../../shared/escape";
 
@@ -93,6 +93,7 @@ export function Transcript({
   deliveries,
   onRevise,
   onResume,
+  onAnswer,
   onUnqueue,
   searchOpen,
   onCloseSearch,
@@ -111,6 +112,8 @@ export function Transcript({
   onRevise?: (id: string, mode: "edit" | "resend") => void;
   /** Carry on after a failed turn; undefined while one is running. */
   onResume?: () => void;
+  /** Answer the question the agent is waiting on; undefined while a turn runs. */
+  onAnswer?: (text: string) => boolean | void;
   /** In-chat search (Ctrl+F / the strip button). */
   searchOpen: boolean;
   onCloseSearch: () => void;
@@ -132,6 +135,10 @@ export function Transcript({
   useEffect(() => {
     if (searchOpen) searchInputRef.current?.focus();
   }, [searchOpen]);
+
+  // Recomputed per item list, not per streamed delta, which leaves `items`
+  // alone — the cards it feeds stay memoised through a running turn.
+  const questions = useMemo(() => questionState(items), [items]);
 
   // Word-level highlighting via the CSS Custom Highlight API: every
   // occurrence of the query is painted as a text range — inside markdown,
@@ -300,7 +307,13 @@ export function Transcript({
                 onRevise={onRevise}
               />
             ) : (
-              <TranscriptItem item={entry.item} progress={toolProgress[entry.item.id]} onResume={onResume} />
+              <TranscriptItem
+                item={entry.item}
+                progress={toolProgress[entry.item.id]}
+                onResume={onResume}
+                answered={questions.answers.get(entry.item.id)}
+                onAnswer={entry.item.id === questions.open ? onAnswer : undefined}
+              />
             )}
           </ItemBoundary>
         ))}
@@ -581,10 +594,16 @@ export const TranscriptItem = React.memo(function TranscriptItem({
   item,
   progress,
   onResume,
+  answered,
+  onAnswer,
 }: {
   item: ChatItem;
   progress?: string;
   onResume?: () => void;
+  /** For a question: the message the user answered it with, once there is one. */
+  answered?: string;
+  /** For the question still waiting, while nothing is running: send an answer. */
+  onAnswer?: (text: string) => boolean | void;
 }): React.ReactElement | null {
   const t = useT();
   switch (item.type) {
@@ -621,13 +640,7 @@ export const TranscriptItem = React.memo(function TranscriptItem({
         </div>
       );
     case "question":
-      return (
-        <div className="msg-question has-copy">
-          <div className="msg-question-label">{t("questionLabel")}</div>
-          <Markdown text={item.text} />
-          <CopyButton text={item.text} className="msg-copy" label={t("copyMessage")} />
-        </div>
-      );
+      return <QuestionCard item={item} answered={answered} onAnswer={onAnswer} />;
     case "notice":
       return <div className="msg-notice">{item.text}</div>;
     case "error":
@@ -645,6 +658,141 @@ export const TranscriptItem = React.memo(function TranscriptItem({
       return null;
   }
 });
+
+/**
+ * What each question was answered with, and which one is still waiting.
+ *
+ * A question is answered by the message the user sends next. It is open while
+ * it is the last thing in the conversation — notices and the turn's duration
+ * aside — because anything after it, a message or a tool running on its own
+ * resume, means the conversation has moved past it.
+ */
+export function questionState(items: ChatItem[]): { open: string | null; answers: Map<string, string> } {
+  const answers = new Map<string, string>();
+  let waiting: string | null = null;
+  let last: ChatItem | null = null;
+  for (const item of items) {
+    if (item.type === "notice" || item.type === "duration") continue;
+    last = item;
+    if (item.type === "question") {
+      waiting = item.id;
+      continue;
+    }
+    if (item.type === "user" && waiting) answers.set(waiting, item.text);
+    waiting = null;
+  }
+  return { open: last?.type === "question" ? last.id : null, answers };
+}
+
+/** Did this reply pick that choice? */
+function isChoice(label: string, reply: string): boolean {
+  return label.trim().toLowerCase() === reply.trim().toLowerCase();
+}
+
+/**
+ * A question the agent ended its turn on, with its answers to click.
+ *
+ * Reported: "OnFlip needs your decision" arrived as a paragraph, the options
+ * as a bulleted list with nothing to click, and the only way to answer was to
+ * retype one. The options are buttons now — the one the agent recommends
+ * marked, what each means under it — with a box for an answer of one's own.
+ * Picking one is sending it, down the same path as a typed message.
+ *
+ * Only the question still waiting takes an answer, and only while nothing is
+ * running. After that it shows which choice was picked, so a reopened
+ * session reads the same as the live one did.
+ */
+function QuestionCard({
+  item,
+  answered,
+  onAnswer,
+}: {
+  item: Extract<ChatItem, { type: "question" }>;
+  answered?: string;
+  onAnswer?: (text: string) => boolean | void;
+}): React.ReactElement {
+  const t = useT();
+  const [sent, setSent] = useState<string | null>(null);
+  const [other, setOther] = useState("");
+  const choices = item.choices ?? [];
+  const reply = sent ?? answered;
+  const open = Boolean(onAnswer) && reply === undefined;
+  const picked = reply === undefined ? -1 : choices.findIndex((c) => isChoice(c.label, reply));
+
+  const send = (text: string) => {
+    const answer = text.trim();
+    if (!answer || !onAnswer || !open) return;
+    // Taken at once, so a second click cannot send it twice; handed back if
+    // nothing was sent (signed out: the sign-in opens instead).
+    setSent(answer);
+    if (onAnswer(answer) === false) setSent(null);
+  };
+
+  // The copy is the question as it would be pasted: its options included.
+  const copy = [
+    item.text,
+    ...choices.map(
+      (c) => `- ${c.label}${c.recommended ? ` (${t("questionRecommended")})` : ""}${c.description ? ` — ${c.description}` : ""}`
+    ),
+  ].join("\n");
+
+  return (
+    <div className={`msg-question has-copy${open ? " waiting" : ""}`}>
+      <div className="msg-question-label">{t("questionLabel")}</div>
+      <Markdown text={item.text} />
+      {choices.length > 0 && (
+        <div className="question-choices" role="group" aria-label={t("questionLabel")}>
+          {choices.map((c, i) => (
+            <button
+              key={i}
+              type="button"
+              className={`question-choice${c.recommended ? " recommended" : ""}${i === picked ? " picked" : ""}`}
+              disabled={!open}
+              aria-pressed={i === picked}
+              onClick={() => send(c.label)}
+            >
+              <span className="question-choice-n">{i === picked ? <Check size={12} /> : i + 1}</span>
+              <span className="question-choice-body">
+                <span className="question-choice-label">
+                  {c.label}
+                  {c.recommended && <span className="question-choice-badge">{t("questionRecommended")}</span>}
+                </span>
+                {c.description && <span className="question-choice-desc">{c.description}</span>}
+              </span>
+            </button>
+          ))}
+        </div>
+      )}
+      {open && (
+        <div className="question-other">
+          <input
+            value={other}
+            placeholder={t(choices.length ? "questionOtherPlaceholder" : "questionAnswerPlaceholder")}
+            spellCheck
+            onChange={(e) => setOther(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter while an IME candidate is open picks the candidate, not
+              // the answer — so this is not a form, whose Enter would submit.
+              if (e.key !== "Enter" || e.shiftKey || composing(e)) return;
+              e.preventDefault();
+              send(other);
+            }}
+          />
+          <button
+            type="button"
+            disabled={!other.trim()}
+            title={t("questionSend")}
+            aria-label={t("questionSend")}
+            onClick={() => send(other)}
+          >
+            <ArrowRight size={14} />
+          </button>
+        </div>
+      )}
+      <CopyButton text={copy} className="msg-copy" label={t("copyMessage")} />
+    </div>
+  );
+}
 
 /**
  * An image ChatGPT drew, shown in the transcript.

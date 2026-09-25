@@ -3,13 +3,13 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import {
-  answerMessages,
   elapsedLine,
   errorMessage,
   escapeHtml,
   helpCard,
   oneLine,
   plainText,
+  replyMessages,
   statusCard,
   toolLine,
   type StatusLike,
@@ -27,7 +27,7 @@ import {
 } from "../shared/telegram-commands";
 import { arrivalPrompt, inboxTarget, TELEGRAM_DOWNLOAD_MAX } from "../shared/inbox";
 import { serviceLabel } from "../shared/providers";
-import type { ApprovalMode } from "../shared/protocol";
+import type { ApprovalMode, QuestionChoice } from "../shared/protocol";
 import { isOffered } from "../shared/approval";
 import { writeJsonFile } from "./persistence";
 
@@ -1258,16 +1258,16 @@ export async function telegramOnEvent(event: string, data: unknown): Promise<voi
   }
   if (item.type === "assistant" || item.type === "question") {
     const prefix = item.type === "question" ? "\u2753 <b>OnFlip is asking</b>\n\n" : "";
-    const parts = answerMessages(item.text ?? "");
     // The options belong on the *last* message, under the question, and as
     // buttons: OnFlip already supplies them, and making somebody retype an
     // answer that was offered to them is the sort of thing that makes a
     // remote feel like a worse version of the app.
-    const options = item.type === "question" ? ((item as { options?: string[] }).options ?? []) : [];
-    const keyboard: Keyboard | undefined = options.length
+    const choices = item.type === "question" ? ((item as { choices?: QuestionChoice[] }).choices ?? []) : [];
+    const { parts, buttons } = replyMessages(item.text ?? "", choices);
+    const keyboard: Keyboard | undefined = buttons.length
       ? {
-          inline_keyboard: options.slice(0, 8).map((option) => [
-            { text: oneLine(option, 60), callback_data: tickets.put("answer", option) },
+          inline_keyboard: buttons.map((button) => [
+            { text: button.text, callback_data: tickets.put("answer", button.answer) },
           ]),
         }
       : undefined;

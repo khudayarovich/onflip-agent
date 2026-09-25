@@ -42,9 +42,9 @@ function ui() {
         'import React from "react";',
         'import { renderToStaticMarkup } from "react-dom/server";',
         'import { ToolCard } from "./components/ToolCard";',
-        'import { ItemBoundary, TranscriptItem } from "./components/Transcript";',
+        'import { ItemBoundary, TranscriptItem, questionState } from "./components/Transcript";',
         'import { toolLabel } from "./toolNames";',
-        "export { React, renderToStaticMarkup, ToolCard, ItemBoundary, TranscriptItem, toolLabel };",
+        "export { React, renderToStaticMarkup, ToolCard, ItemBoundary, TranscriptItem, questionState, toolLabel };",
       ].join("\n"),
       resolveDir: UI,
       loader: "tsx",
@@ -135,8 +135,92 @@ test("a streamed delta does not redraw every item", { skip: needsBuild }, () => 
   const fs = require("node:fs");
   const transcript = fs.readFileSync(path.join(UI, "components", "Transcript.tsx"), "utf8");
   assert.match(transcript, /const UserMessage = React\.memo\(function UserMessage\(/);
-  assert.match(transcript, /<TranscriptItem item=\{entry\.item\} progress=\{toolProgress\[entry\.item\.id\]\} onResume=\{onResume\} \/>/);
+  // A question's answer is a string and its callback goes to the one
+  // question still waiting — every other item gets undefined for both.
+  assert.match(
+    transcript,
+    /<TranscriptItem\s+item=\{entry\.item\}\s+progress=\{toolProgress\[entry\.item\.id\]\}\s+onResume=\{onResume\}\s+answered=\{questions\.answers\.get\(entry\.item\.id\)\}\s+onAnswer=\{entry\.item\.id === questions\.open \? onAnswer : undefined\}\s+\/>/
+  );
   const app = fs.readFileSync(path.join(UI, "App.tsx"), "utf8");
   assert.match(app, /onResume=\{busy \|\| engineDown \? undefined : resumeTurn\}/);
   assert.match(app, /const resumeTurn = useCallback\(/);
+  assert.match(app, /onAnswer=\{busy \|\| engineDown \? undefined : sendPrompt\}/);
+  assert.match(app, /const sendPrompt = useCallback\(/);
+});
+
+// ---------------------------------------------------------------------------
+// a question, with answers to click
+// ---------------------------------------------------------------------------
+
+const question = (over = {}) => ({
+  type: "question",
+  id: "q1",
+  text: "Which part should I build first?",
+  choices: [
+    { label: "All three now", description: "backend, history and AI together", recommended: true },
+    { label: "Only the backend" },
+  ],
+  ...over,
+});
+const buttons = (html) => [...html.matchAll(/<button[^>]*class="question-choice[^"]*"[^>]*>/g)].map((m) => m[0]);
+
+test("a waiting question draws its answers as buttons, the recommended one marked", { skip: needsBuild }, () => {
+  // Reported: the options were a bulleted list with nothing to click, and
+  // the only way to answer was to retype one.
+  const { React, renderToStaticMarkup, TranscriptItem } = ui();
+  const html = renderToStaticMarkup(React.createElement(TranscriptItem, { item: question(), onAnswer: () => true }));
+  const found = buttons(html);
+  assert.equal(found.length, 2);
+  assert.match(found[0], /class="question-choice recommended"/);
+  assert.doesNotMatch(found[1], /recommended/);
+  assert.ok(found.every((b) => !/disabled/.test(b)), "clickable while it waits");
+  assert.match(html, /All three now<span class="question-choice-badge">Recommended<\/span>/);
+  assert.match(html, /<span class="question-choice-desc">backend, history and AI together<\/span>/);
+  // An answer of one's own, beside the offered ones.
+  assert.match(html, /class="question-other"/);
+  assert.match(html, /placeholder="Something else\? Type your own answer"/);
+  // The question is shown once — not again as a list under the buttons.
+  assert.equal(html.split("Only the backend").length - 1, 1);
+});
+
+test("an answered question shows what was picked and takes no more", { skip: needsBuild }, () => {
+  const { React, renderToStaticMarkup, TranscriptItem } = ui();
+  const html = renderToStaticMarkup(React.createElement(TranscriptItem, { item: question(), answered: "only the backend" }));
+  const found = buttons(html);
+  assert.ok(found.every((b) => /disabled/.test(b)), "nothing more to click");
+  assert.match(found[1], /class="question-choice picked"/);
+  assert.match(found[1], /aria-pressed="true"/);
+  assert.doesNotMatch(html, /question-other/);
+});
+
+test("a question with no answers offered still takes one, and an old one reads as before", { skip: needsBuild }, () => {
+  const { React, renderToStaticMarkup, TranscriptItem } = ui();
+  const bare = question({ choices: undefined, text: "Which port should the server use?" });
+  const waiting = renderToStaticMarkup(React.createElement(TranscriptItem, { item: bare, onAnswer: () => true }));
+  assert.doesNotMatch(waiting, /question-choices/);
+  assert.match(waiting, /placeholder="Type your answer"/);
+  // Not the waiting one (or a turn is running): the question, and nothing to type into.
+  const past = renderToStaticMarkup(React.createElement(TranscriptItem, { item: bare }));
+  assert.match(past, /Which port should the server use\?/);
+  assert.doesNotMatch(past, /question-other|question-choices/);
+});
+
+test("the question waiting is the last thing said, and a reply answers the one before it", { skip: needsBuild }, () => {
+  const { questionState } = ui();
+  const q = (id) => ({ type: "question", id, text: id });
+  const user = (id, text) => ({ type: "user", id, text });
+  const quiet = [{ type: "notice", id: "n", text: "retrying" }, { type: "duration", id: "d", ms: 5000 }];
+
+  let state = questionState([user("u1", "build it"), q("q1"), ...quiet]);
+  assert.equal(state.open, "q1", "notices and the turn's time do not move the conversation on");
+
+  state = questionState([user("u1", "build it"), q("q1"), user("u2", "Only the backend")]);
+  assert.equal(state.open, null);
+  assert.equal(state.answers.get("q1"), "Only the backend");
+
+  // Something ran after it — a resume nobody typed — so it was never answered.
+  const tool = { type: "tool", id: "t1", call: { id: "t1", tool: "read", subject: "a", args: {} } };
+  state = questionState([q("q1"), tool, user("u2", "and now this")]);
+  assert.equal(state.open, null);
+  assert.equal(state.answers.has("q1"), false);
 });

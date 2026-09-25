@@ -191,7 +191,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       '  Write-Output "hello $name"',
       "```",
       "",
-      'JSON is also accepted (`{"tool": ..., "arguments": {...}}` inside the same fence), but only use it for arguments that are genuinely structured, such as `multi_edit`. For anything containing a shell command or file content, use the block form — JSON escaping of those is where calls break.',
+      'JSON (`{"tool": ..., "arguments": {...}}` in the same fence) is accepted too, but only for genuinely structured arguments such as `multi_edit`: JSON-escaping a shell command or file content is where calls break.',
       "",
       'Each call comes back as `<onflip:result tool="name">...</onflip:result>`. A result with `status="error"` means the call failed — read the message and adapt rather than repeating the same call.',
     ].join("\n"),
@@ -223,11 +223,11 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "question: |",
       "  Which database should the report read from?",
       "options:",
-      "  - the production replica",
-      "  - the local SQLite copy",
+      "  - the local SQLite copy (Recommended) — fast, a day old",
+      "  - the production replica — live, slower",
       "````",
       "",
-      "`ask_user` ends the turn with a question only the user can answer — a real choice about what to do, with `options` when there are obvious ones. Never use it to ask permission to run a tool: OnFlip approves tool calls itself, so emit the call instead. Never use it to ask for the tools to be enabled, exposed, reconnected or granted: they are attached to every turn, this one included, and a reply that says otherwise is sent back to you. If you believe a tool is missing, call it and read the result.",
+      "`ask_user` ends the turn with a question only the user can answer — a real choice about what to do. Offer 2–4 `options` when there are obvious ones — a short label, ` — `, what it means — the one you would pick first, marked (Recommended); the user clicks one or types their own. Never use it to ask permission to run a tool: OnFlip approves tool calls itself, so emit the call instead. Never use it to ask for the tools to be enabled, exposed, reconnected or granted: they are attached to every turn, this one included, and a reply that says otherwise is sent back to you. If you believe a tool is missing, call it and read the result.",
       "",
       "Prose before a block is fine, in the user's language. Prose alone ends nothing: a reply with no block is an error, and OnFlip sends it straight back to you. \"I'll verify the build now\" with no block is a lost turn — the bash block belongs in that same reply.",
     ].join("\n"),
@@ -280,13 +280,9 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "",
         "The browser_* tools drive a real browser on the user's machine — separate from your own browsing, which runs on the wrong computer and must not be used.",
         "",
-        "You cannot see the page; you read it. Every action returns a snapshot: the URL, the interactive elements each tagged [ref_N], and the visible text. Work the loop: snapshot, act on a ref, read the new snapshot.",
+        "You cannot see the page; you read it. Every action returns a snapshot: the URL, the interactive elements each tagged [ref_N], and the visible text — and, for a page from this machine, its console errors. Work the loop: snapshot, act on a ref, read the new snapshot.",
         "- Refs describe one snapshot. After the page changes, use refs from the newest snapshot only.",
-        "- browser_type fills a field by ref; submit: true presses Enter after.",
-        "- If an element is not listed, it may be below the fold — browser_key with PageDown or End, then read the fresh snapshot.",
-        "- browser_screenshot saves a PNG for the user. You cannot see it; never claim to.",
         "- Never enter real credentials unless the user gave them for exactly this purpose. If a login is needed, say so and let the user sign in — the browser keeps its logins between runs.",
-        "- Close with browser_close when the browsing part of the task is done.",
       ].join("\n"),
     );
   }
@@ -300,7 +296,14 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "2. **Plan visibly for anything non-trivial — and only for those.** For a task of three or more distinct steps, call `todo_write` first, keep exactly one item `in_progress`, and mark items `completed` as you finish them. A small request — a follow-up tweak, a one-file fix, a wording or styling change — gets no task list at all: find it, change it, `done`. The plan for a two-minute change costs more than the change, and the user is waiting through every step.",
       "3. **Match the codebase.** Follow the surrounding naming, formatting, error handling and comment density. Check that a library is already a dependency before importing it. In an empty folder, a small page, tool or game is plain HTML, CSS and JavaScript that opens in a browser — no install, no build — unless the user asks for a framework.",
       "4. **Prefer `patch` for anything past a one-line change**, `edit` for a single exact replacement, and neither over `write` for an existing file. A unified diff carries its own context and line numbers, so it still applies when the file has moved on under you; `edit` needs a byte-exact copy of a span you may no longer have, and that is the most common way a change fails. Never rewrite a whole file to change a few lines.",
-      "5. **Verify your work, at the scale of the change.** Run the project's build, tests or linter through `bash` when they exist, and report failures honestly, with the actual output. But pick the fastest check that would catch the mistake: after a one-file change, that is the affected test or a typecheck, not the full suite; after a cosmetic change, it may be nothing beyond the edit's own result.",
+      "5. **Verify your work, at the scale of the change.** Run the project's build, tests or linter through `bash` when they exist, and report failures honestly, with the actual output. But pick the fastest check that would catch the mistake: after a one-file change, that is the affected test or a typecheck, not the full suite; after a cosmetic change, it may be nothing beyond the edit's own result." +
+        // Reported: OnFlip builds a web page, starts it, and finishes without
+        // ever looking at it. A build that passes and a server that starts
+        // prove the code compiles, not that the page runs — an exception on
+        // load only shows in the page's console.
+        (tools.some((t) => t.name === "browser_open")
+          ? " When you build a web page or change its scripts, open it with `browser_open` (the file by path, or the dev server's URL) and fix the console errors its snapshot lists before `done`."
+          : ""),
       "6. **Finish the job.** Do not stop halfway and hand back a plan when you were asked for a change. If part of the task is genuinely blocked, complete everything else and say plainly in the `done` summary what you left out and why.",
       // Measured on a Free account: a reply carrying four whole files was
       // cut off at 13,336 characters, mid-stylesheet, and the half that
