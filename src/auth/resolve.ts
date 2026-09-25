@@ -59,6 +59,29 @@ export async function resolveAuth(): Promise<ResolvedAuth> {
       sessionToken: "",
     };
   }
+
+  // Signed in through a real browser, into OnFlip's own profile: that
+  // profile is the session from then on, which is what the sign-in promised.
+  // Reading the user's everyday browser anyway, on every start, broke the
+  // promise quietly. Its session — possibly expired, possibly another
+  // account — became the stored jar again, the account label showed that
+  // account (seen on this project's own test machine: a Free account signed
+  // in, and the label naming the account Firefox held), and every recovery
+  // path that "puts the session back" when a page looks signed out wrote
+  // that jar over the one the person had just signed in with. Reported as
+  // ChatGPT asking to sign in again, and again, after signing in. An
+  // explicit import still reads them: that is the user choosing a jar.
+  if (config.sessionInProfile && !manualToken) {
+    logger.info("auth", "the session lives in OnFlip's browser profile; not reading other browsers");
+    return {
+      accessToken: "",
+      model,
+      thinking,
+      maxIterations,
+      cookies: [],
+      sessionToken: "",
+    };
+  }
   if (manualToken) {
     primary = { name: SESSION_COOKIE, value: manualToken };
     cookies = [primary];

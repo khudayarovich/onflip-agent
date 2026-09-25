@@ -2585,6 +2585,8 @@ export class Engine {
       sessionCookiesPending: true,
       // Signing in lifts the suppression a previous sign-out put in place.
       signedOut: false,
+      // A jar the user chose, so it — not the profile alone — is the session.
+      sessionInProfile: undefined,
     });
 
     if (this.auth) {
@@ -2678,6 +2680,7 @@ export class Engine {
     // next start from silently importing those cookies again.
     saveConfig({ signedOut: true });
     clearConfigKeys([
+      "sessionInProfile",
       "sessionToken",
       "sessionCookies",
       "sessionCookieName",
@@ -2743,10 +2746,18 @@ export class Engine {
       "sessionDeviceId",
       "accessToken",
       "accessTokenExpiry",
+      // The label belonged to whatever session was here before — often the
+      // one read out of another browser at start — and the next start would
+      // show it over this one until a turn had asked the page again.
+      "accountName",
+      "accountEmail",
     ]);
     saveConfig({
       signedOut: false,
       persistProfile: true,
+      // The profile is the session now, and later starts must not read
+      // another browser's over it: see `resolveAuth`.
+      sessionInProfile: true,
       ...(result.browser ? { browserChannel: result.browser.channel } : {}),
     });
     this.config = loadConfig();

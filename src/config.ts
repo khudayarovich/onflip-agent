@@ -32,6 +32,14 @@ export interface OnFlipConfig {
    */
   sessionCookiesPending?: boolean;
   /**
+   * The session lives in OnFlip's own browser profile, put there by the user
+   * signing in through a real browser — so nothing is read from the user's
+   * other browsers at start. Set by that sign-in; cleared by an explicit
+   * import (which chooses a jar instead) and by signing out. See
+   * `resolveAuth` for what reading them anyway used to cost.
+   */
+  sessionInProfile?: boolean;
+  /**
    * Open every new chat as a ChatGPT Temporary Chat. On unless set to false.
    *
    * An agent turns one request into dozens of messages, and each lost live
@@ -285,6 +293,8 @@ const PROVIDER_SETTINGS = [
   // and turned off auto-resume there, for a limit ChatGPT never set.
   "cooldownUntil",
   "cooldownPassesByItself",
+  // Whose session lives in the profile is that service's own business.
+  "sessionInProfile",
   // Picking a Qwen model pinned ChatGPT's choice, so ChatGPT stopped
   // adopting its account's default.
   "modelPinned",

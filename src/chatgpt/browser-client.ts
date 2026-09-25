@@ -964,6 +964,15 @@ let launching: Promise<Page> | null = null;
 
 function ensurePage(cookies: SessionCookie[]): Promise<Page> {
   if (page && !page.isClosed()) return Promise.resolve(page);
+  // The sign-in window holds the profile while it is open. The start-up
+  // checks kept asking for a page through a sign-in, and a launch then either
+  // failed on the lock or, winning the race, took the profile from the window
+  // the person was signing in with.
+  if (signingIn) {
+    return Promise.reject(
+      new ChatGPTBrowserError("The ChatGPT sign-in window is open; OnFlip's browser waits until it has closed.")
+    );
+  }
   if (!launching) {
     launching = launchPage(cookies).finally(() => {
       launching = null;
@@ -1433,18 +1442,23 @@ async function openNewChat(p: Page, model?: string, signal?: AbortSignal): Promi
   // the same doomed write, and running it on every new chat is half of what
   // made the seventeen-minute loop. Leaving it alone lets the send path
   // reach its one honest error instead.
-  if (
-    injectedCookies.length > 0 &&
-    !storedJarSpent &&
-    context &&
-    (await looksAnonymous(p).catch(() => false))
-  ) {
-    logger.warn("browser", "new chat came up logged out; putting the session back and reloading", {
-      url: p.url(),
-    });
-    await injectCookies(context, injectedCookies);
-    await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 });
-    await assertLoggedIn(p);
+  if (context && (await looksAnonymous(p).catch(() => false))) {
+    // ChatGPT's own answer first (see `sessionAnswers`): on a live session
+    // the look is a moment's rendering, and a reload is the whole remedy —
+    // writing a stored copy over that session was how a fresh sign-in got
+    // undone.
+    if (await sessionAnswers(p)) {
+      logger.warn("browser", "new chat looked signed out on a live session; reloading it", { url: p.url() });
+      await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 });
+      await assertLoggedIn(p);
+    } else if (injectedCookies.length > 0 && !storedJarSpent) {
+      logger.warn("browser", "new chat came up logged out; putting the session back and reloading", {
+        url: p.url(),
+      });
+      await injectCookies(context, injectedCookies);
+      await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 });
+      await assertLoggedIn(p);
+    }
   }
 
   const composer = await firstVisible(p, COMPOSER_SELECTORS, 30_000);
@@ -3065,6 +3079,46 @@ async function looksAnonymous(p: Page): Promise<boolean> {
 }
 
 /**
+ * Does ChatGPT itself say this page is signed in?
+ *
+ * The page's look is prose — a login wall's words and no message nodes — and
+ * a page can wear that look for a moment on a session that is fine: the first
+ * document of a launch, a chat that has not drawn yet. Acting on the look
+ * alone did two harmful things. It told people who had just signed in to
+ * sign in again, and it "put the session back": wrote a stored copy —
+ * possibly another browser's, possibly expired — over the live session the
+ * person had just made. Reported as ChatGPT asking for a sign-in again and
+ * again after signing in. The session endpoint is the fact. Asked a few
+ * times, because it answers empty for the first call or two while the app
+ * settles (see `pageAccessToken`), and never with a reload: this runs where
+ * a page must not be thrown away.
+ */
+export async function sessionAnswers(
+  p: Pick<Page, "evaluate" | "waitForTimeout">,
+  tries = 3
+): Promise<boolean> {
+  for (let i = 0; i < tries; i++) {
+    const live = await p
+      .evaluate(
+        `fetch("/api/auth/session", { credentials: "include" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j) => Boolean(j && j.accessToken))
+          .catch(() => false)`
+      )
+      .catch(() => false);
+    if (live === true) return true;
+    if (i < tries - 1) await p.waitForTimeout(1_500).catch(() => undefined);
+  }
+  return false;
+}
+
+/** Signed out by the page's look, and by ChatGPT's own account of the session. */
+async function signedOutForSure(p: Page): Promise<boolean> {
+  if (!(await looksAnonymous(p).catch(() => false))) return false;
+  return !(await sessionAnswers(p));
+}
+
+/**
  * Repair a page that came up logged out while we hold a working session.
  *
  * Seen for real: the profile had the session token on `.openai.com` but not
@@ -3083,8 +3137,29 @@ async function recoverAnonymousPage(
   model: string | undefined,
   midConversation: boolean
 ): Promise<void> {
-  if (cookies.length === 0 || !context) return;
+  if (!context) return;
   if (!(await looksAnonymous(p).catch(() => false))) return;
+
+  // ChatGPT's own answer first (see `sessionAnswers`). A live session only
+  // needs the page reloaded; nothing stored goes over it, and nobody is told
+  // to sign in to an account they are signed in to.
+  if (await sessionAnswers(p)) {
+    logger.warn("browser", "the page looked signed out on a live session; reloading it", { url: p.url() });
+    await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
+    await p.waitForTimeout(1_200);
+    if (midConversation) {
+      // The reload went to a new chat, so the thread is gone from the page:
+      // replay the transcript rather than append to a chat that never saw it.
+      dropChat("the page looked signed out mid-conversation");
+      forgetChat();
+      throw new ChatGPTBrowserError(
+        "The ChatGPT page lost its conversation mid-turn. The session itself is fine, so the transcript is being resent into a fresh chat.",
+        "chat-lost"
+      );
+    }
+    return;
+  }
+  if (cookies.length === 0) return;
 
   // The jar has already been tried against an anonymous page and lost. It is
   // the same bytes it was a minute ago, so a second go is not a recovery —
@@ -3171,8 +3246,10 @@ export async function sendViaBrowser(
   if (sessionSuspect && context && cookies.length > 0) {
     sessionSuspect = false;
     // A jar that has already been put back and lost would only replace the
-    // profile's session with the same dead one again.
-    if (!storedJarSpent) {
+    // profile's session with the same dead one again — and a session ChatGPT
+    // still answers for was not what the refusal was about (a challenge, a
+    // throttle), so it stays.
+    if (!storedJarSpent && !(await sessionAnswers(p))) {
       logger.warn("browser", "putting the session back after a refused request");
       await injectCookies(context, cookies);
     }
@@ -3805,10 +3882,11 @@ export async function waitForReply(
       // Waiting the full silence budget for that costs a minute and a half,
       // three times over, before anyone is told why — and the page has been
       // able to answer the question since the first second.
-      if (!sendLanded && (await looksAnonymous(p).catch(() => false))) {
+      if (!sendLanded && (await signedOutForSure(p))) {
         throw new ChatGPTBrowserError(
           "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. " +
-            "Sign in from the account menu (or sign in again from the account menu), then send again."
+            "Sign in from the account menu (or sign in again from the account menu), then send again.",
+          "signed-out"
         );
       }
     }
@@ -3885,7 +3963,8 @@ export async function waitForReply(
     // Retrying into that is pointless; only signing in fixes it.
     if (
       pageState &&
-      (/\/uc\//.test(pageState.url) || looksSignedOut(pageState))
+      (/\/uc\//.test(pageState.url) || looksSignedOut(pageState)) &&
+      !(await sessionAnswers(p))
     ) {
       throw new ChatGPTBrowserError(
         "The browser profile is signed out of ChatGPT — the page is in anonymous mode, so messages go nowhere. Sign in from the account menu (or sign in again from the account menu), then send again.",
@@ -5032,6 +5111,13 @@ async function closeGracefully(child: ChildProcess, exited: Promise<true>): Prom
 
 let signInChild: ChildProcess | null = null;
 let signInOutcome: "finish" | "cancel" | null = null;
+/** From the moment a sign-in frees the profile until its window has closed; see `ensurePage`. */
+let signingIn = false;
+
+/** Hold `ensurePage` off as a sign-in does, for a test with no browser to sign in with. */
+export function __setSigningInForTest(value: boolean): void {
+  signingIn = value;
+}
 
 export interface RealBrowserSignInResult {
   ok: boolean;
@@ -5160,7 +5246,9 @@ export async function signInWithRealBrowser(
   }
 
   // The profile directory is held while the automation browser runs; a
-  // second browser on it would refuse to start.
+  // second browser on it would refuse to start. From here until the window
+  // closes nothing else may launch on it (`ensurePage`).
+  signingIn = true;
   await closeBrowser();
   configureBrowser({ persistProfile: true });
   const dir = profileDir();
@@ -5182,6 +5270,7 @@ export async function signInWithRealBrowser(
   try {
     child = spawn(pick.executable, args, { stdio: "ignore", windowsHide: false });
   } catch (e) {
+    signingIn = false;
     return { ok: false, reason: `Could not start ${pick.name}: ${e instanceof Error ? e.message : String(e)}` };
   }
   let spawnError: string | null = null;
@@ -5221,6 +5310,7 @@ export async function signInWithRealBrowser(
     }
   } finally {
     signInChild = null;
+    signingIn = false;
   }
   if (spawnError) return { ok: false, reason: `Could not start ${pick.name}: ${spawnError}` };
   if (signInOutcome === "cancel") return { ok: false, reason: "cancelled" };
@@ -5286,6 +5376,11 @@ export async function clearBrowserProfile(): Promise<void> {
 }
 
 export async function closeBrowser(): Promise<void> {
+  // A launch still under way finishes first, so that what it opens is closed
+  // too. Left running, it came up just after the close, on a profile the
+  // caller had asked to have freed — the sign-in window's, for one.
+  const pending = launching;
+  if (pending) await pending.catch(() => undefined);
   try {
     if (page && !page.isClosed()) await page.close().catch(() => {});
     if (context) await context.close().catch(() => {});

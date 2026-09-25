@@ -567,3 +567,42 @@ test("a message typed during a throttle's pause is carried when it ends, not dro
   assert.ok(notices(events).some((n) => /^The ChatGPT pause is over/.test(n)), notices(events).join("\n"));
   clearCooldown();
 });
+
+test("a sign-in through the window makes the profile the session, until an import or a sign-out", { skip: needsBuild, timeout: 20_000 }, async () => {
+  // Every start used to read the everyday browser's session back in after a
+  // sign-in that promised the profile was the session from then on.
+  const providers = require(path.join(ROOT, "dist", "providers", "index.js"));
+  const { loadConfig, saveConfig } = require(path.join(ROOT, "dist", "config.js"));
+  const real = { signIn: providers.signInWithRealBrowser, clear: providers.clearBrowserProfile };
+  providers.signInWithRealBrowser = async () => ({
+    ok: true,
+    browser: { channel: "chrome", name: "Google Chrome", executable: "chrome" },
+  });
+  providers.clearBrowserProfile = async () => {};
+  try {
+    const { engine } = makeEngine(async () => ({ content: DONE, conversationId: null }));
+    engine.auth = { cookies: [], accessToken: "", sessionToken: "" };
+    // Who signed in is asked of a real page; this test has none to ask.
+    engine.accountVerified = true;
+    saveConfig({ accountName: "The account Firefox holds", accountEmail: "firefox@example.com" });
+    assert.equal((await engine.signInWithBrowser()).ok, true);
+    assert.equal(loadConfig().sessionInProfile, true);
+    // The old label went with the old session.
+    assert.equal(loadConfig().accountEmail, undefined);
+
+    // An explicit import chooses a jar, so the profile alone is not the session.
+    await engine.applySignIn([{ name: "__Secure-next-auth.session-token", value: "x".repeat(40) }], {
+      name: "Someone",
+      email: "someone@example.com",
+    });
+    assert.equal(loadConfig().sessionInProfile, undefined);
+
+    await engine.signInWithBrowser();
+    assert.equal(loadConfig().sessionInProfile, true);
+    await engine.applySignOut();
+    assert.equal(loadConfig().sessionInProfile, undefined);
+  } finally {
+    providers.signInWithRealBrowser = real.signIn;
+    providers.clearBrowserProfile = real.clear;
+  }
+});
