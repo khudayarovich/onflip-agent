@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.58
+# OnFlip Desktop 0.10.59
 
-**Rate limits, handled: a Free ChatGPT account, DeepSeek and Qwen stop running into theirs — and a pause is no longer the end of the work.**
+**A ChatGPT sign-in holds, and DeepSeek's thinking is no longer mistaken for an error.**
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,51 +8,36 @@
 
 | Platform | File |
 | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.58.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.58/OnFlip-Setup-0.10.58.exe) |
-| **macOS** · Apple Silicon | [OnFlip-0.10.58-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.58/OnFlip-0.10.58-mac-arm64.dmg) |
-| **macOS** · Intel | [OnFlip-0.10.58-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.58/OnFlip-0.10.58-mac-x64.dmg) |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.59.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.59/OnFlip-Setup-0.10.59.exe) |
+| **macOS** · Apple Silicon | [OnFlip-0.10.59-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.59/OnFlip-0.10.59-mac-arm64.dmg) |
+| **macOS** · Intel | [OnFlip-0.10.59-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.59/OnFlip-0.10.59-mac-x64.dmg) |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside, and the updater checks it for you.
 
 **On 0.8.7 or later?** You should not need this page: the app offers the update itself.
 
-## What's new
-
-- **A limit is a pause, not the end of the task.** When a service says "too many requests", OnFlip waits as long as it asks — at least 30 seconds — and then carries on by itself. Stop cancels that. A message you type during the pause is sent when it ends. Only short pauses are waited out like this: after a limit measured in hours, or an abuse block, OnFlip tells you and leaves the next step to you.
-- **The agent's browser opens pages from your project folder.** A small game or page written as plain HTML can be looked at straight away, as `index.html`, without starting a local server first. Only files inside the working folder.
-- **"Always allow" for your own pages.** The agent's browser can be allowed once for pages on this computer — `localhost`, `127.0.0.1` and pages in the working folder — so testing your own app no longer asks at every click. Websites on the internet still ask every time. This matters most on a Mac, which has no Full Auto mode.
-
 ## Fixed
 
-**ChatGPT on a Free account**
+**ChatGPT**
 
-- **Far fewer new chats and summaries.** OnFlip assumed a Free account's model could hold 8,000 tokens, which left room for almost nothing after its own instructions. It now reads the real figure from your account — about 35,000 for GPT-5.6 Luna. On a test task, building a chess game went from 231 seconds, 15 steps and 3 chats to 48 seconds, 4 steps and 1 chat.
-- **Replies are no longer cut off or mistaken.** A short "I'll build this…" at the start of a reply is no longer taken for the whole answer, and a reply that stops halfway is asked for again instead of writing half a file.
-- **"Done" can no longer claim a change that failed.** If an edit did not land, the AI is sent back once to make it, and you are told if it still did not.
-- The first message no longer collides with the account checks at start-up, which could leave a session running without knowing its plan.
-- No "OnFlip" project is created in your ChatGPT account for chats that never appear in it anyway.
+- **Signing in once is enough.** After signing in through OnFlip's sign-in window, some people were asked to sign in again as soon as they sent a message, or saw "the sent message never appeared". OnFlip was still reading the ChatGPT login from your everyday browser (Firefox, Safari or Chrome) every time it started, and could write that login — sometimes an old one, sometimes another account — over the one you had just made. After a sign-in through the window, OnFlip now uses only its own browser's session and leaves your other browsers alone. **If ChatGPT kept asking you to sign in, sign in once more after updating** — that sign-in is the one OnFlip keeps.
+- **"Signed out" only when ChatGPT says so.** OnFlip decided you were signed out from how the page looked, and a page can look signed out for a moment on a session that is fine. It now asks ChatGPT itself first, and if the session is fine it reloads the page instead of asking you to sign in.
+- **The sign-in window has the browser to itself.** OnFlip's start-up checks could open its own browser in the middle of a sign-in, on the same profile. They now wait until the sign-in window has closed.
+- **The account shown is the account in use.** The account bar could show the account from your everyday browser rather than the one OnFlip was signed in to.
 
-**DeepSeek**
+**DeepSeek and Qwen**
 
-- **No more lost messages.** DeepSeek silently ignores roughly the eleventh message in a minute, and OnFlip waited 90 seconds each time before sending it again. It now keeps under that pace. On a test task: no messages lost, where earlier runs lost 2 and 6.
-- Answers are recognised as finished sooner, and a message that does get lost is noticed in 25 seconds instead of 90.
-- DeepSeek's own tool-call format is understood instead of appearing as garbled text.
+- **The AI's thinking is no longer shown as an error.** With Deep Thinking on, DeepSeek writes its reasoning on the page before its answer, and OnFlip read that text looking for DeepSeek's own warnings such as "rate limit". A code review that mentioned "no rate limit" ended the turn with a red "DeepSeek says: …" error made of the AI's own sentence, and paused sending. OnFlip no longer reads the page for warnings while an answer is being written, and only a short standalone line counts as one. Qwen works the same way and gets the same fix.
+- **DeepSeek's answer is never stopped by accident.** DeepSeek's send button becomes a Stop button while it answers, and OnFlip could press it to re-send a message whose answer had already started. It now checks first.
 
-**Qwen**
+**Diagnostics**
 
-- **When Qwen holds your messages, you are told at once.** Qwen's risk control sometimes answers "overcrowded, please try again later" instead of replying. OnFlip showed an empty answer, waited four minutes and sent again into the block — twelve minutes with nothing done. It now says so within seconds, pauses for ten minutes (in our tests the block lifted by itself within 10–15), and suggests switching to DeepSeek or ChatGPT meanwhile.
-- Qwen's daily limit ("wait 4 hours") is read: OnFlip stops and tells you, instead of pausing five minutes and running into it again.
+- **About → Copy diagnostics now shows what ChatGPT's browser saw.** For ChatGPT it picked the wrong log lines, so it could not show why a message failed or whether the page was signed in. If a ChatGPT problem remains, that paste is what finds it.
 
-**All services**
-
-- DeepSeek and Qwen now respect their own pauses. Before, they sent the very next message straight into the limit.
-- **On a Mac, DeepSeek and Qwen could close their own browser at start-up:** two parts of OnFlip opened it at once, and the second closed the first.
-- Notices name the service you are using — a DeepSeek session was told "ChatGPT stopped…".
-
-Everything from 0.10.57 is included: passwords stay out of what the AI is told about a page, and typed text is hidden in tool cards.
+Everything from 0.10.58 is included: Free ChatGPT accounts, DeepSeek and Qwen keep to their rate limits, and a pause is no longer the end of the work.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT, DeepSeek or Qwen account — one, or all three. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.57...desktop-v0.10.58](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.57...desktop-v0.10.58)
+**Full changelog:** [desktop-v0.10.58...desktop-v0.10.59](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.58...desktop-v0.10.59)
