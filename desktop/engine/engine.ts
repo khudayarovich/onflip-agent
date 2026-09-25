@@ -600,7 +600,7 @@ export class Engine {
    * to the user as "this app has no tools". Discovering the list lets the
    * session settle on a slug the account actually has.
    */
-  private async learnAccountModels(): Promise<void> {
+  private async learnAccountModels(opts: { accountChanged?: boolean } = {}): Promise<void> {
     if (!this.transport || this.transport.name !== "browser") return;
     const cfg = loadConfig();
 
@@ -623,38 +623,7 @@ export class Engine {
         // Null is "this service has no plans to report" (DeepSeek) or a
         // request that did not land - neither is a reason to forget a good
         // stored value.
-        if (plan && plan !== cfg.planType) {
-          const was = cfg.planType;
-          saveConfig({ planType: plan });
-          this.config = loadConfig();
-          // The prompt says different things to a rationed plan (a reply
-          // size to stay under), and it was seeded before the plan was known.
-          this.seedSystemPrompt();
-          if (was) {
-            logger.warn("engine", "the stored plan was out of date", {
-              was,
-              now: plan,
-              budgetWas: compactionBudget(was, false, null, this.systemPromptChars()),
-              budgetNow: compactionBudget(plan, false, null, this.systemPromptChars()),
-            });
-            this.notice(
-              `Your plan reads as ${describePlan(plan) ?? plan}, but OnFlip had "${was}" stored and was sizing the conversation from it. Corrected — long chats will now keep more before summarising.`
-            );
-          }
-          const crowded = promptCrowdsPlan(plan, this.systemPromptChars());
-          if (crowded) {
-            this.notice(
-              `This plan's context window is about ${Math.round(crowded.windowChars / 1000)}k characters and OnFlip's instructions take ${Math.round(
-                crowded.systemChars / 1000
-              )}k of it, so the conversation summarises itself often and long tasks are slower. A larger plan mostly buys room here.`
-            );
-          }
-          logger.info("engine", "account plan", {
-            plan,
-            described: describePlan(plan),
-            compactAt: compactionBudget(plan),
-          });
-        }
+        if (plan) this.adoptPlan(plan);
       } catch (e) {
         // A plan OnFlip cannot read simply leaves the composer ceiling in
         // charge, which is what it used before it could read one.
@@ -675,6 +644,7 @@ export class Engine {
     // a list learned on one plan sizes the other's budget wrongly.
     const listed = loadConfig().discoveredModels ?? [];
     const stale =
+      opts.accountChanged === true ||
       listed.length === 0 ||
       !listed.some((m) => typeof m.maxTokens === "number") ||
       (cfg.planType !== undefined && loadConfig().planType !== cfg.planType);
@@ -689,6 +659,96 @@ export class Engine {
     }
     this.adoptDefaultModel();
     this.pushStatus();
+  }
+
+  /**
+   * Take the plan the service states, when it is not the one stored.
+   *
+   * The stored plan is a cache of something the service owns, and a stale
+   * one is expensive in ways nothing on screen explains. Upward, a config
+   * still saying "free" on a Pro Lite account compacted at a tenth of the
+   * room it had. Downward, a config still saying "prolite" after a Free
+   * account was signed in over it — measured on this project's own machine
+   * — sized that account's conversation for Pro Lite, so every lost chat
+   * replayed forty to sixty thousand characters into the new one, and left
+   * the Free limits out of the prompt. True when it changed anything.
+   */
+  private adoptPlan(plan: string): boolean {
+    const was = loadConfig().planType;
+    if (!plan || plan === was) return false;
+    saveConfig({ planType: plan });
+    this.config = loadConfig();
+    // The prompt says different things to a rationed plan (a reply size to
+    // stay under), and it was seeded before the plan was known.
+    this.seedSystemPrompt();
+    if (was) {
+      logger.warn("engine", "the stored plan was out of date", {
+        was,
+        now: plan,
+        budgetWas: compactionBudget(was, false, null, this.systemPromptChars()),
+        budgetNow: compactionBudget(plan, false, null, this.systemPromptChars()),
+      });
+      this.notice(
+        `Your plan reads as ${describePlan(plan) ?? plan}, but OnFlip had "${describePlan(was) ?? was}" stored and was sizing the conversation from it. Corrected${
+          rationedPlan(plan) && !rationedPlan(was)
+            ? " — replies are now kept to the size this plan allows, and turns no longer go to its metered Thinking models."
+            : "."
+        }`
+      );
+    }
+    const crowded = promptCrowdsPlan(plan, this.systemPromptChars());
+    if (crowded) {
+      this.notice(
+        `This plan's context window is about ${Math.round(crowded.windowChars / 1000)}k characters and OnFlip's instructions take ${Math.round(
+          crowded.systemChars / 1000
+        )}k of it, so the conversation summarises itself often and long tasks are slower. A larger plan mostly buys room here.`
+      );
+    }
+    logger.info("engine", "account plan", {
+      plan,
+      described: describePlan(plan),
+      compactAt: compactionBudget(plan),
+    });
+    return true;
+  }
+
+  /**
+   * After a turn: a plan the start-up read missed, acted on in full.
+   *
+   * The list of models is the plan's (`gpt-5-6` is Luna on Free and Sol on
+   * a paid plan), so is the default model, and the live chat was opened on
+   * whatever the old plan chose — so the list is read again, the default
+   * adopted if the person never picked one, and the next message opens a
+   * fresh chat when the model it runs on has moved.
+   */
+  private async adoptPlanAfterTurn(plan: string): Promise<void> {
+    const before = effectiveModel(this.model, this.thinking);
+    if (!this.adoptPlan(plan)) return;
+    try {
+      await this.refreshModels();
+    } catch (e) {
+      logger.warn("engine", "could not read the account's model list", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+    this.adoptDefaultModel();
+    if (effectiveModel(this.model, this.thinking) !== before) this.applyModelChange("model");
+  }
+
+  /**
+   * A sign-in can be another account, and everything learned about the last
+   * one is suspect: the plan, the model list, the default. Measured on this
+   * project's own machine: a Free account signed in over an expired Pro Lite
+   * session ran all afternoon on Pro Lite's plan and model list, because
+   * both were only ever read at start-up — where the list read had failed on
+   * the expired session and the plan read had come back empty. Read again
+   * now, and the next message waits for it as the first one does at start
+   * (`awaitWarming`), since both use the same page.
+   */
+  private relearnAccount(): void {
+    this.accountVerified = false;
+    if (isBrowserProvider()) return;
+    this.warming = this.learnAccountModels({ accountChanged: true }).catch(() => {});
   }
 
   /**
@@ -2090,10 +2150,13 @@ export class Engine {
           this.accountVerified = true;
           if (!user) return;
           const changed = user.name !== this.account?.name || user.email !== this.account?.email;
-          this.account = user;
+          this.account = { name: user.name, email: user.email };
           if (changed) saveConfig({ accountName: user.name, accountEmail: user.email });
           // Requests counted before the account was known belong to it.
           associateAccount(this.accountKey());
+          // The same document states the plan, and this is the read that
+          // happens when the page has settled: the start-up one can miss.
+          if (user.planType && !isBrowserProvider()) await this.adoptPlanAfterTurn(user.planType);
           this.pushStatus();
         } catch {
           // Identification is cosmetic; the session works without it.
@@ -2620,6 +2683,7 @@ export class Engine {
       associateAccount(this.accountKey());
     }
     this.probeSignedIn = true;
+    this.relearnAccount();
     this.emitConnect("ready");
     this.notice(`Signed in to ${providerLabel()} — the session is saved and ready to use.`);
     this.pushStatus();
@@ -2769,6 +2833,7 @@ export class Engine {
     this.probeSignedIn = true;
     this.account = null;
     this.transport?.reset();
+    this.relearnAccount();
     this.maybeIdentifyAccount();
     this.emitConnect("ready");
     this.notice(

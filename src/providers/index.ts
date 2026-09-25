@@ -277,7 +277,7 @@ export async function deleteConversations(
 
 export async function pageSessionUser(
   cookies: SessionCookie[]
-): Promise<{ name?: string; email?: string } | null> {
+): Promise<{ name?: string; email?: string; planType?: string } | null> {
   const d = driver();
   if (!d) return chatgpt.pageSessionUser(cookies);
   const check = await d.checkSignedIn();

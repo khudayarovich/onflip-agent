@@ -196,6 +196,8 @@ interface StreamMessage {
    * page cannot answer — see `streamReplyText`.
    */
   text: string;
+  /** `metadata.model_slug`: which model wrote it, when the server said. */
+  model: string;
 }
 
 interface StreamTurn {
@@ -315,14 +317,17 @@ export function cutByStream(
  *
  * The page's copy is the one normally used. But ChatGPT now keeps only the
  * last few turns of a long chat on the page, so their count stops rising, and
- * its stop control no longer matches: live, ten replies in one session
- * finished on the wire — `finished_successfully`, 52 to 4,430 characters,
- * within ten seconds of the send — and none was read off the page. Each
- * became "the sent message never appeared" ninety seconds later, a dropped
- * chat and a replay of the whole transcript, forty to sixty thousand
- * characters at a time, until the account's allowance ran out. The server's
- * own copy is the model's markdown exactly as written, so once the stream has
- * finished and the page has had a few seconds to show it, it is the reply.
+ * live, ten replies in one session finished on the wire —
+ * `finished_successfully`, 52 to 4,430 characters, within ten seconds of the
+ * send — while the newest message on the page stayed the previous reply. The
+ * page did show generation: each failure came ninety seconds after its
+ * stream ended, to within half a second, and ninety seconds is the silence
+ * budget the last sighting of the stop control had restarted. Each became
+ * "the sent message never appeared", a dropped chat and a replay of the
+ * whole transcript, forty to sixty thousand characters at a time, until the
+ * account's allowance ran out. The server's own copy is the model's markdown
+ * exactly as written, so once the stream has finished and the page has had a
+ * few seconds to show it, it is the reply.
  */
 export function streamReplyText(
   view: Pick<StreamView, "state" | "visible" | "endedAt"> | null,
@@ -335,6 +340,25 @@ export function streamReplyText(
   if (now - view.endedAt < graceMs) return null;
   const text = visible.text.trim();
   return text ? text : null;
+}
+
+/**
+ * Could the page's text and the stream's be the same reply?
+ *
+ * Compared on letters and digits alone, over the opening stretch: the page's
+ * copy is re-serialised from rendered HTML and the stream's is the model's
+ * own markdown, so markers, spacing and fences can differ where the words do
+ * not, and a page still drawing a reply has its beginning but not its end.
+ * Below a dozen characters an opening proves nothing, so only the whole text
+ * will do.
+ */
+export function sameReplyText(page: string, stream: string): boolean {
+  const squash = (t: string) => t.normalize("NFKC").toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+  const a = squash(page);
+  const b = squash(stream);
+  if (Math.min(a.length, b.length) < 12) return a === b;
+  const k = Math.min(a.length, b.length, 80);
+  return a.slice(0, k) === b.slice(0, k);
 }
 
 /** Stand a finished (or live) reply stream up for a test that has no browser to watch. */
@@ -363,6 +387,7 @@ export function __setStreamForTest(
     finishType: "stop",
     textLen: turn.text.length,
     text: turn.text,
+    model: "",
   };
   latestStream = {
     seq: ++streamSeqCounter,
@@ -526,7 +551,9 @@ async function attachStreamWatch(p: Page, ctx: BrowserContext): Promise<void> {
 
 /** Base64 chunk in, SSE frames out; each complete frame is applied at once. */
 /** Run server-sent frames through the parser, for a test with no browser; the visible reply as it reads. */
-export function __parseStreamForTest(sse: string): { text: string; textLen: number; status: string } | null {
+export function __parseStreamForTest(
+  sse: string
+): { text: string; textLen: number; status: string; model: string | null; inner: Record<string, number> } | null {
   const turn: StreamTurn = {
     seq: 0,
     state: "streaming",
@@ -542,7 +569,8 @@ export function __parseStreamForTest(sse: string): { text: string; textLen: numb
   };
   feedStream(turn, Buffer.from(sse, "utf8").toString("base64"));
   const visible = visibleMessage(turn);
-  return visible ? { text: visible.text, textLen: visible.textLen, status: visible.status } : null;
+  if (!visible) return null;
+  return { text: visible.text, textLen: visible.textLen, status: visible.status, ...streamSummary(turn) };
 }
 
 function feedStream(turn: StreamTurn, base64: string): void {
@@ -655,6 +683,8 @@ function applyStreamOp(turn: StreamTurn, op: Record<string, unknown>): void {
     if (typeof envelope.is_visually_hidden_from_conversation === "boolean") {
       m.hidden = envelope.is_visually_hidden_from_conversation;
     }
+    const slug = asString(envelope.model_slug);
+    if (slug) m.model = slug;
     return;
   }
   if (path === "/message/metadata/finish_details" && envelope) {
@@ -688,9 +718,38 @@ function registerMessage(turn: StreamTurn, message: Record<string, unknown>): vo
     finishType: finish ? asString(finish.type) || null : null,
     textLen: text.length,
     text,
+    model: asString(metadata.model_slug),
   };
   turn.messages.set(id, m);
   turn.current = m;
+}
+
+/**
+ * Which model wrote a reply, and what else it carried besides the answer.
+ *
+ * A Free account ran out of "files, images, and data analysis" in an
+ * afternoon of plain text, and the log could not say what had used it up:
+ * 38 of 125 replies had carried six to forty-five messages besides the
+ * answer, and a count was all it kept. So each one is named by its author,
+ * whom it was addressed to and what it held — `assistant>python:code` is
+ * the model running code, `tool:execution_output` what came back — and the
+ * next time an allowance runs out, the log says which one. The model slug
+ * settles the other question a log could not answer: what the chat was
+ * actually running on, whatever it was opened with. Our own message, echoed
+ * back at the head of the stream, is left out.
+ */
+function streamSummary(turn: StreamTurn): { model: string | null; inner: Record<string, number> } {
+  const visible = visibleMessage(turn);
+  let model: string | null = visible?.model || null;
+  const inner: Record<string, number> = {};
+  for (const m of turn.messages.values()) {
+    if (!model && m.role === "assistant" && m.model) model = m.model;
+    if (m === visible || m.role === "user") continue;
+    const to = m.recipient && m.recipient !== "all" ? `>${m.recipient}` : "";
+    const key = `${m.role || "?"}${to}:${m.contentType || "?"}`;
+    inner[key] = (inner[key] ?? 0) + 1;
+  }
+  return { model, inner };
 }
 
 function endStream(turn: StreamTurn, state: "done" | "error"): void {
@@ -699,6 +758,7 @@ function endStream(turn: StreamTurn, state: "done" | "error"): void {
   turn.endedAt = Date.now();
   const visible = visibleMessage(turn);
   if (visible?.status === "finished_successfully") sawFinishedStatus = true;
+  const { model, inner } = streamSummary(turn);
   (endedMidMessage(state, visible) ? logger.warn : logger.info)("browser", "reply stream ended", {
     seq: turn.seq,
     state,
@@ -707,6 +767,8 @@ function endStream(turn: StreamTurn, state: "done" | "error"): void {
     visibleStatus: visible?.status ?? null,
     finish: visible?.finishType ?? null,
     textLen: visible?.textLen ?? 0,
+    model,
+    ...(Object.keys(inner).length ? { inner } : {}),
     error: turn.error,
   });
 }
@@ -2833,6 +2895,12 @@ export interface BrowserSendOptions {
    * not an answer yet.
    */
   lastBefore?: string;
+  /**
+   * This wait is for the rest of a reply ChatGPT cut off, written into the
+   * node that already holds the first part: the page shows the whole and the
+   * stream only the new part, so the two are not compared.
+   */
+  continuation?: boolean;
 }
 
 /**
@@ -3251,6 +3319,70 @@ export async function sessionAnswers(
   return false;
 }
 
+/** What ChatGPT's session document says about who is signed in. Never the token. */
+export interface SessionFacts {
+  /** The document carried an access token: the session is live. */
+  live: boolean;
+  name?: string;
+  email?: string;
+  /** `account.planType`, lower-cased, when the document states one. */
+  planType?: string;
+}
+
+/** The facts out of what the page handed back, trusting no shape. */
+export function sessionFactsFrom(raw: unknown): SessionFacts | null {
+  if (!raw || typeof raw !== "object") return null;
+  const r = raw as Record<string, unknown>;
+  const text = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim() : undefined);
+  const facts: SessionFacts = { live: r.live === true };
+  const name = text(r.name);
+  const email = text(r.email);
+  const planType = text(r.planType)?.toLowerCase();
+  if (name) facts.name = name;
+  if (email) facts.email = email;
+  if (planType) facts.planType = planType;
+  return facts;
+}
+
+/**
+ * ChatGPT's session document, read from the page until it answers.
+ *
+ * One read was the whole of it, and that cost a Free account its afternoon.
+ * The document answers empty for the first call or two after a launch (see
+ * `pageAccessToken`), and the plan read at start-up is usually the first
+ * call — so the plan came back null, a null keeps the stored value, and a
+ * config still saying "prolite" from the account signed in before went on
+ * sizing a Free account's conversation for Pro Lite, with none of the Free
+ * limits in the prompt. Asked a few times, like `sessionAnswers`, and never
+ * with a reload. Only the facts leave the page, never the token.
+ */
+export async function readSessionFacts(
+  p: Pick<Page, "evaluate" | "waitForTimeout">,
+  tries = 4
+): Promise<SessionFacts | null> {
+  let last: SessionFacts | null = null;
+  for (let i = 0; i < tries; i++) {
+    const raw = await p
+      .evaluate(
+        `fetch("/api/auth/session", { credentials: "include" })
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j) => (j ? {
+            live: Boolean(j.accessToken),
+            name: (j.user && j.user.name) || "",
+            email: (j.user && j.user.email) || "",
+            planType: (j.account && j.account.planType) || "",
+          } : null))
+          .catch(() => null)`
+      )
+      .catch(() => null);
+    const facts = sessionFactsFrom(raw);
+    if (facts) last = facts;
+    if (facts?.live) return facts;
+    if (i < tries - 1) await p.waitForTimeout(1_500).catch(() => undefined);
+  }
+  return last;
+}
+
 /** Signed out by the page's look, and by ChatGPT's own account of the session. */
 async function signedOutForSure(p: Page): Promise<boolean> {
   if (!(await looksAnonymous(p).catch(() => false))) return false;
@@ -3618,6 +3750,7 @@ async function sendOnce(
       // Continuing writes into the same node; until it grows, it is still
       // the reply already in hand.
       lastBefore: reply,
+      continuation: true,
     });
     reply = joinContinuation(reply, more);
     view = streamView(seqBefore);
@@ -3789,9 +3922,28 @@ export async function waitForReply(
   // after this point is about the reply being waited for.
   const streamSeqBefore = opts?.streamSeqBefore ?? streamSeq();
   let hookSeen = false;
+  /** The text in hand came from the reused-node rule, which reads whatever the newest node holds. */
+  let fromReusedNode = false;
   /** Record how the reply was judged complete, then hand it back. */
   const accept = (via: NonNullable<ReplyMeta["acceptedVia"]>, generatingNow: boolean): string => {
     const view = streamView(streamSeqBefore);
+    // On a page that keeps only a window of the chat, the newest node need
+    // not be this reply: the rule that reads it cannot tell an older message
+    // from a new one, and an older reply taken as the answer runs its tool
+    // calls again. The stream says what this reply is, so when the two
+    // disagree the stream is believed.
+    if (fromReusedNode && !opts?.continuation) {
+      const fromStream = streamReplyText(view, Date.now(), 0);
+      if (fromStream && !sameReplyText(text, fromStream)) {
+        logger.warn("browser", "the page's newest message is not this reply; using the stream's text", {
+          pageChars: text.length,
+          streamChars: fromStream.length,
+          acceptedVia: via,
+        });
+        text = fromStream;
+        via = "stream-text";
+      }
+    }
     lastReplyMeta = {
       acceptedVia: via,
       generatingAtAccept: generatingNow,
@@ -3834,10 +3986,9 @@ export async function waitForReply(
 
     // A reply stream that began after this send is ChatGPT answering it:
     // proof that the send landed and that generation happened, whatever the
-    // page's counts and controls say. Both had stopped saying it — ChatGPT
-    // keeps only the last few turns of a long chat on the page, so the user
-    // turn count stops rising, and its stop control no longer matches (seen
-    // in none of 135 sends in one session). See `streamReplyText`.
+    // page's counts say. They had stopped saying it — ChatGPT keeps only the
+    // last few turns of a long chat on the page, so the user turn count
+    // stops rising. See `streamReplyText`.
     const answering = streamView(streamSeqBefore);
     if (answering) {
       hookSeen = true;
@@ -3859,12 +4010,14 @@ export async function waitForReply(
     let candidate = text;
     if (turns.count > before) {
       candidate = turns.last;
+      fromReusedNode = false;
     } else if (before > 0 && sawGeneration && turns.last && turns.last !== opts?.lastBefore) {
       // Some layouts reuse the last node rather than appending one, and a
       // long chat keeps only its last few turns on the page, so the count
       // holds — or drops — while a new reply arrives. Either way only what
       // has changed in the newest node is this reply: see `lastBefore`.
       candidate = turns.last;
+      fromReusedNode = true;
     }
 
     // The page has had its chance: the stream finished with the reply a few
@@ -4269,15 +4422,8 @@ export async function fetchAccountPlan(cookies: SessionCookie[]): Promise<string
   // now — account.planType, measured live ("prolite", 2026-08-29). The
   // accounts/check endpoints that used to carry it answer 405 and 500
   // today; they stay below as fallbacks for backends that still serve them.
-  try {
-    const session = (await p.evaluate(
-      `fetch("/api/auth/session", { credentials: "include" }).then((r) => r.json())`
-    )) as { account?: { planType?: string } };
-    const plan = session?.account?.planType;
-    if (typeof plan === "string" && plan.trim()) return plan.trim().toLowerCase();
-  } catch {
-    /* fall through to the older endpoints */
-  }
+  const facts = await readSessionFacts(p);
+  if (facts?.planType) return facts.planType;
   for (const endpoint of [
     "/backend-api/accounts/check",
     "/backend-api/accounts/check/v4-2023-04-08",
@@ -5077,21 +5223,22 @@ export async function deleteConversations(
  * Who the browser profile is signed in as.
  *
  * Read in page context so it works when Cloudflare refuses the same request
- * from Node. A one-shot read, not the patient `pageAccessToken` path: callers
- * use this after a turn, when the page has long since settled.
+ * from Node. Callers use this after a turn, when the page has long since
+ * settled, and it carries the plan as well: the start-up read of the plan can
+ * miss (see `readSessionFacts`), and this is the second chance to see it.
  */
 export async function pageSessionUser(
   cookies: SessionCookie[]
-): Promise<{ name?: string; email?: string } | null> {
+): Promise<{ name?: string; email?: string; planType?: string } | null> {
   try {
     const p = await pageOnChatGpt(cookies);
-    const result = (await p.evaluate(
-      `fetch("/api/auth/session", { credentials: "include" })
-        .then((r) => (r.ok ? r.json() : null))
-        .then((j) => (j && j.user ? { name: j.user.name || "", email: j.user.email || "" } : null))
-        .catch(() => null)`
-    )) as { name?: string; email?: string } | null;
-    return result && (result.name || result.email) ? result : null;
+    const facts = await readSessionFacts(p, 2);
+    if (!facts || (!facts.name && !facts.email)) return null;
+    return {
+      ...(facts.name ? { name: facts.name } : {}),
+      ...(facts.email ? { email: facts.email } : {}),
+      ...(facts.planType ? { planType: facts.planType } : {}),
+    };
   } catch {
     return null;
   }

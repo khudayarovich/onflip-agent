@@ -8,9 +8,10 @@
  * `finished_successfully`, 52 to 4,430 characters, within ten seconds of the
  * send — and OnFlip never read it off the page. ChatGPT now keeps only the
  * last few turns of a long chat on the page, so no count rises when one
- * arrives, and its stop control no longer matches (seen in none of 135
- * sends), so nothing said a reply had even started. Each time: ninety
- * seconds, "the sent message never appeared", a dropped chat and the whole
+ * arrives, and the newest message on it stayed the previous reply. (The stop
+ * control was seen: every failure came ninety seconds after its stream
+ * ended, which is the silence budget its last sighting restarted.) Each
+ * time: "the sent message never appeared", a dropped chat and the whole
  * transcript typed again, 44,000 to 63,000 characters. The account's
  * allowance then ran out, the page said so — "unavailable until usage resets
  * at 3:42 PM" — and OnFlip, not recognising the words, reloaded and retyped
@@ -32,7 +33,8 @@ const NEW = ["```onflip", "tool: browser_click", "ref: 12", "```"].join("\n");
 
 /**
  * A long chat's page: a fixed window of turns, so neither count moves, and no
- * stop control that matches. The newest assistant node's text follows `text()`.
+ * stop control showing — the reply must be read without one. The newest
+ * assistant node's text follows `text()`.
  */
 function windowedPage(text, assistants = () => 6) {
   const locator = (selector) => ({
@@ -79,6 +81,8 @@ const options = (extra) => ({
 });
 
 test("in a long chat the newest reply is read, though no count rises and no stop control shows", { timeout: 20_000 }, async () => {
+  // Also the other half of the check below: when the page's newest node is
+  // the reply, it is the page's copy that is used.
   const streamSeqBefore = browser.__setStreamForTest(null);
   const started = Date.now();
   const arrived = () => Date.now() - started >= 900;
@@ -125,6 +129,78 @@ test("a finished reply the page never shows is taken from the stream, in seconds
   assert.ok(Date.now() - started < 10_000, `took ${Date.now() - started}ms`);
   assert.equal(browser.takeReplyMeta()?.acceptedVia, "stream-text");
   browser.__setStreamForTest(null);
+});
+
+test("an older message the page puts last is not taken for the reply; the stream's text is", { timeout: 20_000 }, async () => {
+  // The rule that reads a reused newest node cannot tell an older message
+  // from a new one, and on a page that keeps a window of the chat the newest
+  // node can be either. An older reply taken as the answer runs its tool
+  // calls a second time.
+  const OLD = ["```onflip", "tool: write", "path: notes.md", "content: |", "  the first draft", "```"].join("\n");
+  const streamSeqBefore = browser.__setStreamForTest(null);
+  const started = Date.now();
+  const page = windowedPage(() => (Date.now() - started >= 300 ? OLD : PREV));
+  setTimeout(() => browser.__setStreamForTest({ state: "done", text: NEW, endedAt: Date.now() }), 200);
+  const reply = await waitOrError(page, streamSeqBefore);
+  assert.equal(reply, NEW);
+  assert.equal(browser.takeReplyMeta()?.acceptedVia, "stream-text");
+  browser.__setStreamForTest(null);
+});
+
+test("the rest of a cut reply is not second-guessed by a stream that carries only the rest", { timeout: 20_000 }, async () => {
+  // Continuing writes into the node that holds the first part, so the page
+  // shows the whole and the stream only the new part: they differ from the
+  // first word, and neither is wrong.
+  const FIRST = "```onflip\ntool: write\npath: big.txt\ncontent: |\n  line one of a long file";
+  const MORE = "  line two of a long file\n```";
+  const streamSeqBefore = browser.__setStreamForTest(null);
+  const started = Date.now();
+  const page = windowedPage(() => (Date.now() - started >= 300 ? `${FIRST}\n${MORE}` : FIRST));
+  setTimeout(() => browser.__setStreamForTest({ state: "done", text: MORE, endedAt: Date.now() }), 200);
+  const reply = await browser
+    .waitForReply(page, 6, options({ streamSeqBefore, lastBefore: FIRST, continuation: true }))
+    .catch((e) => `ERROR: ${e.message}`);
+  assert.equal(reply, `${FIRST}\n${MORE}`);
+  browser.__setStreamForTest(null);
+});
+
+test("the page's copy and the stream's are the same reply whatever the markup", () => {
+  const stream = "Here is the **plan**:\n\n1. Read `src/app.ts`\n2. Fix the _loop_";
+  // Re-serialised from the page: different markers and spacing, same words.
+  assert.ok(browser.sameReplyText("Here is the plan:\n\n1. Read src/app.ts\n2. Fix the loop", stream));
+  // A page still drawing the reply has its opening.
+  assert.ok(browser.sameReplyText("Here is the plan: 1. Read src/", stream));
+  // A different message is not.
+  assert.equal(browser.sameReplyText("The build passed and the tests are green.", stream), false);
+  assert.equal(browser.sameReplyText(PREV, NEW), false);
+  // Too short for an opening to prove anything: only the whole text will do.
+  assert.ok(browser.sameReplyText("Done.", "done"));
+  assert.equal(browser.sameReplyText("OK", "OK, here is the file you asked for, in full."), false);
+});
+
+test("the stream names the model that answered and what else the reply carried", () => {
+  // Our own message echoed back, the model running code, what came back,
+  // and the answer — the shape of a reply that spends a Free account's
+  // "data analysis" allowance without a word about it on the page.
+  const message = (id, role, recipient, contentType, extra = {}) =>
+    `data: ${JSON.stringify({ v: { message: { id, author: { role }, recipient, content: { content_type: contentType, parts: [""] }, status: "finished_successfully", ...extra } } })}`;
+  const frames = [
+    message("u1", "user", "all", "text"),
+    message("a1", "assistant", "python", "code", { metadata: { model_slug: "gpt-5-6-mini" } }),
+    message("t1", "tool", "all", "execution_output"),
+    message("a2", "assistant", "all", "text", { status: "in_progress" }),
+    `data: ${JSON.stringify({ p: "/message/metadata", o: "append", v: { model_slug: "gpt-5-6-t-mini" } })}`,
+    `data: ${JSON.stringify({ p: "/message/content/parts/0", o: "append", v: "Checked." })}`,
+    `data: ${JSON.stringify({ p: "", o: "patch", v: [{ p: "/message/status", o: "replace", v: "finished_successfully" }] })}`,
+    "data: [DONE]",
+  ]
+    .map((line) => `${line}\n\n`)
+    .join("");
+  const read = browser.__parseStreamForTest(frames);
+  assert.equal(read.text, "Checked.");
+  // The answer's own model, not the first one seen.
+  assert.equal(read.model, "gpt-5-6-t-mini");
+  assert.deepEqual(read.inner, { "assistant>python:code": 1, "tool:execution_output": 1 });
 });
 
 /** The reply, or the error's message as a string that will not equal it. */
