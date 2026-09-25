@@ -1,6 +1,6 @@
-# OnFlip Desktop 0.10.61
+# OnFlip Desktop 0.10.62
 
-**On a Free ChatGPT account, OnFlip now runs on the GPT-5.6 Luna that has no limit.**
+**The agent can use its browser with the Browser panel closed, and OnFlip tells ChatGPT when it reaches for tools that cannot see your computer.**
 
 <img src="https://raw.githubusercontent.com/khudayarovich/onflip-agent/main/.github/assets/screenshot.png" width="820" alt="OnFlip">
 
@@ -8,9 +8,9 @@
 
 | Platform | File |
 | --- | --- |
-| **Windows** 10/11 | [OnFlip-Setup-0.10.61.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.61/OnFlip-Setup-0.10.61.exe) |
-| **macOS** · Apple Silicon | [OnFlip-0.10.61-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.61/OnFlip-0.10.61-mac-arm64.dmg) |
-| **macOS** · Intel | [OnFlip-0.10.61-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.61/OnFlip-0.10.61-mac-x64.dmg) |
+| **Windows** 10/11 | [OnFlip-Setup-0.10.62.exe](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.62/OnFlip-Setup-0.10.62.exe) |
+| **macOS** · Apple Silicon | [OnFlip-0.10.62-mac-arm64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.62/OnFlip-0.10.62-mac-arm64.dmg) |
+| **macOS** · Intel | [OnFlip-0.10.62-mac-x64.dmg](https://github.com/khudayarovich/onflip-agent/releases/download/desktop-v0.10.62/OnFlip-0.10.62-mac-x64.dmg) |
 
 The `.zip` and `.blockmap` files below are for the in-app updater — you want the `.exe` or the `.dmg`. A `SHA256SUMS` file ships alongside, and the updater checks it for you.
 
@@ -18,16 +18,18 @@ The `.zip` and `.blockmap` files below are for the in-app updater — you want t
 
 ## Fixed
 
+**The agent's browser**
+
+- **Clicks and screenshots work with the Browser panel closed.** If the panel had never been opened, the agent's page had no size at all: every click waited fifteen seconds and failed, and every screenshot failed with "Cannot take screenshot with 0 width". So the agent could not check what it had built — a game's animation, say — and could not tell whether its change had worked. The page now keeps a real size while the panel is closed, and animations run there as they would on screen.
+
 **ChatGPT**
 
-- **Free accounts run on the unlimited GPT-5.6 Luna.** A Free account's model list has two models called "GPT-5.6 Luna", and OnFlip picked the first — the one with a message limit, which also thinks on the Free plan's small thinking allowance. The default is now the one with no limit, and on Free the model picker offers only models the plan can run without a limit. If you picked a limited model yourself, OnFlip keeps your choice and says once, at start, that it has a limit. Go accounts get the same treatment.
-- **No more false warnings about replies.** 0.10.60 checked each reply the page showed against ChatGPT's own copy, and marked many as different because the AI adds a label to its tool blocks that the page does not show. The replies were right either way; the log is now quiet about it.
-- **Plan names read properly** in OnFlip's notices: "Free", not "Free · ~32k token context".
+- **ChatGPT's own tools are named, and the AI is told when it used one.** ChatGPT's models often run tools of their own in the middle of a reply: a hidden code runner on OpenAI's servers, searches for files in the chat, even attempts to hand the task to Codex. None of these can see your computer, they cost time, and on a Free plan they can count against its limits. OnFlip's instructions now name them, OnFlip tells the AI after each reply which ones it used and what to use instead, and the log records every call. In testing, the attempts to hand work to Codex all but stopped; ChatGPT's hidden code runner still runs at times, and that part is ChatGPT's own — OnFlip cannot switch it off.
 
-Everything from 0.10.60 is included: replies in long chats are read again, a usage limit is a pause rather than a loop, and the plan follows the account you sign in with.
+Everything from 0.10.61 is included: Free accounts run on the GPT-5.6 Luna that has no limit.
 
 ## Requirements
 
 Windows 10/11, or macOS 12+ on Apple Silicon or Intel. A ChatGPT, DeepSeek or Qwen account — one, or all three. No API key. The Telegram features need a bot token in Settings → Telegram.
 
-**Full changelog:** [desktop-v0.10.60...desktop-v0.10.61](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.60...desktop-v0.10.61)
+**Full changelog:** [desktop-v0.10.61...desktop-v0.10.62](https://github.com/khudayarovich/onflip-agent/compare/desktop-v0.10.61...desktop-v0.10.62)
