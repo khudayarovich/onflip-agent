@@ -42,6 +42,9 @@ const setPlan = (planType, discoveredModels) => {
 const { uploadsAvailable, attachmentsBlockedReason } = require("../dist/chatgpt/transport");
 const { effectiveModel, allModels } = require("../dist/models");
 
+// Paid-plan titles: on a real Free account `gpt-5-6` is titled "GPT-5.6 Luna"
+// too, which this list hid for as long as it was the only one checked. The
+// lists the accounts actually sent are in free-default-model.test.js.
 const MODELS = [
   { slug: "gpt-5-6-mini", title: "GPT-5.6 Luna", description: "" },
   { slug: "gpt-5-6", title: "GPT-5.6 Sol", description: "" },

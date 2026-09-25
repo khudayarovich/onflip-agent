@@ -86,7 +86,7 @@ export interface OnFlipConfig {
    * Authoritative when present, since entitlements differ per plan and slugs
    * change faster than any list shipped in the binary.
    */
-  discoveredModels?: { slug: string; title: string; description: string; maxTokens?: number }[];
+  discoveredModels?: { slug: string; title: string; description: string; maxTokens?: number; reasoning?: string }[];
   modelsRefreshedAt?: number;
 
   // -- agent behaviour ----------------------------------------------------

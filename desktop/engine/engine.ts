@@ -21,6 +21,7 @@ import {
   modelBelongsToProvider,
   isThinkingLevel,
   cacheModels,
+  meteredOnPlan,
   ThinkingLevel,
 } from "onflip/dist/models";
 import { resolveAuth, ResolvedAuth } from "onflip/dist/auth/resolve";
@@ -36,6 +37,7 @@ import {
   DEEPSEEK_CEILING_CHARS,
   QWEN_CEILING_CHARS,
   describePlan,
+  planName,
   planLimitCard,
   promptCrowdsPlan,
   rationedPlan,
@@ -647,6 +649,9 @@ export class Engine {
       opts.accountChanged === true ||
       listed.length === 0 ||
       !listed.some((m) => typeof m.maxTokens === "number") ||
+      // Nor which model thinks, which is what says which one a Free
+      // account can run without a limit (`unlimitedOnRationedPlan`).
+      !listed.some((m) => typeof m.reasoning === "string") ||
       (cfg.planType !== undefined && loadConfig().planType !== cfg.planType);
     if (stale) {
       try {
@@ -689,7 +694,7 @@ export class Engine {
         budgetNow: compactionBudget(plan, false, null, this.systemPromptChars()),
       });
       this.notice(
-        `Your plan reads as ${describePlan(plan) ?? plan}, but OnFlip had "${describePlan(was) ?? was}" stored and was sizing the conversation from it. Corrected${
+        `Your plan reads as ${planName(plan) ?? plan}, but OnFlip had ${planName(was) ?? was} stored and was sizing the conversation from it. Corrected${
           rationedPlan(plan) && !rationedPlan(was)
             ? " — replies are now kept to the size this plan allows, and turns no longer go to its metered Thinking models."
             : "."
@@ -785,8 +790,22 @@ export class Engine {
     // thirty-second server errors and hand-offs to ChatGPT Work — and it
     // is no longer offered in the picker. The pin itself survives, on the
     // model the account actually runs well.
-    if (cfg.modelPinned && this.model !== "auto") return;
     const wanted = defaultModel(cfg.planType);
+    const named = (slug: string) => {
+      const label = allModels().find((m) => m.slug === slug)?.label;
+      return label && label !== slug ? `${label} (${slug})` : slug;
+    };
+    if (cfg.modelPinned && this.model !== "auto") {
+      // A pin is the person's choice and stays. What the account says about
+      // it is worth one line, since the picker offered two models with the
+      // same name and only one of them has no limit on this plan.
+      if (meteredOnPlan(this.model) && wanted !== this.model) {
+        this.notice(
+          `${this.model} has a message limit on the ${planName(cfg.planType) ?? cfg.planType} plan. ${named(wanted)} has none — pick it in the chip under the composer to keep working past the limit.`
+        );
+      }
+      return;
+    }
     if (wanted === this.model) return;
     const from = this.model;
     this.model = wanted;
@@ -796,7 +815,7 @@ export class Engine {
     this.notice(
       from === "auto"
         ? `Auto is no longer offered — on a paid plan it routed the agent's turns into Pro thinking, which kept timing out. Using ${wanted} instead; pick another model in the chip under the composer if you prefer.`
-        : `Using ${wanted}, which this plan can run without a message limit.`
+        : `Using ${named(wanted)}, which this plan can run without a message limit.`
     );
   }
 
@@ -3016,6 +3035,7 @@ export class Engine {
         title: m.title,
         description: m.description,
         ...(m.maxTokens ? { maxTokens: m.maxTokens } : {}),
+        ...(m.reasoning ? { reasoning: m.reasoning } : {}),
       }))
     );
     return allModels();

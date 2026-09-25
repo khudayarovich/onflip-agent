@@ -255,6 +255,15 @@ export function promptCrowdsPlan(
   return systemChars * 3 > windowChars ? { windowChars, systemChars } : null;
 }
 
+/**
+ * What a plan is called, for a sentence: "Free", "Pro Lite". `describePlan`
+ * carries the context window as well, which is right on the status line and
+ * reads as "the Free · ~32k token context plan" in the middle of a notice.
+ */
+export function planName(planId: string | undefined): string | null {
+  return planProfile(planId)?.label ?? RATIONED_LABELS[normalizePlanId(planId)] ?? null;
+}
+
 /** For the About page and the status line. */
 export function describePlan(planId: string | undefined): string | null {
   const profile = planProfile(planId);

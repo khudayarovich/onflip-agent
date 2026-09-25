@@ -105,7 +105,10 @@ test("the plan a turn's end reads is taken: Free limits in, the metered model ou
   // The live chat was opened on the metered model; the next message opens a fresh one.
   assert.equal(counts.resets, 1);
   assert.equal(counts.refreshes, 1, "the model list is the plan's, and is read again");
-  assert.ok(notices().some((n) => /Free/.test(n) && /Pro Lite/.test(n)), notices().join(" | "));
+  assert.ok(
+    notices().some((n) => n.startsWith("Your plan reads as Free, but OnFlip had Pro Lite stored")),
+    notices().join(" | ")
+  );
   assert.equal(engine.account.email, "nodira@example.com");
   assert.equal("planType" in engine.account, false);
 });

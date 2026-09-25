@@ -162,8 +162,18 @@ export function allModels(): ModelInfo[] {
   // Only what a chat can actually run: no Work-only slugs (regular chat
   // ignores them), nothing excluded above, and one entry per family — the
   // effort variants are reached through the thinking setting instead.
-  const usable = cached.filter(
-    (m) => !isWorkOnlySlug(m.slug) && !isExcludedSlug(m.slug) && !isVariantSlug(m.slug)
+  //
+  // No Auto entry, on purpose. Auto is ChatGPT's router, and on a paid plan
+  // it sends an agent's turns into Pro thinking: thirty-second server errors
+  // and hand-offs to ChatGPT Work, measured on a Pro account. A model the
+  // account runs well is always a better start than a coin toss.
+  //
+  // And the plan comes before the labels, so a title two slugs share on the
+  // account is only told apart by slug when both are actually offered.
+  const usable = withinPlan(
+    cached.filter(
+      (m) => !isWorkOnlySlug(m.slug) && !isExcludedSlug(m.slug) && !isVariantSlug(m.slug) && m.slug !== "auto"
+    )
   );
   const titleCount = new Map<string, number>();
   for (const m of usable) titleCount.set(m.title, (titleCount.get(m.title) ?? 0) + 1);
@@ -174,13 +184,10 @@ export function allModels(): ModelInfo[] {
     description: m.description || "",
     discovered: true,
   }));
-
-  // No Auto entry, on purpose. Auto is ChatGPT's router, and on a paid plan
-  // it sends an agent's turns into Pro thinking: thirty-second server errors
-  // and hand-offs to ChatGPT Work, measured on a Pro account. A model the
-  // account runs well is always a better start than a coin toss.
-  const listed = discovered.length ? discovered.filter((m) => m.slug !== "auto") : BUILTIN_MODELS;
-  return withinPlan(listed);
+  if (discovered.length) return discovered;
+  return rationedPlan(loadConfig().planType)
+    ? BUILTIN_MODELS.filter((m) => m.slug === DEFAULT_MODEL)
+    : BUILTIN_MODELS;
 }
 
 /**
@@ -196,10 +203,44 @@ export function allModels(): ModelInfo[] {
  * the whole list is returned untouched rather than leaving the picker blank.
  * A filter that hides everything is worse than one that hides nothing.
  */
-function withinPlan(models: ModelInfo[]): ModelInfo[] {
+function withinPlan<T extends CachedModel>(models: T[]): T[] {
   if (!rationedPlan(loadConfig().planType)) return models;
-  const unmetered = models.filter((m) => /luna|mini/i.test(`${m.slug} ${m.label}`));
+  const unmetered = models.filter(unlimitedOnRationedPlan);
   return unmetered.length ? unmetered : models;
+}
+
+/**
+ * Whether a rationed plan runs this model without a limit.
+ *
+ * The account's own `reasoning_type` decides it when the list carries one:
+ * the model that never thinks is the unlimited one. A title cannot: measured
+ * on a Free account in September 2026, the list titles both `gpt-5-6` and
+ * `gpt-5-6-mini` "GPT-5.6 Luna". `gpt-5-6` reasons "auto" — it decides for
+ * itself when to think, on the plan's "reason" allowance, which read 0 left —
+ * and it was the model ChatGPT's own start-up data listed under
+ * `model_limits`, with a time the limit lifts. `gpt-5-6-mini` reasons "none",
+ * appears in no limit, and is what ChatGPT drops a Free account onto when the
+ * other runs out (image creation was blocked meanwhile for
+ * "mini_model_dependency"). Titles had OnFlip default Free accounts to the
+ * limited one. A list cached before the field existed is judged by the slug:
+ * the plain `-mini` tier, not its thinking variants.
+ */
+function unlimitedOnRationedPlan(m: CachedModel): boolean {
+  if (typeof m.reasoning === "string") return m.reasoning === "none";
+  return /-mini$/i.test(m.slug) && !/-t-mini/i.test(m.slug);
+}
+
+/**
+ * Does the account's list say this model is metered on the plan in use?
+ *
+ * False when the plan is not rationed or the list does not say — a warning
+ * worth giving is one the account's own data supports.
+ */
+export function meteredOnPlan(slug: string): boolean {
+  const cfg = loadConfig();
+  if (!rationedPlan(cfg.planType)) return false;
+  const m = cfg.discoveredModels?.find((x) => x.slug === slug);
+  return typeof m?.reasoning === "string" && m.reasoning !== "none";
 }
 
 /**
@@ -252,6 +293,8 @@ export interface CachedModel {
   description: string;
   /** The account's context window on this model, in tokens, when it said. */
   maxTokens?: number;
+  /** The account's `reasoning_type` for it ("none", "auto", "reasoning"), when it said. */
+  reasoning?: string;
 }
 
 export function cacheModels(models: CachedModel[]): void {
@@ -275,15 +318,24 @@ export const DEFAULT_MODEL = "gpt-5-6-mini";
  * ran every turn on Sol, wearing the Luna name in the chip the whole time.
  * With no Luna in the account's list the answer is the fallback slug, which
  * is Luna in the shape the accounts report it.
+ *
+ * And the Luna that never thinks, when more than one slug wears the name.
+ * Taking the first one listed put every Free account on `gpt-5-6`, which is
+ * the Luna with a message limit on that plan (see `unlimitedOnRationedPlan`);
+ * the unlimited one is `gpt-5-6-mini`, the same slug a paid plan's Luna has.
  */
 export function defaultModel(planId?: string): string {
   const fixed = FIXED_MODELS[activeProvider()];
   if (fixed) return fixed[0].slug;
   const cfg = loadConfig();
   if (!prefersLunaByDefault(planId ?? cfg.planType)) return DEFAULT_MODEL;
-  const luna = cfg.discoveredModels?.find(
+  const lunas = (cfg.discoveredModels ?? []).filter(
     (m) => !isWorkOnlySlug(m.slug) && (/luna/i.test(m.slug) || /luna/i.test(m.title ?? ""))
   );
+  const luna =
+    lunas.find((m) => m.reasoning === "none") ??
+    lunas.find((m) => m.slug === DEFAULT_MODEL) ??
+    lunas[0];
   return luna?.slug ?? DEFAULT_MODEL;
 }
 

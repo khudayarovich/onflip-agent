@@ -28,6 +28,12 @@ export interface RemoteModel {
    * 262,144 for its thinking variant.
    */
   maxTokens?: number;
+  /**
+   * The endpoint's `reasoning_type`: "none" never thinks, "auto" decides for
+   * itself, "reasoning" always does. On a rationed plan it is what tells the
+   * unlimited model from the metered ones; see `unlimitedOnRationedPlan`.
+   */
+  reasoning?: string;
 }
 
 const UA =
@@ -40,6 +46,7 @@ export interface ModelsResponse {
     description?: string;
     tags?: string[];
     max_tokens?: unknown;
+    reasoning_type?: unknown;
     // Some responses nest the human-readable bits.
     product_features?: unknown;
   }[];
@@ -59,6 +66,10 @@ export function normalise(raw: ModelsResponse): RemoteModel[] {
       typeof m.max_tokens === "number" && Number.isInteger(m.max_tokens) && m.max_tokens > 0
         ? m.max_tokens
         : undefined;
+    const reasoning =
+      typeof m.reasoning_type === "string" && m.reasoning_type.trim()
+        ? m.reasoning_type.trim().toLowerCase()
+        : undefined;
     out.push({
       slug,
       title: typeof m.title === "string" && m.title.trim() ? m.title.trim() : slug,
@@ -68,6 +79,7 @@ export function normalise(raw: ModelsResponse): RemoteModel[] {
           : "",
       tags: Array.isArray(m.tags) ? m.tags.filter((t): t is string => typeof t === "string") : [],
       ...(maxTokens ? { maxTokens } : {}),
+      ...(reasoning ? { reasoning } : {}),
     });
   }
   return out;
