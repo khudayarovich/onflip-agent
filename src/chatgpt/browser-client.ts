@@ -198,6 +198,14 @@ interface StreamMessage {
   text: string;
   /** `metadata.model_slug`: which model wrote it, when the server said. */
   model: string;
+  /** `author.name`: on a tool's output, which tool produced it. */
+  author: string;
+  /**
+   * What a message carries outside `parts`, for the log only: a code call
+   * or an execution's output keeps its text in `content.text`, and a call's
+   * arguments can arrive as objects. Never part of a reply.
+   */
+  other: string;
 }
 
 interface StreamTurn {
@@ -400,6 +408,8 @@ export function __setStreamForTest(
     textLen: turn.text.length,
     text: turn.text,
     model: "",
+    author: "",
+    other: "",
   };
   latestStream = {
     seq: ++streamSeqCounter,
@@ -565,7 +575,15 @@ async function attachStreamWatch(p: Page, ctx: BrowserContext): Promise<void> {
 /** Run server-sent frames through the parser, for a test with no browser; the visible reply as it reads. */
 export function __parseStreamForTest(
   sse: string
-): { text: string; textLen: number; status: string; model: string | null; inner: Record<string, number> } | null {
+): {
+  text: string;
+  textLen: number;
+  status: string;
+  model: string | null;
+  inner: Record<string, number>;
+  calls: string[];
+  tools: string[];
+} | null {
   const turn: StreamTurn = {
     seq: 0,
     state: "streaming",
@@ -582,7 +600,13 @@ export function __parseStreamForTest(
   feedStream(turn, Buffer.from(sse, "utf8").toString("base64"));
   const visible = visibleMessage(turn);
   if (!visible) return null;
-  return { text: visible.text, textLen: visible.textLen, status: visible.status, ...streamSummary(turn) };
+  return {
+    text: visible.text,
+    textLen: visible.textLen,
+    status: visible.status,
+    ...streamSummary(turn),
+    tools: chatgptToolCalls(turn),
+  };
 }
 
 function feedStream(turn: StreamTurn, base64: string): void {
@@ -668,10 +692,15 @@ function applyStreamOp(turn: StreamTurn, op: Record<string, unknown>): void {
     }
     return;
   }
+  if (path === "/message/content/text" && typeof v === "string") {
+    m.other = (o === "replace" ? v : m.other + v).slice(0, 2_000);
+    return;
+  }
   if (path === "/message/content" && envelope) {
     const parts = Array.isArray(envelope.parts) ? envelope.parts : [];
     m.text = parts.filter((x): x is string => typeof x === "string").join("");
     m.textLen = m.text.length;
+    m.other = otherContent(envelope, parts);
     const contentType = asString(envelope.content_type);
     if (contentType) m.contentType = contentType;
     return;
@@ -711,6 +740,18 @@ function applyStreamOp(turn: StreamTurn, op: Record<string, unknown>): void {
   if (path === "/message" && envelope) registerMessage(turn, envelope);
 }
 
+/** A message's text from outside `parts`: `content.text`, or parts that are not strings. */
+function otherContent(content: Record<string, unknown>, parts: unknown[]): string {
+  if (typeof content.text === "string") return content.text.slice(0, 2_000);
+  const objects = parts.filter((x) => x !== null && typeof x === "object");
+  if (!objects.length) return "";
+  try {
+    return JSON.stringify(objects).slice(0, 2_000);
+  } catch {
+    return "";
+  }
+}
+
 function registerMessage(turn: StreamTurn, message: Record<string, unknown>): void {
   const id = asString(message.id, `anonymous-${turn.messages.size}`);
   const author = asRecord(message.author);
@@ -731,6 +772,8 @@ function registerMessage(turn: StreamTurn, message: Record<string, unknown>): vo
     textLen: text.length,
     text,
     model: asString(metadata.model_slug),
+    author: asString(author?.name),
+    other: otherContent(content, parts),
   };
   turn.messages.set(id, m);
   turn.current = m;
@@ -749,19 +792,126 @@ function registerMessage(turn: StreamTurn, message: Record<string, unknown>): vo
  * settles the other question a log could not answer: what the chat was
  * actually running on, whatever it was opened with. Our own message, echoed
  * back at the head of the stream, is left out.
+ *
+ * A name is not enough, though. On 0.10.60's first day half the replies
+ * carried `assistant>functions.exec` and a `tool` answer, and that could be
+ * code running on OpenAI's computers — which spends a Free account's
+ * allowance — or the model calling OnFlip's tools as if they were its own
+ * functions and being told there is no such function, which spends nothing
+ * but time. `calls` keeps the opening of each call and of each answer, so
+ * the log can tell those apart.
  */
-function streamSummary(turn: StreamTurn): { model: string | null; inner: Record<string, number> } {
+function streamSummary(turn: StreamTurn): {
+  model: string | null;
+  inner: Record<string, number>;
+  calls: string[];
+} {
   const visible = visibleMessage(turn);
   let model: string | null = visible?.model || null;
   const inner: Record<string, number> = {};
+  const calls: string[] = [];
   for (const m of turn.messages.values()) {
     if (!model && m.role === "assistant" && m.model) model = m.model;
     if (m === visible || m.role === "user") continue;
     const to = m.recipient && m.recipient !== "all" ? `>${m.recipient}` : "";
     const key = `${m.role || "?"}${to}:${m.contentType || "?"}`;
     inner[key] = (inner[key] ?? 0) + 1;
+    const isCall = m.role === "assistant" && Boolean(to);
+    if ((isCall || m.role === "tool") && calls.length < 6) {
+      const who = isCall ? `call ${m.recipient}` : `answer ${m.author || "tool"}`;
+      calls.push(`${who}: ${(m.text || m.other).replace(/\s+/g, " ").trim().slice(0, 160)}`);
+    }
   }
-  return { model, inner };
+  return { model, inner, calls };
+}
+
+/** ChatGPT's image tool: drawings are the one own tool OnFlip carries over (see the system prompt). */
+const IMAGE_TOOL = /^(t2uay3k|image_gen|dalle|text2im)/i;
+
+/**
+ * The name the model is told for one call to a tool of ChatGPT's own.
+ *
+ * A connector call is named by where it went, because the recipient alone
+ * says nothing: live, `api_tool.call_tool` was the model starting a Codex
+ * turn (`/CodexNative2/link_…/codex_turn_start`) and listing the chat's
+ * files (`/files/list`), and those are what it needs to hear it did. The
+ * link id is the account's, not the model's business, and is left out.
+ */
+export function toolLabel(recipient: string, args: string): string {
+  if (!/^api_tool\./.test(recipient)) return recipient;
+  const path = /"path"\s*:\s*"([^"]+)"/.exec(args)?.[1];
+  if (!path) return recipient;
+  const where = path
+    .split("/")
+    .filter((p) => p && !/^link_/.test(p))
+    .join("/");
+  return `${recipient} ${where}`.slice(0, 80);
+}
+
+/**
+ * Which of ChatGPT's own tools a reply called before answering.
+ *
+ * Read on this project's own machine: in 25 of 48 replies of one Free
+ * session the model called `functions.exec` and `api_tool` before writing
+ * its onflip block — replayed on a copy of the project, that was an attempt
+ * to hand the task to Codex through a connector linked to the account, a
+ * tool inventory and a file listing, all run on OpenAI's side, most of them
+ * failing ("MCP SSE probe returned 404"), and each one time the person waits
+ * through. The prompt forbade Codex in words and never named these, and
+ * nothing told the model afterwards what it had done. The loop now does.
+ */
+function chatgptToolCalls(turn: StreamTurn): string[] {
+  const out: string[] = [];
+  for (const m of turn.messages.values()) {
+    if (m.role !== "assistant" || !m.recipient || m.recipient === "all") continue;
+    if (IMAGE_TOOL.test(m.recipient)) continue;
+    const label = toolLabel(m.recipient, m.text || m.other);
+    if (!out.includes(label)) out.push(label);
+    if (out.length >= 6) break;
+  }
+  return out;
+}
+
+/** The calls the reply to this send made, when its stream was seen. */
+function streamToolCalls(after: number): string[] {
+  const turn = latestStream;
+  return turn && turn.seq > after ? chatgptToolCalls(turn) : [];
+}
+
+/**
+ * What goes up with a reply: how the wait accepted it, and what its stream
+ * said — cut off, continued, and which of ChatGPT's own tools it called.
+ */
+export function replyMetaFor(after: number, accepted: ReplyMeta | null, continued: number): ReplyMeta {
+  const view = streamView(after);
+  const ownTools = streamToolCalls(after);
+  return {
+    ...(accepted ?? {}),
+    hookSeen: Boolean(accepted?.hookSeen || view),
+    truncated: Boolean(view?.truncated),
+    continued,
+    ...(ownTools.length ? { chatgptTools: ownTools } : {}),
+  };
+}
+
+/** Stand a stream up from server-sent frames, as the reply to the next send, for a test. */
+export function __setStreamFromSseForTest(sse: string): number {
+  const turn: StreamTurn = {
+    seq: ++streamSeqCounter,
+    state: "streaming",
+    messages: new Map(),
+    current: null,
+    lastPath: "",
+    error: null,
+    startedAt: Date.now(),
+    lastFrameAt: Date.now(),
+    endedAt: null,
+    decoder: new StringDecoder("utf8"),
+    buffer: "",
+  };
+  feedStream(turn, Buffer.from(sse, "utf8").toString("base64"));
+  latestStream = turn;
+  return turn.seq;
 }
 
 function endStream(turn: StreamTurn, state: "done" | "error"): void {
@@ -770,7 +920,7 @@ function endStream(turn: StreamTurn, state: "done" | "error"): void {
   turn.endedAt = Date.now();
   const visible = visibleMessage(turn);
   if (visible?.status === "finished_successfully") sawFinishedStatus = true;
-  const { model, inner } = streamSummary(turn);
+  const { model, inner, calls } = streamSummary(turn);
   (endedMidMessage(state, visible) ? logger.warn : logger.info)("browser", "reply stream ended", {
     seq: turn.seq,
     state,
@@ -781,6 +931,7 @@ function endStream(turn: StreamTurn, state: "done" | "error"): void {
     textLen: visible?.textLen ?? 0,
     model,
     ...(Object.keys(inner).length ? { inner } : {}),
+    ...(calls.length ? { calls } : {}),
     error: turn.error,
   });
 }
@@ -3770,13 +3921,7 @@ async function sendOnce(
   // Read back through a function: the assignment at the top of this one
   // narrows the module variable to null for the rest of the body, and
   // `waitForReply` has set it since.
-  const accepted = currentReplyMeta();
-  const meta: ReplyMeta = {
-    ...(accepted ?? {}),
-    hookSeen: Boolean(accepted?.hookSeen || view),
-    truncated: Boolean(view?.truncated),
-    continued,
-  };
+  const meta = replyMetaFor(streamSeqBefore, currentReplyMeta(), continued);
   lastReplyMeta = meta;
 
   // Pick up anything the model drew, before the next send overwrites the turn.

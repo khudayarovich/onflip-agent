@@ -136,7 +136,9 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "",
       `What cannot reach the user is ${service}'s own sandbox — your python, analysis, code-interpreter, file-upload and browsing tools all operate on a different computer.`,
       "",
-      "- NEVER use your built-in python/analysis/code-interpreter/browsing tools. Their results are about the wrong computer.",
+      carriesDrawings
+        ? "- NEVER call your own tools: python, web search, `functions.exec`, `api_tool` connectors (Codex). They run on OpenAI's computers, not this one."
+        : "- NEVER use your built-in python/analysis/code-interpreter/browsing tools. Their results are about the wrong computer.",
       // Named products, so only worth the space on the service that has
       // them. Live, on ChatGPT: a coding request answered with a
       // "Continue in ChatGPT Work" card and a turn that did nothing.
@@ -575,7 +577,7 @@ export function turnReminder(
     remote ? remoteLine(tools) : "",
     languageAnchor(request) ||
       "Write your prose in the language the user writes in. The onflip block itself never changes with the language: the fence, the `tool:` line, the tool names and the argument keys stay exactly as documented.",
-    "Do not use your own python/analysis/browsing tools — they run on the wrong machine.",
+    "Do not call your own tools (python, web search, functions.exec, api_tool connectors such as Codex) — they run on another company's computers, not this one.",
     // Live: a coding request answered with a "Continue in ChatGPT Work" card
     // — the task handed to ChatGPT's own agent product, which cannot see
     // this machine — and the turn ended with nothing done.
@@ -588,6 +590,32 @@ export function turnReminder(
   ]
     .filter(Boolean)
     .join("\n");
+}
+
+/**
+ * What the last reply did on ChatGPT's side, said back to the model.
+ *
+ * Rides with the next step's reminder rather than costing a message of its
+ * own: the reply it follows usually did do the step, through an onflip block,
+ * after the detour. See `chatgptToolCalls` for what the detours were.
+ */
+export function ownToolsLine(calls: string[], available: string[] = []): string {
+  if (!calls.length) return "";
+  // What each kind of detour was for, in the words that answer it. Replayed
+  // on a copy of a real project: `files/search` was the model looking for
+  // the project among the chat's uploads, where it is not, and Codex was it
+  // trying to hand the task on.
+  const why: string[] = [];
+  if (calls.some((c) => /codex/i.test(c))) why.push("Codex cannot see this computer");
+  if (calls.some((c) => /\bfiles\//i.test(c))) {
+    why.push("no files are uploaded to this chat — the project is on the user's computer, where read, grep and glob reach it");
+  }
+  if (calls.some((c) => /^web\./.test(c)) && available.includes("web_search") && available.includes("web_fetch")) {
+    why.push("for the web, use web_search and web_fetch");
+  }
+  return `Your last reply called tools of your own: ${calls.join(", ")}. They run on OpenAI's computers, not this one${
+    why.length ? `: ${why.join("; ")}` : ""
+  }. Each call costs the user time and their plan's limited allowance. Only onflip blocks reach this computer: do not call them again.`;
 }
 
 export interface CorrectionContext {

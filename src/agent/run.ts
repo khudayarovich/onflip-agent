@@ -6,6 +6,7 @@ import { COMPOSER_CEILING_CHARS } from "../chatgpt/plans";
 import { newMessage, parseTurn, formatToolResult, isUserRequest } from "./protocol";
 import {
   turnReminder,
+  ownToolsLine,
   protocolCorrection,
   noBlockNudge,
   doneWithOpenTodosNudge,
@@ -328,6 +329,8 @@ export async function runTurn(
    * has just finished doing correctly.
    */
   let anchored = false;
+  /** ChatGPT's own tools the last reply called; named back with the next step. */
+  let ownToolsLastReply: string[] = [];
   /** The budget, plus the one extension a productive turn can earn. */
   let allowed = budget;
   let extendedOnce = false;
@@ -373,7 +376,7 @@ export async function runTurn(
 
     let reply: TransportReply;
     try {
-      reply = await sendWithRetry(history, opts, events, !needsAnchor(anchored, stepLog));
+      reply = await sendWithRetry(history, opts, events, !needsAnchor(anchored, stepLog), ownToolsLastReply);
       anchored = true;
     } catch (e) {
       if (opts.signal.aborted) return finish("interrupted", "", iteration);
@@ -381,6 +384,11 @@ export async function runTurn(
     }
     const raw = reply.content;
     const meta: ReplyMeta = reply.meta ?? {};
+    // Said back once, with the next step: see `ownToolsLine`.
+    ownToolsLastReply = meta.chatgptTools ?? [];
+    if (ownToolsLastReply.length) {
+      logger.warn("protocol", "the reply called the service's own tools", { tools: ownToolsLastReply });
+    }
     if (meta.acceptedVia) acceptedVia[meta.acceptedVia] = (acceptedVia[meta.acceptedVia] ?? 0) + 1;
     if (meta.truncated) truncatedReplies++;
 
@@ -982,7 +990,9 @@ async function sendWithRetry(
   opts: AgentOptions,
   events: AgentEvents,
   /** The model has the protocol and the last step proved it; send the short form. */
-  brief = false
+  brief = false,
+  /** ChatGPT's own tools the previous reply called, to be named back to it. */
+  ownTools: string[] = []
 ): Promise<TransportReply> {
   const full = () =>
     turnReminder(
@@ -1002,7 +1012,7 @@ async function sendWithRetry(
     // the same turn, and the step after it is the one that needs to know.
     // Which is also why the brief form skips it - a background job that
     // has exited makes the step shaky, and a shaky step gets the full text.
-    reminder: brief ? briefReminder() : full(),
+    reminder: [brief ? briefReminder() : full(), ownToolsLine(ownTools, opts.tools.list.map((t) => t.name))].filter(Boolean).join("\n"),
   };
 
   let lastError: unknown;

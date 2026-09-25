@@ -96,6 +96,11 @@ export interface ReplyMeta {
   hookSeen?: boolean;
   /** How many times ChatGPT's own "Continue generating" was clicked. */
   continued?: number;
+  /**
+   * ChatGPT's own tools the reply called on the way, by name — a Codex
+   * hand-off, a connector, a file listing. See `chatgptToolCalls`.
+   */
+  chatgptTools?: string[];
 }
 
 export interface TransportReply {

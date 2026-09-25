@@ -348,9 +348,10 @@ export function ensureView(win: BrowserWindow): WebContentsView | null {
 
   view.setBackgroundColor("#00000000");
   win.contentView.addChildView(view);
-  // Parked off-screen rather than absent: a view with no bounds still loads,
-  // so the agent can be browsing before the panel has ever been opened.
-  view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  // Parked out of sight rather than absent, so the agent can be browsing
+  // before the panel has ever been opened — as a page that works: see
+  // `parkView`.
+  parkView(win, view);
   void view.webContents.loadURL(blankUrl(markFor(win)));
   views.set(win, view);
 
@@ -378,12 +379,11 @@ export interface ViewBounds {
 export function setViewBounds(win: BrowserWindow, bounds: ViewBounds): boolean {
   const view = ensureView(win);
   if (!view) return false;
-  view.setBounds({
-    x: Math.round(bounds.x),
-    y: Math.round(bounds.y),
-    width: Math.max(0, Math.round(bounds.width)),
-    height: Math.max(0, Math.round(bounds.height)),
-  });
+  const width = Math.max(0, Math.round(bounds.width));
+  const height = Math.max(0, Math.round(bounds.height));
+  view.setBounds({ x: Math.round(bounds.x), y: Math.round(bounds.y), width, height });
+  // The page keeps the size it was last seen at while the panel is closed.
+  if (width >= MIN_PARKED.width && height >= MIN_PARKED.height) lastSeenSize.set(win, { width, height });
   // Placing it is also what brings it back after a modal has had the screen.
   view.setVisible?.(true);
   return true;
@@ -394,26 +394,59 @@ export function setViewBounds(win: BrowserWindow, bounds: ViewBounds): boolean {
  *
  * Closing the panel must not throw the page away: the agent may still be
  * working in it, and a half-filled form nobody can see is still a form.
- *
- * `setVisible(false)` is what actually takes it out of the picture, and zero
- * bounds are kept beside it rather than instead of it. A native view is
- * composited above the window's own web contents, so nothing drawn in HTML
- * can cover it and no `z-index` applies — which is why a modal opened behind
- * the browser. Bounds alone were not enough to rely on: a zero-area view
- * paints nothing, but the page behind it keeps its old layout and the view
- * stays in the window's stack, so the state was neither reliably hidden nor
- * observably so. Visibility is the property that answers the question being
- * asked, and the page reports it — `document.visibilityState` goes to
- * `hidden`, which is how this is tested.
- *
- * Optional-called because the method arrived in a later Electron than the
- * one this shipped on first; without it the zero bounds still apply.
  */
 export function hideView(win: BrowserWindow): void {
   const view = views.get(win);
-  if (view && !view.webContents.isDestroyed()) {
-    view.setVisible?.(false);
-    view.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  if (view && !view.webContents.isDestroyed()) parkView(win, view);
+}
+
+/** The size a page is laid out at when the panel has never been open. */
+const DEFAULT_PARKED = { width: 1280, height: 800 };
+/** Smaller than this, a panel rectangle is mid-animation, not a size to keep. */
+const MIN_PARKED = { width: 200, height: 200 };
+const lastSeenSize = new WeakMap<BrowserWindow, { width: number; height: number }>();
+
+/**
+ * Park a view out of sight, as a page that still works.
+ *
+ * Two requirements, and the first version met only one. It parked the view
+ * at zero size and made it invisible, because nothing drawn in HTML can
+ * cover a native view — it is composited above the window's own web
+ * contents, which is why a modal once opened behind the browser. But the
+ * agent drives this page whether or not the panel is open. Read from this
+ * project's own machine on 0.10.60: with the panel never opened, every click
+ * the agent made waited out Playwright's fifteen seconds ("locator.click:
+ * Timeout 15000ms exceeded", ten times) and every screenshot failed ("Cannot
+ * take screenshot with 0 width", seven times), while it was checking the
+ * chess animation it had just written. It could not see its own work, and
+ * the person saw "nothing changed".
+ *
+ * What Chromium does here was measured in Electron itself, driving the view
+ * over the DevTools port exactly as the engine does. A page takes its size
+ * from the view only while some part of the view is inside the window: a
+ * view parked wholly outside it, or hidden, keeps whatever size it last had
+ * on screen — zero, for a panel never opened — and hidden or wholly outside,
+ * it draws no frames, so animations and CSS transitions stand still. With
+ * one pixel inside, the page has the view's full size and behaves as a page
+ * on screen: clicks land, screenshots work, transitions finish, and all of
+ * it still holds after the agent navigates to another site in a new page
+ * process — which is where emulating a size instead broke down, the
+ * screenshot timing out. So the view waits at a real size with only its
+ * bottom-right pixel in the window's top-left corner, which the window's own
+ * rounded corner hides on Windows 11 and macOS, and which does not move when
+ * the window is resized. It keeps the size the panel last showed it at, so
+ * the page does not reflow when the panel opens again. And keyboard focus
+ * goes back to the window if the view had it, or typing meant for the
+ * composer would go to a page nobody can see.
+ */
+function parkView(win: BrowserWindow, view: WebContentsView): void {
+  const size = lastSeenSize.get(win) ?? DEFAULT_PARKED;
+  view.setBounds({ x: 1 - size.width, y: 1 - size.height, width: size.width, height: size.height });
+  view.setVisible?.(true);
+  try {
+    if (view.webContents.isFocused() && !win.isDestroyed()) win.webContents.focus();
+  } catch {
+    /* a window on its way out */
   }
 }
 
