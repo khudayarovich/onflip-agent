@@ -244,17 +244,21 @@ function readBack(rel: string[]): boolean {
  * down. These always prompt unless the mode is explicitly `yolo`.
  */
 const DESTRUCTIVE_PATTERNS: { re: RegExp; why: string }[] = [
-  // `-R` as well as `-r`: POSIX rm takes both for recursion.
-  { re: /\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rRf]/, why: "recursive/forced delete" },
-  { re: /\brm\b[^|;\n]*\s--(recursive|force)\b/, why: "recursive/forced delete" },
+  // `-R` as well as `-r`: POSIX rm takes both for recursion. A forced delete
+  // without recursion is judged by what it deletes: see `forcedDeletes`.
+  { re: /\brm\s+(-[a-zA-Z]*\s+)*-[a-zA-Z]*[rR]/, why: "recursive delete" },
+  { re: /\brm\b[^|;\n]*\s--recursive\b/, why: "recursive delete" },
   // The switches can come after the path: `rd C:\proj /s /q`.
   { re: /\b(rd|rmdir)\b[^|;&\n]*\s\/s\b/i, why: "recursive directory delete" },
   { re: /\b(del|erase)\b[^|;&\n]*\s\/[sfq]\b/i, why: "forced delete" },
   // PowerShell spells delete five ways and lets a parameter be any unambiguous
   // prefix of its name, so `ri -Rec -Fo` is the same call as
   // `Remove-Item -Recurse -Force`, in either order — and `-r` is as far as
-  // `-Recurse` needs spelling.
-  { re: /\b(ri|rm|del|erase|rd|rmdir|Remove-Item)\b[^|;\n]*\s-(r|re|rec\w*|fo\w*)\b/i, why: "recursive/forced delete" },
+  // `-Recurse` needs spelling. `-Force` is judged by what it deletes: see
+  // `forcedDeletes`.
+  { re: /\b(ri|rm|del|erase|rd|rmdir|Remove-Item)\b[^|;\n]*\s-(r|re|rec\w*)\b/i, why: "recursive delete" },
+  // `rd` and `rmdir` name directories, so their force always asks.
+  { re: /\b(rd|rmdir)\b[^|;\n]*\s-fo\w*\b/i, why: "forced directory delete" },
   // `Get-ChildItem -Recurse | Remove-Item`: the recursion sits on the
   // producer, and every delete later in the pipeline inherits it.
   { re: /\s-r(ec\w*)?\b[^\n]*\|\s*(Remove-Item|ri|rm|del|erase|rd|rmdir)\b/i, why: "recursive delete" },
@@ -323,7 +327,133 @@ export function assessCommand(command: string): DangerAssessment {
   for (const { re, why } of DESTRUCTIVE_PATTERNS) {
     if (re.test(command)) reasons.push(why);
   }
+  if (forcedDeletes(command).some((tail) => !namesOneFile(tail, command))) reasons.push("forced delete");
   return { dangerous: reasons.length > 0, reasons: [...new Set(reasons)] };
+}
+
+/**
+ * The argument part of each forced delete in a command.
+ *
+ * A force switch used to make any delete a "recursive/forced delete", which
+ * asks even in full-auto. Read from this project's own machine: three times
+ * in one session the agent checked its JavaScript by writing the page's
+ * script to a temporary file, running `node --check` and removing the file
+ * with `Remove-Item … -Force`, and each time the turn sat at the approval
+ * prompt for 9, 25 and 14 minutes, most of a session, for a second's work.
+ * So a forced delete is judged by what it deletes (`namesOneFile`).
+ * Recursion is flagged on its own, above, whatever else it says. `rd` and
+ * `rmdir` are not here: they name directories, so their force still asks
+ * through the pattern list.
+ */
+function forcedDeletes(command: string): string[] {
+  const tails: string[] = [];
+  for (const m of command.matchAll(/(?:^|[\s;&|({])(ri|rm|del|erase|Remove-Item)(?=\s)([^|;\n}]*)/gi)) {
+    const tail = m[2];
+    const powershellForce = /\s-fo\w*(:\S*)?(?=\s|$)/i.test(tail);
+    const posixForce = /\s(-[a-zA-Z]*f[a-zA-Z]*|--force)(?=\s|$)/.test(tail);
+    if (powershellForce || posixForce) tails.push(tail);
+  }
+  return tails;
+}
+
+/** Remove-Item parameters that take a value, as the prefixes PowerShell accepts. */
+const PATH_PARAMETERS = ["path", "literalpath", "pspath", "lp"];
+const PATTERN_PARAMETERS = ["filter", "include", "exclude"];
+const OTHER_VALUE_PARAMETERS = [
+  "credential",
+  "stream",
+  "erroraction",
+  "errorvariable",
+  "warningaction",
+  "warningvariable",
+  "informationaction",
+  "informationvariable",
+  "outvariable",
+  "outbuffer",
+  "pipelinevariable",
+  "ea",
+  "ev",
+  "wa",
+  "wv",
+  "infa",
+  "iv",
+  "ov",
+  "ob",
+  "pv",
+];
+
+/** Whether `-name` is a spelling of one of these parameters: PowerShell takes any unambiguous prefix. */
+function spells(name: string, parameters: string[]): boolean {
+  const n = name.toLowerCase();
+  return parameters.some((p) => p === n || (n.length >= 2 && p.startsWith(n)));
+}
+
+/** A command's arguments as a shell reads them, quoted strings kept whole. */
+function argumentTokens(tail: string): string[] {
+  return tail.match(/"(?:[^"`]|`.)*"|'[^']*'|[^\s]+/g) ?? [];
+}
+
+/**
+ * Does this delete name exactly one file, and nothing that could be more?
+ *
+ * One path, given plainly or through `-Path`/`-LiteralPath`, holding no
+ * wildcard, no list and no sub-expression, with no `-Filter`, `-Include` or
+ * `-Exclude` beside it. A variable counts only when the same command sets it
+ * to one path — `Join-Path`, a quoted path, a temporary file (the agent's own
+ * `$tmp = Join-Path $env:TEMP 'check.js'`, or `tmp=$(mktemp)` in a POSIX
+ * shell) — because a variable filled by a listing is exactly the many-files
+ * delete this check exists to ask about. Anything it cannot read that way
+ * still asks.
+ */
+export function namesOneFile(tail: string, command: string): boolean {
+  const tokens = argumentTokens(tail).filter((t) => !/^\d?>>?|^\*>/.test(t) && t !== ")");
+  const paths: string[] = [];
+  for (let i = 0; i < tokens.length; i++) {
+    const token = tokens[i];
+    const param = /^-([A-Za-z]+)(?::(.*))?$/.exec(token);
+    if (!param) {
+      paths.push(token);
+      continue;
+    }
+    const [, name, inline] = param;
+    if (spells(name, PATTERN_PARAMETERS)) return false;
+    const takesPath = spells(name, PATH_PARAMETERS);
+    const takesValue = takesPath || spells(name, OTHER_VALUE_PARAMETERS);
+    if (!takesValue) continue;
+    const value = inline !== undefined && inline !== "" ? inline : tokens[++i];
+    if (takesPath && value !== undefined) paths.push(value);
+  }
+  if (paths.length !== 1) return false;
+  return isOnePath(paths[0], command);
+}
+
+/** One path, as written: no wildcard, list, sub-expression or script block. */
+function isOnePath(raw: string, command: string): boolean {
+  const unquoted = raw.replace(/^(["'])([\s\S]*)\1$/, "$2");
+  if (!unquoted || /[*?[\],{}`]|\$\(|@\(|^\(/.test(unquoted)) return false;
+  const variable = /^\$\{?([A-Za-z_][\w]*)\}?$/.exec(unquoted);
+  return variable ? setToOnePath(variable[1], command) : true;
+}
+
+/** Every assignment of this variable in the command sets it to one path, and there is one. */
+function setToOnePath(name: string, command: string): boolean {
+  const values: string[] = [];
+  const powershell = new RegExp(`\\$${name}\\s*=\\s*([^;\\n|}]+)`, "gi");
+  for (const m of command.matchAll(powershell)) values.push(m[1].trim());
+  const posix = new RegExp(`(?:^|[\\s;&|(])${name}=("[^"]*"|'[^']*'|\\$\\([^)]*\\)|[^\\s;&|]+)`, "g");
+  for (const m of command.matchAll(posix)) values.push(m[1].trim());
+  if (!values.length) return false;
+  return values.every((value) => {
+    if (/[*?[\],{}`]|@\(/.test(value)) return false;
+    return (
+      /^Join-Path\s+\S/i.test(value) ||
+      /^(["'])[^"']+\1$/.test(value) ||
+      /^\[(System\.)?IO\.Path\]::GetTempFileName\(\)$/i.test(value) ||
+      /^\(?New-TemporaryFile\)?(\.FullName)?$/i.test(value) ||
+      /^\$\(mktemp(\s[^)]*)?\)$/.test(value) ||
+      /^[\w./\\:-]+$/.test(value)
+    );
+  });
 }
 
 /**

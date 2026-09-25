@@ -1080,6 +1080,81 @@ export const browserTypeTool: ToolDefinition = {
   },
 };
 
+/** Key names as Playwright spells them, by their lower-case form and the aliases models write. */
+const KEY_NAMES: Record<string, string> = {
+  enter: "Enter",
+  return: "Enter",
+  tab: "Tab",
+  esc: "Escape",
+  escape: "Escape",
+  backspace: "Backspace",
+  bksp: "Backspace",
+  delete: "Delete",
+  del: "Delete",
+  insert: "Insert",
+  ins: "Insert",
+  home: "Home",
+  end: "End",
+  pageup: "PageUp",
+  pgup: "PageUp",
+  pagedown: "PageDown",
+  pgdn: "PageDown",
+  up: "ArrowUp",
+  arrowup: "ArrowUp",
+  down: "ArrowDown",
+  arrowdown: "ArrowDown",
+  left: "ArrowLeft",
+  arrowleft: "ArrowLeft",
+  right: "ArrowRight",
+  arrowright: "ArrowRight",
+  space: "Space",
+  spacebar: "Space",
+  capslock: "CapsLock",
+  numlock: "NumLock",
+  scrolllock: "ScrollLock",
+  printscreen: "PrintScreen",
+  pause: "Pause",
+  contextmenu: "ContextMenu",
+  ctrl: "Control",
+  control: "Control",
+  shift: "Shift",
+  alt: "Alt",
+  option: "Alt",
+  meta: "Meta",
+  cmd: "Meta",
+  command: "Meta",
+  win: "Meta",
+  super: "Meta",
+  controlormeta: "ControlOrMeta",
+};
+
+/**
+ * A key or chord as Playwright spells it.
+ *
+ * Playwright's names are case-sensitive, and models write keys the way people
+ * say them. Live, on this project's own machine: the agent pressed "TAB"
+ * while testing a chess page and got `Unknown key: "TAB"`, a failed step and
+ * a round trip for a capital letter. Each part of a chord is looked up by its
+ * lower-case form, "_", "-" and spaces ignored, so "page_down" and "Page Down"
+ * are PageDown too; F1–F12 are upper-cased; a single character is left alone,
+ * because "a" and "A" are different presses; and a name not in the table is
+ * passed through, since Playwright knows more of them than this lists.
+ */
+export function playwrightKey(key: string): string {
+  return key
+    .split("+")
+    .map((part) => part.trim())
+    .map((part) => {
+      if (part.length <= 1) return part;
+      const plain = part.toLowerCase().replace(/[\s_-]+/g, "");
+      if (KEY_NAMES[plain]) return KEY_NAMES[plain];
+      const f = /^f(\d{1,2})$/.exec(plain);
+      if (f && Number(f[1]) >= 1 && Number(f[1]) <= 12) return `F${Number(f[1])}`;
+      return part;
+    })
+    .join("+");
+}
+
 export const browserKeyTool: ToolDefinition = {
   name: "browser_key",
   description:
@@ -1097,7 +1172,7 @@ export const browserKeyTool: ToolDefinition = {
     if (!automationBrowserOpen()) return err("No page is open. Use browser_open first.");
     const p = await ensurePage();
 
-    const key = String(args.key ?? "").trim();
+    const key = playwrightKey(String(args.key ?? "").trim());
     if (!key) return err("`key` must be non-empty, e.g. Enter or PageDown.");
     const times = Math.min(20, Math.max(1, asNumber(args.repeat) ?? 1));
 
