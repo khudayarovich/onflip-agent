@@ -856,6 +856,27 @@ export function unlandedChangeNudge(ctx: { changes: { path: string; reason: stri
 }
 
 /**
+ * Sent when OnFlip ran the project's own check before taking a `done`, and
+ * it failed: see `own-check.ts`. The check passed in this project before, so
+ * the likeliest cause is this turn's change — but not the only one, and the
+ * model is told it may say so rather than being made to argue with it.
+ */
+export function ownCheckFailedNudge(ctx: { command: string; dir: string; output: string }): string {
+  const where = ctx.dir ? ` in ${ctx.dir}/` : "";
+  return [
+    AUTOMATED,
+    `You sent \`done\`, but nothing had checked your changes since you made them, so OnFlip ran this project's own check — \`${ctx.command}\`${where}, which passed here before — and it failed:`,
+    "",
+    "````text",
+    ctx.output,
+    "````",
+    "",
+    "Fix what it reports, run the check again, and send done once it passes.",
+    "If the failure has nothing to do with this turn's changes, say so in the done summary: if you send done again without changing anything, the turn ends as it is and the user is told the check fails.",
+  ].join("\n");
+}
+
+/**
  * Sent when ChatGPT itself reported the reply cut off at its length limit
  * and its own "Continue generating" could not be used. Nothing in a cut-off
  * reply is safe to run: a `write` that stopped halfway would leave half a

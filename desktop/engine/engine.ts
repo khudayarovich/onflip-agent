@@ -2339,6 +2339,9 @@ export class Engine {
         session: childSession,
         maxIterations: budget,
         signal: req.signal,
+        // Its changes are checked once, at the parent's `done`, not once per
+        // sub-task on the way there.
+        checkBeforeDone: false,
         events: {
           // Its steps belong to it. What reaches the user is that something
           // is happening and, at the end, the answer - not thirty tool
@@ -2413,6 +2416,9 @@ export class Engine {
       // Where the session's own edits are, so they can be named relative to
       // the project in the reminder and restored after a compaction.
       cwd: this.cwd,
+      // A `done` after a change nothing checked runs the project's quickest
+      // known check first (`own-check.ts`).
+      checkBeforeDone: this.config.checkBeforeDone !== false,
       // A backstop only; the character budget below is what decides. See the
       // constant for what 60 used to cost.
       compactAfterMessages: this.config.compactAfter ?? COMPACT_AFTER_MESSAGES_BACKSTOP,

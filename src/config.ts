@@ -53,6 +53,12 @@ export interface OnFlipConfig {
    * lives on this machine.
    */
   temporaryChats?: boolean;
+  /**
+   * Before taking a `done` that follows a change nothing has checked, run the
+   * project's quickest check that passed before (`agent/own-check.ts`). On
+   * unless set to false.
+   */
+  checkBeforeDone?: boolean;
   sessionDeviceId?: string;
   accessToken?: string;
   accessTokenExpiry?: number;

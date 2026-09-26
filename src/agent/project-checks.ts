@@ -217,6 +217,37 @@ function inside(root: string, dir: string): string | null {
   return rel.startsWith("..") || path.isAbsolute(rel) ? null : rel;
 }
 
+/** A file or folder inside the project, relative with forward slashes, or null. */
+export function insideProject(root: string, target: string): string | null {
+  return inside(root, path.resolve(root, target));
+}
+
+/**
+ * Syntax checks. Not remembered — each names one file, so it is no check of
+ * the project — but running one after a change is checking the work.
+ */
+const SYNTAX_CHECKS: RegExp[] = [
+  /^node\s+(--check|-c)\s/,
+  /^(python3?|py)\s+-m\s+py_compile\s/,
+  /^php\s+-l\s/,
+  /^ruby\s+-c\s/,
+  /^(ba)?sh\s+-n\s/,
+];
+
+/**
+ * Did this command line check the work? Any part of it that is a build,
+ * test, lint or typecheck, or a syntax check — however it was wrapped:
+ * `cd desktop; npm run typecheck 2>&1 | Select-Object -Last 20` counts.
+ * Looser than `checksIn` on purpose: that decides what is worth
+ * remembering, this only whether the model looked.
+ */
+export function runsACheck(line: string): boolean {
+  return line
+    .split(/\s*(?:&&|\|\||;|\r?\n)\s*/)
+    .map((segment) => segment.replace(DISPLAY_TAIL, "").trim())
+    .some((segment) => CHECKS.some((re) => re.test(segment)) || SYNTAX_CHECKS.some((re) => re.test(segment)));
+}
+
 /**
  * Note a command line that exited 0.
  *

@@ -11,6 +11,7 @@ import {
   noBlockNudge,
   doneWithOpenTodosNudge,
   unlandedChangeNudge,
+  ownCheckFailedNudge,
   truncationNudge,
   briefReminder,
   compactInstruction,
@@ -19,6 +20,8 @@ import {
 import { logger } from "../log";
 import { pruneToolResults } from "./prune";
 import { ChangeLedger, recordChange, unlanded } from "./landed";
+import { WorkLedger, outputTail, pickOwnCheck, runOwnCheck } from "./own-check";
+import { knownChecks } from "./project-checks";
 import { providerLabel } from "../providers/id";
 import { recentWorkingSet, workingSetExcerpts, workingSetHint } from "./working-set";
 import {
@@ -125,6 +128,12 @@ export interface AgentOptions {
    * the way the model names them. Absolute paths are used without it.
    */
   cwd?: string;
+  /**
+   * Before taking a `done` that follows a change nothing has checked, run
+   * the project's own quickest check first — see `own-check.ts`. For the
+   * top-level turn: a sub-agent's changes are checked at its parent's `done`.
+   */
+  checkBeforeDone?: boolean;
 }
 
 /** Why a turn stopped, for the log and for the stats over it. */
@@ -163,6 +172,11 @@ const MAX_NO_BLOCK_NUDGES = 2;
 const MAX_NUDGES_PER_TURN = 6;
 /** Replies ChatGPT reported as cut off that are re-requested before being used as they are. */
 const MAX_TRUNCATION_NUDGES = 2;
+/**
+ * OnFlip's own checks per turn: one, and one more for the fix it asked for.
+ * The failure is sent back once; after that the user is told instead.
+ */
+const MAX_OWN_CHECKS = 2;
 
 /**
  * The message count at which a transcript is compacted whatever its size.
@@ -255,6 +269,13 @@ export async function runTurn(
   const failedChanges: ChangeLedger = new Map();
   /** The one reminder a `done` gets while one of those is outstanding. */
   let unlandedNudged = false;
+  /** What changed this turn and whether anything checked it since; see `own-check.ts`. */
+  const work = new WorkLedger();
+  /** OnFlip's own checks run this turn, and whether a failure was sent back yet. */
+  let ownChecks = 0;
+  let ownCheckNudged = false;
+  /** The person declined the check once; it is not asked for again this turn. */
+  let ownCheckDeclined = false;
   let truncationNudges = 0;
   /** Tool calls actually executed this turn; gates fabrication detection. */
   let executedCalls = 0;
@@ -301,6 +322,70 @@ export async function runTurn(
       interrupted: endedBy === "interrupted",
       endedBy,
     };
+  };
+
+  /**
+   * OnFlip's own check of the work before a `done` is taken — see
+   * `own-check.ts`. Null lets the `done` stand; "interrupted" means the
+   * person stopped the turn while the check ran; anything else is the
+   * message the model gets instead of the turn ending.
+   */
+  const checkBeforeDone = async (): Promise<string | null> => {
+    if (!opts.checkBeforeDone || !opts.shellEnabled || !opts.cwd || !work.needsCheck || ownCheckDeclined) return null;
+    if (!opts.tools.get("bash")) return null;
+    const project = opts.cwd;
+    const check = pickOwnCheck(knownChecks(project), work.changed, project);
+    if (!check) return null;
+    const named = `\`${check.command}\`${check.dir ? ` in ${check.dir}/` : ""}`;
+    // It failed, and nothing has changed since: running it again only
+    // repeats news the model has already answered.
+    if (ownChecks > 0 && !work.changedSinceOwnCheck) {
+      events.onNotice?.(`OnFlip's own check ${named} failed and nothing was changed after it — the work may not be finished.`);
+      return null;
+    }
+    if (ownChecks >= MAX_OWN_CHECKS) return null;
+    ownChecks++;
+    logger.info("agent", "checking the work before done", { command: check.command, dir: check.dir, lastMs: check.lastMs });
+    const { result } = await runOwnCheck(check, project, async (call) => {
+      events.onToolStart?.(call);
+      logger.info("tool", "run bash", { args: loggableArguments(call), own: true });
+      const startedAt = Date.now();
+      const done = await opts.tools.run(call.tool, call.arguments);
+      logger.info("tool", "done bash", {
+        ms: Date.now() - startedAt,
+        error: Boolean(done.error),
+        denied: Boolean(done.denied),
+        outputChars: done.output.length,
+        own: true,
+      });
+      events.onToolEnd?.(call, done);
+      return done;
+    });
+    executedCalls++;
+    if (opts.signal.aborted) return "interrupted";
+    if (result.denied) {
+      ownCheckDeclined = true;
+      events.onNotice?.(`The check before finishing (${named}) was declined, so the work was not checked.`);
+      return null;
+    }
+    const passed = !result.error;
+    work.ranOwn(passed);
+    if (passed) {
+      events.onNotice?.(`OnFlip checked the work before finishing: ${named} passed.`);
+      return null;
+    }
+    if (ownCheckNudged || totalNudges >= MAX_NUDGES_PER_TURN) {
+      events.onNotice?.(`OnFlip's own check ${named} still fails — the work may not be finished.`);
+      return null;
+    }
+    ownCheckNudged = true;
+    totalNudges++;
+    logger.info("protocol", "done after a change nothing checked, and OnFlip's check failed; nudging", {
+      command: check.command,
+      dir: check.dir,
+    });
+    events.onNotice?.(`OnFlip checked the work before finishing: ${named} failed — sending the errors back to ${serviceName()}.`);
+    return ownCheckFailedNudge({ command: check.command, dir: check.dir, output: outputTail(result.output) });
   };
 
   // A non-numeric budget would make `iteration <= budget` false on the first
@@ -526,6 +611,7 @@ export async function runTurn(
           result,
           opts.cwd ?? process.cwd()
         );
+        work.saw(canonicalName(opts.tools, call.tool), call.arguments ?? {}, result);
 
         // Watching a model send the same failing call four times in a row is
         // watching it spend the step budget on a result it has already been
@@ -582,14 +668,30 @@ export async function runTurn(
       // one reminder it gets, as for a `done` sent alone.
       const outstanding =
         terminal !== null && terminalName(terminal) === "done" && !unlandedNudged ? unlanded(failedChanges) : [];
-      const closesNow =
+      let closesNow =
         !dropped &&
         terminal !== null &&
         terminalName(terminal) === "done" &&
         notSettled === null &&
         outstanding.length === 0 &&
         openTodoCount(opts.session.todos) === 0;
-      if (terminal && !closesNow) {
+      // OnFlip's own check before this `done` is taken; its failure rides
+      // back in the same message as the results.
+      let ownNudge: string | null = null;
+      if (closesNow) {
+        const own = await checkBeforeDone();
+        if (own === "interrupted") {
+          history.push(newMessage("user", resultBlocks.join("\n\n")));
+          return finish("interrupted", "", iteration);
+        }
+        if (own) {
+          ownNudge = own;
+          closesNow = false;
+          resultBlocks.push(own);
+          stepLog.push("shaky");
+        }
+      }
+      if (terminal && !closesNow && !ownNudge) {
         const name = terminalName(terminal);
         logger.info("protocol", "closing block ignored beside tool calls", {
           block: name,
@@ -727,6 +829,14 @@ export async function runTurn(
           });
           events.onNotice?.(unlandedNotice(outstanding));
           history.push(newMessage("user", unlandedChangeNudge({ changes: outstanding })));
+          stepLog.push("shaky");
+          continue;
+        }
+        // Changed, and nothing has checked it since: OnFlip checks it first.
+        const own = await checkBeforeDone();
+        if (own === "interrupted") return finish("interrupted", "", iteration);
+        if (own) {
+          history.push(newMessage("user", own));
           stepLog.push("shaky");
           continue;
         }

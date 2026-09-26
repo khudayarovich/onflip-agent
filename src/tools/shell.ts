@@ -363,10 +363,17 @@ interface ExecOutcome {
  * an Electron app the user asked to have built and run would come up as a
  * bare Node process and fail with nothing on screen to say why. OnFlip's own
  * helpers that need it set it explicitly.
+ *
+ * Without `NODE_TEST_CONTEXT` either, for the same reason: it is how Node's
+ * test runner talks to the processes it starts, and a `node --test` the agent
+ * runs from a process that has it goes into the runner's child mode and
+ * reports a failing suite as a pass. Found running this project's own suite,
+ * where OnFlip's check of the work passed a test that was failing.
  */
 export function commandEnv(): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env, ONFLIP: "1" };
   delete env.ELECTRON_RUN_AS_NODE;
+  delete env.NODE_TEST_CONTEXT;
   return env;
 }
 
