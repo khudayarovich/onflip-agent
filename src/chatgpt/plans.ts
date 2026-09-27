@@ -239,6 +239,46 @@ function fit(budget: number, windowChars: number, systemChars: number): number {
 }
 
 /**
+ * The most one typed message carries: the transport cuts anything longer
+ * (`clampPayload`), keeping its head and tail. Measured on the composer:
+ * 60,831 characters typed and answered, 112,586 could not be typed at all.
+ */
+export const TYPED_MESSAGE_CEILING_CHARS = 80_000;
+
+/**
+ * How far a person's own "compact after" can usefully go, and what stops it.
+ *
+ * Below this the setting is honoured as it is; above it, capped. From a
+ * Windows PC set to 280,000 on a Free account: the transcript grew to 212,000
+ * characters in one ChatGPT thread whose model holds about 139,000 (34,834
+ * tokens), so the model could no longer see the start of it, which is the
+ * part that says it has tools. Every lost chat then had to go back as one
+ * typed message, cut at 80,000, so each replay lost the middle of the
+ * conversation, and the replays were refused. Two limits, and the lower wins:
+ *
+ *  - the model's window, when it is known, with room for the prompt and a
+ *    reply, as `fit` leaves for the automatic budget;
+ *  - for typed turns, what one replay can carry: a message's ceiling less the
+ *    prompt, which goes in front of every replay.
+ *
+ * Null when nothing bounds it (uploads on, the window unknown).
+ */
+export function ownBudgetCeiling(
+  canUpload: boolean,
+  modelTokens: number | null | undefined,
+  systemChars: number
+): { chars: number; because: "the model" | "one message" } | null {
+  const limits: { chars: number; because: "the model" | "one message" }[] = [];
+  if (modelTokens && modelTokens > 0) {
+    limits.push({ chars: modelTokens * CHARS_PER_TOKEN - systemChars - REPLY_ROOM_CHARS, because: "the model" });
+  }
+  if (!canUpload) limits.push({ chars: TYPED_MESSAGE_CEILING_CHARS - systemChars, because: "one message" });
+  if (!limits.length) return null;
+  const lowest = limits.reduce((a, b) => (b.chars < a.chars ? b : a));
+  return { chars: Math.max(12_000, lowest.chars), because: lowest.because };
+}
+
+/**
  * Is the system prompt taking so much of the window that little is left?
  *
  * Worth saying out loud rather than silently compacting every other turn.

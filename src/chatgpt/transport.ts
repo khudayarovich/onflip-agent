@@ -13,7 +13,7 @@ import {
   checkLivePageContract,
 } from "./browser-client";
 import { buildTurnPrompt } from "../agent/protocol";
-import { planLimitNote, rationedPlan } from "./plans";
+import { planLimitNote, rationedPlan, TYPED_MESSAGE_CEILING_CHARS } from "./plans";
 import { isBrowserProvider } from "../providers/id";
 import { loadConfig, firstPositiveInt } from "../config";
 import { logger } from "../log";
@@ -128,7 +128,7 @@ export interface TransportReply {
  * transcript small enough that a full replay never comes near it — see
  * `compactAfterChars`.
  */
-const MAX_PAYLOAD_CHARS = 80_000;
+const MAX_PAYLOAD_CHARS = TYPED_MESSAGE_CEILING_CHARS;
 
 /**
  * The least a typed message is cut down to after ChatGPT refused a longer one.

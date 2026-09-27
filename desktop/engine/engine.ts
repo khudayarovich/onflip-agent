@@ -36,6 +36,7 @@ import {
   COMPOSER_CEILING_CHARS,
   DEEPSEEK_CEILING_CHARS,
   QWEN_CEILING_CHARS,
+  ownBudgetCeiling,
   describePlan,
   planName,
   planLimitCard,
@@ -1224,7 +1225,15 @@ export class Engine {
    * full bar every turn and nobody able to tell why.
    */
   private contextBudgetSource(): string {
-    if (this.config.compactAfterChars) return "your own setting";
+    if (this.config.compactAfterChars) {
+      const cap = isBrowserProvider() ? null : this.ownBudgetCap();
+      if (cap && cap.chars < this.config.compactAfterChars) {
+        return cap.because === "the model"
+          ? "your own setting, capped at what the model can hold"
+          : "your own setting, capped at what one message can carry";
+      }
+      return "your own setting";
+    }
     if (isBrowserProvider()) return `${providerLabel()}'s own limit`;
     // With turns typed rather than uploaded, what one message can carry is
     // usually the binding limit and the plan only matters when it is
@@ -1254,15 +1263,25 @@ export class Engine {
       };
       return ceilings[activeProvider()] ?? COMPOSER_CEILING_CHARS;
     }
-    return (
-      this.config.compactAfterChars ??
-      compactionBudget(
-        loadConfig().planType,
-        uploadsAvailable(),
-        modelContextTokens(this.model),
-        this.systemPromptChars()
-      )
+    const own = this.config.compactAfterChars;
+    if (own) {
+      // Honoured up to what works, and capped there (see `ownBudgetCeiling`):
+      // a transcript past the model's window is one it cannot see the start
+      // of, and one past a typed message cannot be replayed when a chat is
+      // lost. DeepSeek's and Qwen's own settings pass as they are.
+      const cap = isBrowserProvider() ? null : this.ownBudgetCap();
+      return cap ? Math.min(own, cap.chars) : own;
+    }
+    return compactionBudget(
+      loadConfig().planType,
+      uploadsAvailable(),
+      modelContextTokens(this.model),
+      this.systemPromptChars()
     );
+  }
+
+  private ownBudgetCap(): { chars: number; because: "the model" | "one message" } | null {
+    return ownBudgetCeiling(uploadsAvailable(), modelContextTokens(this.model), this.systemPromptChars());
   }
 
   /** Tell the window the sub-task list has moved on. */
