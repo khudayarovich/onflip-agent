@@ -21,6 +21,7 @@ import { logger } from "../log";
 import { pruneToolResults } from "./prune";
 import { ChangeLedger, recordChange, unlanded } from "./landed";
 import { WorkLedger, outputTail, pickOwnCheck, runOwnCheck } from "./own-check";
+import { cutBlockAdvice, endsInsideCodeBlock, pageLostPartOfTheReply } from "./fence-cut";
 import { knownChecks } from "./project-checks";
 import { providerLabel } from "../providers/id";
 import { recentWorkingSet, workingSetExcerpts, workingSetHint } from "./working-set";
@@ -283,6 +284,8 @@ export async function runTurn(
   let deniedCalls = 0;
   /** Identical calls that have already failed, so a repeat can be named as one. */
   const failedCalls = new Map<string, number>();
+  /** File changes held back once for ending inside a code block; a resend of one is written. */
+  const cutHeldBack = new Set<string>();
   /**
    * Prose from block-less replies that were nudged rather than shown.
    *
@@ -473,8 +476,18 @@ export async function runTurn(
       if (opts.signal.aborted) return finish("interrupted", "", iteration);
       throw e;
     }
-    const raw = reply.content;
+    let raw = reply.content;
     const meta: ReplyMeta = reply.meta ?? {};
+    // The page's rendering of the reply lost part of a call — a file cut at
+    // the first code fence inside it, most often — and the stream still has
+    // the model's own text: that is the reply. See `fence-cut.ts`.
+    if (meta.streamText && pageLostPartOfTheReply(raw, meta.streamText, knownTool)) {
+      logger.warn("protocol", "the page's copy of the reply lost part of a call; using the stream's", {
+        pageChars: raw.length,
+        streamChars: meta.streamText.length,
+      });
+      raw = meta.streamText;
+    }
     // Said back once, with the next step: see `ownToolsLine`.
     ownToolsLastReply = meta.chatgptTools ?? [];
     if (ownToolsLastReply.length) {
@@ -576,7 +589,25 @@ export async function runTurn(
         events.onToolStart?.(call);
         logger.info("tool", `run ${call.tool}`, { args: loggableArguments(call) });
         const startedAt = Date.now();
-        const result = await opts.tools.run(call.tool, call.arguments);
+        // A file change whose text ends inside an open code block is what a
+        // block the page's renderer cut short looks like: held back once, with
+        // the way to send it whole. See `fence-cut.ts`.
+        const changeTool = canonicalName(opts.tools, call.tool);
+        const cutKey = endsInsideCodeBlock(changeTool, call.arguments ?? {});
+        const cutSignature = `${changeTool}:${JSON.stringify(call.arguments ?? {})}`;
+        let result: ToolResult;
+        if (cutKey && !cutHeldBack.has(cutSignature)) {
+          cutHeldBack.add(cutSignature);
+          const target = typeof call.arguments?.path === "string" ? call.arguments.path : "";
+          logger.warn("protocol", "a file change ends inside a code block; held back once", {
+            tool: changeTool,
+            key: cutKey,
+            path: target,
+          });
+          result = { output: cutBlockAdvice(changeTool, cutKey, target), error: true };
+        } else {
+          result = await opts.tools.run(call.tool, call.arguments);
+        }
         // A failure logs *why*, at warn, and not only that it happened.
         // Measured across every session in `~/.onflip/logs`: 16% of all tool
         // calls fail, and `edit` fails 57% of the time (71 of 125) with

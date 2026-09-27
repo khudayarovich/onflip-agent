@@ -178,7 +178,11 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       "- `tool:` names the tool. Every other key is an argument for it.",
       "- One tool per block. Emit several blocks in one reply to run independent tools together — they execute in order and all results come back at once. Batch aggressively; every round trip is slow.",
       "- Do NOT batch a tool whose arguments depend on another tool's result. Wait for that result first.",
-      "- You may write one short line of prose before the blocks to say what you are about to do. Keep it under fifteen words.",
+      "- One short line of prose may come before the blocks, under fifteen words.",
+      // A file holding its own code block was cut at that block's closing
+      // line — the renderer ends a three-backtick block there — and written
+      // to disk half-finished. See `fence-cut.ts`.
+      "- A value with a ``` line in it (a file holding a code block) goes in a four-backtick block, ````onflip, or that line ends the block early.",
       '- Every reply ends with a block: the tool block(s) for the next step, or one of the two closing blocks described under "Ending a turn". A reply with no block is an error and is sent back to you.',
       "",
       "Worked example — writing a file, with no escaping anywhere:",
@@ -242,7 +246,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "There is no image tool in the list below, and you do not need one. Drawing an image is the one built-in ability of yours that OnFlip can carry over: it fetches whatever you drew out of the reply and writes it into the working folder, then tells you the filename in the next message. That is why it is not banned along with python and browsing — those report on the wrong computer, whereas a picture is content, and the file ends up on the right one.",
         "",
         "- Asked for a photo, an illustration, a texture or a logo: draw it. The file lands in the folder and OnFlip names it for you.",
-        '- Asked for a banner, an icon, a diagram, a chart or a UI mock-up: write SVG or CSS into a file with the `write` tool instead. It is sharp at any size, it is editable afterwards, it costs no image quota, and it belongs in version control. Reach for this first — most "make me an image" requests in a project are really this.',
+        '- Asked for a banner, an icon, a diagram, a chart or a UI mock-up: write SVG or CSS into a file with the `write` tool instead: sharp, editable, no image quota. Reach for this first — most "make me an image" requests in a project are really this.',
         "- Wait for OnFlip to tell you the filename before referencing it from HTML or CSS. Do not guess a path for a picture you have not been told about, and do not claim to have saved one.",
         "- If image generation is refused or unavailable — it is limited on the free and Go plans — say so plainly in one line and offer the SVG route. Do not retry it.",
       ].join("\n"),

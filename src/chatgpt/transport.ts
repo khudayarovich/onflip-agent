@@ -101,6 +101,12 @@ export interface ReplyMeta {
    * hand-off, a connector, a file listing. See `chatgptToolCalls`.
    */
   chatgptTools?: string[];
+  /**
+   * The reply as the stream carried it — the model's markdown exactly as
+   * written — when the stream finished cleanly and nothing was continued.
+   * Used only when the page's copy lost part of a call: see `fence-cut.ts`.
+   */
+  streamText?: string;
 }
 
 export interface TransportReply {

@@ -885,12 +885,20 @@ function streamToolCalls(after: number): string[] {
 export function replyMetaFor(after: number, accepted: ReplyMeta | null, continued: number): ReplyMeta {
   const view = streamView(after);
   const ownTools = streamToolCalls(after);
+  // The model's own markdown, for when the page's rendering of it lost part
+  // of a call (`fence-cut.ts`). Not after a "Continue generating": the stream
+  // then holds only the second half of a reply the page holds whole.
+  const streamText =
+    continued === 0 && view?.state === "done" && view.visible?.status === "finished_successfully"
+      ? view.visible.text.trim()
+      : "";
   return {
     ...(accepted ?? {}),
     hookSeen: Boolean(accepted?.hookSeen || view),
     truncated: Boolean(view?.truncated),
     continued,
     ...(ownTools.length ? { chatgptTools: ownTools } : {}),
+    ...(streamText ? { streamText } : {}),
   };
 }
 

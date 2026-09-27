@@ -115,6 +115,13 @@ test("a question offers answers to click, the recommended one first", () => {
   assert.match(prompt, /Never use it to ask for the tools to be enabled, exposed, reconnected or granted/);
 });
 
+test("a value holding its own code block is sent in four backticks", () => {
+  // A file with a code block in it was cut at that block's closing line —
+  // the renderer ends a three-backtick block there — and written half done.
+  assert.match(build("chatgpt"), /A value with a ``` line in it \(a file holding a code block\) goes in a four-backtick block, ````onflip/);
+  assert.match(build("deepseek"), /goes in a four-backtick block/, "every service's page renders Markdown");
+});
+
 test("the prompt shrinks where it stopped applying, and only there", () => {
   // The numbers this change is worth, pinned so a later edit that quietly
   // re-inflates the prompt shows up as a failing test rather than as a
