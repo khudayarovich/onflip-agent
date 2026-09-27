@@ -777,6 +777,29 @@ async function startBackground(command: string, cwd: string): Promise<ToolResult
   );
 }
 
+/**
+ * The job a call names. The argument is `id`, and models write `job_id`:
+ * live, on a Mac, `kill_job` with `job_id: job_1` read an empty id, answered
+ * `No job with id ""`, and the model concluded the tool was broken and left
+ * the old server running beside a new one. The spellings a model reaches
+ * for are read as the id, and a call with none is told which argument it is.
+ */
+function jobIdOf(args: Record<string, unknown>): string {
+  for (const key of ["id", "job_id", "jobId", "job", "job_name"]) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  return "";
+}
+
+function noSuchJob(id: string): string {
+  const known = [...jobs.keys()];
+  const which = known.length ? ` Known jobs: ${known.join(", ")}.` : " No background jobs are running.";
+  return id
+    ? `No job with id "${id}".${which}`
+    : `No job id was given: pass it as \`id\`, e.g. \`id: ${known[0] ?? "job_1"}\`.${which}`;
+}
+
 export const jobOutputTool: ToolDefinition = {
   name: "job_output",
   description:
@@ -790,13 +813,10 @@ export const jobOutputTool: ToolDefinition = {
     required: ["id"],
   },
   async run(args) {
-    const id = String(args.id ?? "");
+    const id = jobIdOf(args);
     const job = jobs.get(id);
     if (!job) {
-      const known = [...jobs.keys()];
-      return err(
-        `No such job: ${id}.${known.length ? ` Known jobs: ${known.join(", ")}` : " No background jobs are running."}`
-      );
+      return err(noSuchJob(id));
     }
     const fresh = job.output.slice(job.cursor);
     job.cursor = job.output.length;
@@ -835,11 +855,10 @@ export const killJobTool: ToolDefinition = {
     required: ["id"],
   },
   async run(args) {
-    const id = String(args.id ?? "").trim();
+    const id = jobIdOf(args);
     const job = jobs.get(id);
     if (!job) {
-      const known = [...jobs.keys()].join(", ") || "none";
-      return err(`No job with id "${id}". Known jobs: ${known}`);
+      return err(noSuchJob(id));
     }
     if (job.exitCode !== null) {
       return { output: `Job ${id} already exited with code ${job.exitCode}.`, title: id };
