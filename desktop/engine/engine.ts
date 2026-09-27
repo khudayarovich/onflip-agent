@@ -796,27 +796,29 @@ export class Engine {
       const label = allModels().find((m) => m.slug === slug)?.label;
       return label && label !== slug ? `${label} (${slug})` : slug;
     };
-    if (cfg.modelPinned && this.model !== "auto") {
-      // A pin is the person's choice and stays. What the account says about
-      // it is worth one line, since the picker offered two models with the
-      // same name and only one of them has no limit on this plan.
-      if (meteredOnPlan(this.model) && wanted !== this.model) {
-        this.notice(
-          `${this.model} has a message limit on the ${planName(cfg.planType) ?? cfg.planType} plan. ${named(wanted)} has none — pick it in the chip under the composer to keep working past the limit.`
-        );
-      }
-      return;
-    }
+    // A pin is the person's choice and stays — except on a model with a
+    // message limit on a rationed plan. Read from a Mac on Free, pinned to
+    // `gpt-5-6`: when its limit ran out ChatGPT stopped taking sends on it
+    // ("page opened on a different model", then a composer that would not
+    // send), and OnFlip spent the turn reloading and replaying the chat until
+    // the run stopped. The picker offers no such model on these plans, so a
+    // pin on one is a leftover — often from `migrateModelPin`, which took any
+    // old slug without "luna" in it for a choice — not something anyone can
+    // pick again. It moves to the model with no limit, and says why.
+    const limitedPin = cfg.modelPinned && meteredOnPlan(this.model) && wanted !== this.model;
+    if (cfg.modelPinned && this.model !== "auto" && !limitedPin) return;
     if (wanted === this.model) return;
     const from = this.model;
     this.model = wanted;
-    saveConfig({ model: wanted });
+    saveConfig(limitedPin ? { model: wanted, modelPinned: false } : { model: wanted });
     if (this.session) this.session.model = wanted;
-    logger.info("engine", "adopted the default model", { from, to: wanted, plan: cfg.planType });
+    logger.info("engine", "adopted the default model", { from, to: wanted, plan: cfg.planType, limitedPin });
     this.notice(
       from === "auto"
         ? `Auto is no longer offered — on a paid plan it routed the agent's turns into Pro thinking, which kept timing out. Using ${wanted} instead; pick another model in the chip under the composer if you prefer.`
-        : `Using ${named(wanted)}, which this plan can run without a message limit.`
+        : limitedPin
+          ? `${named(from)} has a message limit on the ${planName(cfg.planType) ?? cfg.planType} plan, and once it runs out ChatGPT stops taking messages on it. Using ${named(wanted)} instead, which has none.`
+          : `Using ${named(wanted)}, which this plan can run without a message limit.`
     );
   }
 

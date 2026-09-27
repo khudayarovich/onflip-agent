@@ -61,14 +61,29 @@ test("a Free session nobody pinned moves from the limited Luna to the one with n
   );
 });
 
-test("a pinned model with a limit stays, and the limit is named once", { skip: needsBuild }, () => {
+test("a pin on a model with a limit is not kept on Free, and the reason is given", { skip: needsBuild }, () => {
+  // Read from a Mac on Free, pinned to gpt-5-6: when its limit ran out
+  // ChatGPT stopped taking sends on it, and the run stopped. The picker
+  // offers no such model on Free, so the pin could not be picked again.
   const { engine, cfg, notices } = makeEngine({ planType: "free", model: "gpt-5-6", modelPinned: true, discoveredModels: FREE });
   engine.adoptDefaultModel();
-  assert.equal(engine.model, "gpt-5-6", "a pin is the person's choice");
-  assert.equal(cfg.loadConfig().model, "gpt-5-6");
+  assert.equal(engine.model, "gpt-5-6-mini");
+  assert.equal(cfg.loadConfig().model, "gpt-5-6-mini");
+  assert.equal(cfg.loadConfig().modelPinned, false, "later defaults apply to it again");
   const said = notices().filter((n) => /has a message limit/.test(n));
   assert.equal(said.length, 1, notices().join(" | "));
-  assert.match(said[0], /gpt-5-6 has a message limit on the Free plan\. GPT-5\.6 Luna \(gpt-5-6-mini\) has none/);
+  assert.match(
+    said[0],
+    // Named by its slug: the picker, where the names come from, no longer lists it.
+    /^gpt-5-6 has a message limit on the Free plan, and once it runs out ChatGPT stops taking messages on it\. Using GPT-5\.6 Luna \(gpt-5-6-mini\) instead, which has none\.$/
+  );
+});
+
+test("on a paid plan a pin stays, whatever it is", { skip: needsBuild }, () => {
+  const { engine, notices } = makeEngine({ planType: "plus", model: "gpt-5-6", modelPinned: true, discoveredModels: FREE });
+  engine.adoptDefaultModel();
+  assert.equal(engine.model, "gpt-5-6");
+  assert.equal(notices().length, 0, notices().join(" | "));
 });
 
 test("a pinned model with no limit is left without a word", { skip: needsBuild }, () => {
