@@ -178,6 +178,19 @@ let lastShown: { key: string; at: number; brief: boolean } | null = null;
 const SAME_PAGE_WINDOW_MS = 90_000;
 
 /**
+ * The elements the latest snapshot listed, so a ref whose element the page
+ * has since rebuilt can be found again by what it was (see `findAgain`).
+ */
+let lastElements: SnapshotElement[] = [];
+
+/**
+ * A ref missed since the last snapshot. The next `browser_snapshot` is then
+ * shown whole: "nothing has changed, the same refs" is no answer to a model
+ * that has just been told one of those refs is not on the page.
+ */
+let refMissed = false;
+
+/**
  * What the page said in its console, between one snapshot and the next — see
  * `page-problems.ts`. Listened for on every page this tool drives, from before
  * its first navigation, so an exception on load is not missed.
@@ -407,6 +420,8 @@ async function ensurePage(): Promise<Page> {
 /** Shut the automation browser down. Safe to call when it never started. */
 export async function closeAutomationBrowser(): Promise<void> {
   lastShown = null;
+  lastElements = [];
+  refMissed = false;
   problems.clear();
   if (idleTimer) {
     clearTimeout(idleTimer);
@@ -635,8 +650,14 @@ async function emitFrame(p: Page, note?: string): Promise<void> {
  * lib — and, as `browser-client.ts` learned the hard way, a stringified
  * function is only *called* when it is given an argument. Exported so the
  * suite can run it against a hand-built document.
+ *
+ * Given `want` ({ role, name, nth }), it tags nothing and instead finds the
+ * nth visible element with that role and name, scrolls it into view and
+ * returns its centre: how a ref is found again once the page has rebuilt the
+ * element it was on (see `findAgain`). One program for both, so an element
+ * is found again by exactly the role and name the snapshot showed.
  */
-export const SNAPSHOT = `(limit) => {
+export const SNAPSHOT = `(limit, want) => {
   const SELECTOR = [
     'a[href]', 'button', 'input:not([type="hidden"])', 'select', 'textarea',
     'summary', '[contenteditable="true"]',
@@ -690,6 +711,27 @@ export const SNAPSHOT = `(limit) => {
     return 'element';
   };
 
+  const shown = (el) => {
+    const rect = el.getBoundingClientRect();
+    if (rect.width < 1 || rect.height < 1) return false;
+    const style = window.getComputedStyle(el);
+    if (style.visibility === 'hidden' || style.display === 'none') return false;
+    if (Number(style.opacity) < 0.05) return false;
+    return !el.disabled;
+  };
+
+  if (want) {
+    const same = [];
+    for (const el of document.querySelectorAll(SELECTOR)) {
+      if (shown(el) && roleOf(el) === want.role && nameOf(el) === want.name) same.push(el);
+    }
+    const el = same[want.nth];
+    if (!el) return { matches: same.length, found: null };
+    if (el.scrollIntoView) el.scrollIntoView({ block: 'center', inline: 'center' });
+    const rect = el.getBoundingClientRect();
+    return { matches: same.length, found: { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 } };
+  }
+
   // Refs from an earlier snapshot must not survive into this one, or a stale
   // number silently points at whatever used to be there.
   for (const old of document.querySelectorAll('[data-onflip-ref]')) {
@@ -699,12 +741,7 @@ export const SNAPSHOT = `(limit) => {
   const elements = [];
   let seen = 0;
   for (const el of document.querySelectorAll(SELECTOR)) {
-    const rect = el.getBoundingClientRect();
-    if (rect.width < 1 || rect.height < 1) continue;
-    const style = window.getComputedStyle(el);
-    if (style.visibility === 'hidden' || style.display === 'none') continue;
-    if (Number(style.opacity) < 0.05) continue;
-    if (el.disabled) continue;
+    if (!shown(el)) continue;
 
     seen++;
     if (elements.length >= limit) continue;
@@ -803,21 +840,76 @@ function describe(shot: Snapshot, note?: string, errors?: string | null): string
   return lines.join("\n");
 }
 
+/**
+ * A ref as the snapshot spells it, from the ways a model writes one.
+ *
+ * The snapshot lists `[ref_1]`, and models also send `1`, `ref1`, `ref-1`,
+ * `#1` or the brackets too. Live, on a Windows PC: `browser_click` with
+ * `ref: 1`, straight after a snapshot listing `[ref_1] button "START SHIFT"`,
+ * was told "1 is not on the page … call browser_snapshot". The snapshot then
+ * said, truthfully, that nothing had changed, and the model clicked `1` again,
+ * three times, before it gave up checking the game in the browser at all.
+ */
+export function refName(raw: unknown): string {
+  const text = String(raw ?? "")
+    .trim()
+    .replace(/^\[\s*|\s*\]$/g, "");
+  const numbered = /^(?:ref)?[\s_#:-]*0*(\d+)$/i.exec(text);
+  return numbered ? `ref_${numbered[1]}` : text;
+}
+
 /** The locator for a ref, or an error explaining why there is not one. */
 async function locate(p: Page, rawRef: unknown): Promise<{ ref: string } | { error: ToolResult }> {
-  const ref = String(rawRef ?? "").trim();
+  const ref = refName(rawRef);
   if (!ref) {
     return { error: err("`ref` must be a ref from the latest browser snapshot, such as ref_3.") };
   }
-  const count = await p.locator(`[data-onflip-ref="${ref}"]`).count();
+  // Only a ref's own characters go into the selector: anything else is not a
+  // ref, and a quote in it would break the selector rather than miss.
+  const count = /^[\w-]+$/.test(ref) ? await p.locator(`[data-onflip-ref="${ref}"]`).count() : 0;
   if (count === 0) {
+    refMissed = true;
+    const listed = lastElements.find((e) => e.ref === ref);
     return {
       error: err(
-        `${ref} is not on the page. Refs only describe the snapshot that produced them, and the page has changed since — call browser_snapshot and use a ref from that.`
+        listed
+          ? `${ref} (${listed.role}${listed.name ? ` ${JSON.stringify(listed.name)}` : ""}) is not on the page any more: the page has rebuilt or removed it since the snapshot — call browser_snapshot and use a ref from that.`
+          : `${ref} is not on the page. Refs only describe the snapshot that produced them, and the page has changed since — call browser_snapshot and use a ref from that.`
       ),
     };
   }
   return { ref };
+}
+
+/**
+ * Where the element a vanished ref named is now, found by what it was.
+ *
+ * A page that rebuilds its elements — a game's menu redrawn every frame, a
+ * list re-rendered on a timer — takes the snapshot's tags with the old nodes,
+ * so a ref listed a moment ago is "not on the page" however quickly it is
+ * used, and the snapshot asked for next lists the same refs again. Measured
+ * in a real browser on a menu redrawn every frame: every click by ref failed.
+ * So the ref is looked up in the snapshot that issued it, and the element with
+ * the same role and name — the nth of them, as it was listed — is found in
+ * the page as it is now. Null when that snapshot did not list the ref, or the
+ * page no longer has such an element.
+ */
+async function findAgain(p: Page, ref: string): Promise<{ x: number; y: number } | null> {
+  const listed = lastElements.find((e) => e.ref === ref);
+  if (!listed || !listed.name) return null;
+  const nth = lastElements
+    .slice(0, lastElements.indexOf(listed))
+    .filter((e) => e.role === listed.role && e.name === listed.name).length;
+  const want = JSON.stringify({ role: listed.role, name: listed.name, nth });
+  try {
+    const out = (await p.evaluate(`(${SNAPSHOT})(${MAX_ELEMENTS}, ${want})`)) as
+      | { matches?: number; found?: { x: number; y: number } | null }
+      | undefined;
+    const at = out?.found;
+    return at && Number.isFinite(at.x) && Number.isFinite(at.y) ? at : null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -897,6 +989,8 @@ async function respond(p: Page, note: string, cwd?: string): Promise<ToolResult>
     );
   }
   lastShown = { key: snapshotKey(shot), at: Date.now(), brief: false };
+  lastElements = shot.elements;
+  refMissed = false;
   return ok(describe(shot, note, consoleSection(problems.drain(cwd), shot.url)), { title: shot.title || shot.url });
 }
 
@@ -1000,7 +1094,10 @@ export const browserSnapshotTool: ToolDefinition = {
     // again is for.
     const found = problems.drain(ctx.cwd);
     const errors = consoleSection(found, shot.url);
-    if (isQuiet(found) && lastShown?.key === key && !lastShown.brief && age < SAME_PAGE_WINDOW_MS) {
+    const missed = refMissed;
+    lastElements = shot.elements;
+    refMissed = false;
+    if (!missed && isQuiet(found) && lastShown?.key === key && !lastShown.brief && age < SAME_PAGE_WINDOW_MS) {
       lastShown = { key, at: Date.now(), brief: true };
       const count = shot.elements.length;
       return ok(
@@ -1030,15 +1127,33 @@ export const browserClickTool: ToolDefinition = {
     if (!automationBrowserOpen()) return err("No page is open. Use browser_open first.");
     const p = await ensurePage();
 
-    const found = await locate(p, args.ref);
-    if ("error" in found) return found.error;
+    let found = await locate(p, args.ref);
+    // A ref the latest snapshot listed, on an element the page has since
+    // rebuilt: found again by its role and name, and clicked where it is.
+    let rebuilt = false;
+    if ("error" in found) {
+      const ref = refName(args.ref);
+      if (!(await findAgain(p, ref))) return found.error;
+      found = { ref };
+      rebuilt = true;
+    }
 
     const label = String(args.description ?? "").trim() || found.ref;
     const stop = await allowed(ctx, "browser_click", `click ${label}`, [`page: ${p.url()}`], p.url());
     if (stop) return stop;
 
     try {
-      await p.locator(`[data-onflip-ref="${found.ref}"]`).click({ timeout: 15_000 });
+      if (rebuilt) {
+        // Looked up again after the approval, which can take a while, and
+        // clicked at once: a real click at the point, as a person makes it,
+        // lands on whichever copy of the element is there at that moment.
+        const at = await findAgain(p, found.ref);
+        if (!at) throw new Error("the element went away before it could be clicked");
+        await p.mouse.click(at.x, at.y);
+        refMissed = false;
+      } else {
+        await p.locator(`[data-onflip-ref="${found.ref}"]`).click({ timeout: 15_000 });
+      }
     } catch (e) {
       return err(
         `Could not click ${found.ref}: ${e instanceof Error ? e.message : String(e)}. It may be covered by something else, or off screen — snapshot the page again.`

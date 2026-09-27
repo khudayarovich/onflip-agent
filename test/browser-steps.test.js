@@ -35,6 +35,11 @@ let types = {};
 let typed = [];
 /** A ref whose fill throws. */
 let failOn = null;
+/** Refs whose element the page has rebuilt since the snapshot tagged it. */
+let rebuilt = new Set();
+/** What looking an element up again by role and name finds, and what it was asked. */
+let foundAgain = { matches: 1, found: { x: 50, y: 60 } };
+let askedAgain = [];
 
 const fakePage = {
   closed: false,
@@ -51,8 +56,19 @@ const fakePage = {
     return this.closed;
   },
   setDefaultTimeout() {},
-  async evaluate() {
+  async evaluate(expression) {
+    // The snapshot program given a `want` finds an element again instead.
+    const want = /\(\d+, (\{.*\})\)$/.exec(String(expression))?.[1];
+    if (want) {
+      askedAgain.push(JSON.parse(want));
+      return foundAgain;
+    }
     return JSON.parse(JSON.stringify(shot));
+  },
+  mouse: {
+    async click(x, y) {
+      typed.push(["mouse", x, y]);
+    },
   },
   url() {
     return shot.url;
@@ -62,7 +78,7 @@ const fakePage = {
   },
   locator(selector) {
     const ref = /data-onflip-ref="([^"]+)"/.exec(selector)?.[1];
-    const exists = shot.elements.some((e) => e.ref === ref);
+    const exists = shot.elements.some((e) => e.ref === ref) && !rebuilt.has(ref);
     return {
       async count() {
         return exists ? 1 : 0;
@@ -150,6 +166,9 @@ async function onSignup() {
   shot = signup();
   types = { ref_3: "password" };
   failOn = null;
+  rebuilt = new Set();
+  foundAgain = { matches: 1, found: { x: 50, y: 60 } };
+  askedAgain = [];
   await reg.run("browser_open", { url: "https://example.test/signup" });
   asked = [];
   typed = [];
@@ -236,6 +255,137 @@ test("a stale ref anywhere in the form stops it before anything is typed", async
   assert.match(result.output, /ref_9 is not on the page/);
   assert.deepEqual(typed, [], "nothing typed");
   assert.deepEqual(asked, [], "and nothing asked");
+});
+
+// ---------------------------------------------------------------------------
+// a ref however the model spells it
+// ---------------------------------------------------------------------------
+
+test("a ref sent as its bare number clicks the element the snapshot listed", async () => {
+  // Live: `ref: 1` straight after a snapshot listing `[ref_1]` was "not on
+  // the page", three times over, and the agent stopped checking its game.
+  await onSignup();
+  const result = await reg.run("browser_click", { ref: "4" });
+  assert.equal(result.error, undefined, result.output);
+  assert.deepEqual(typed, [["click", "ref_4"]]);
+});
+
+test("the other spellings a model writes reach the same fields", async () => {
+  await onSignup();
+  const result = await reg.run("browser_type", {
+    fields: [
+      { ref: "ref1", text: "Jane" },
+      { ref: "[ref_2]", text: "jane@example.test" },
+    ],
+  });
+  assert.equal(result.error, undefined, result.output);
+  assert.deepEqual(typed, [
+    ["ref_1", "Jane"],
+    ["ref_2", "jane@example.test"],
+  ]);
+});
+
+test("a number that is not on the page is named as the ref it would be", async () => {
+  await onSignup();
+  const result = await reg.run("browser_click", { ref: "9" });
+  assert.equal(result.error, true);
+  assert.match(result.output, /^ref_9 is not on the page/);
+});
+
+test("a ref with a quote in it misses rather than breaking the selector", async () => {
+  await onSignup();
+  const result = await reg.run("browser_click", { ref: 'ref_1"] , a[href' });
+  assert.equal(result.error, true);
+  assert.match(result.output, /is not on the page/);
+  assert.deepEqual(typed, []);
+});
+
+test("refName: every spelling of one ref, and nothing else is changed", () => {
+  const { refName } = require("../dist/tools/browser");
+  for (const spelled of ["ref_1", "1", "ref1", "REF_1", "Ref-1", "ref 1", "#1", "[ref_1]", " [ ref_1 ] ", "ref_01", "ref:1"]) {
+    assert.equal(refName(spelled), "ref_1", spelled);
+  }
+  assert.equal(refName("12"), "ref_12");
+  assert.equal(refName("ref_10"), "ref_10");
+  // Not refs: left as they are, to miss with their own name in the error.
+  assert.equal(refName("e1"), "e1");
+  assert.equal(refName("Create account"), "Create account");
+  assert.equal(refName(""), "");
+  assert.equal(refName(undefined), "");
+});
+
+test("a ref whose element the page rebuilt is found again by role and name, and clicked where it is", async () => {
+  // A game's menu redrawn every frame takes the snapshot's tags with the old
+  // nodes: measured in a real browser, every click by ref failed there.
+  await onSignup();
+  rebuilt = new Set(["ref_4"]);
+  const result = await reg.run("browser_click", { ref: "ref_4", description: "Create account" });
+  assert.equal(result.error, undefined, result.output);
+  assert.deepEqual(typed, [["mouse", 50, 60]], "a real click at the point, not the tag");
+  assert.equal(asked.length, 1, "asked once, as any click is");
+  assert.deepEqual(askedAgain[0], { role: "button", name: "Create account", nth: 0 });
+  assert.equal(askedAgain.length, 2, "and looked up again after the approval, just before the click");
+});
+
+test("the one found again is the one the snapshot listed: the second of two with the same name", async () => {
+  await onSignup();
+  shot = signup({
+    elements: [
+      { ref: "ref_1", role: "button", name: "Delete" },
+      { ref: "ref_2", role: "link", name: "Delete" },
+      { ref: "ref_3", role: "button", name: "Delete" },
+    ],
+  });
+  await reg.run("browser_snapshot", {});
+  rebuilt = new Set(["ref_3"]);
+  askedAgain = [];
+  typed = [];
+  await reg.run("browser_click", { ref: "3" });
+  assert.deepEqual(askedAgain[0], { role: "button", name: "Delete", nth: 1 }, "a link of that name is not counted");
+});
+
+test("a rebuilt ref with nothing like it left is refused, saying what it was", async () => {
+  await onSignup();
+  rebuilt = new Set(["ref_4"]);
+  foundAgain = { matches: 0, found: null };
+  const result = await reg.run("browser_click", { ref: "ref_4" });
+  assert.equal(result.error, true);
+  assert.match(result.output, /^ref_4 \(button "Create account"\) is not on the page any more/);
+  assert.deepEqual(typed, []);
+  assert.deepEqual(asked, [], "nothing asked for a click that cannot happen");
+});
+
+test("after a miss, the next snapshot is the page itself, not 'nothing has changed'", async () => {
+  await onSignup();
+  rebuilt = new Set(["ref_4"]);
+  foundAgain = { matches: 0, found: null };
+  await reg.run("browser_click", { ref: "ref_4" });
+  const again = await reg.run("browser_snapshot", {});
+  assert.doesNotMatch(again.output, /Nothing has changed/);
+  assert.match(again.output, /\[ref_4\] button "Create account"/);
+});
+
+test("typing is not redirected: a field the page rebuilt is refused as before", async () => {
+  await onSignup();
+  rebuilt = new Set(["ref_1"]);
+  const result = await reg.run("browser_type", { ref: "ref_1", text: "Jane" });
+  assert.equal(result.error, true);
+  assert.match(result.output, /ref_1 \(textbox "Name"\) is not on the page any more/);
+  assert.deepEqual(askedAgain, []);
+});
+
+test("the snapshot program, asked for one element, finds it without touching the refs", () => {
+  const fields = [
+    { tag: "BUTTON", innerText: "START SHIFT" },
+    { tag: "A", innerText: "START SHIFT", attrs: { href: "#" } },
+    { tag: "BUTTON", innerText: "RESET SAVE" },
+    { tag: "BUTTON", innerText: "START SHIFT" },
+  ];
+  const out = runSnapshot(fields, { role: "button", name: "START SHIFT", nth: 1 });
+  assert.equal(out.matches, 2, "the link of the same name is not one of them");
+  assert.deepEqual(out.found, { x: 60, y: 12 });
+  const none = runSnapshot(fields, { role: "button", name: "Quit", nth: 0 });
+  assert.deepEqual(none, { matches: 0, found: null });
 });
 
 test("a field that fails says which ones went in", async () => {
@@ -354,7 +504,7 @@ test("an older snapshot is not vouched for: it may have been trimmed from the co
 // ---------------------------------------------------------------------------
 
 /** The in-page snapshot program, run against a hand-built document. */
-function runSnapshot(fields) {
+function runSnapshot(fields, want) {
   const attrs = (el) => el.attrs;
   const elements = fields.map((f) => ({
     tagName: f.tag || "INPUT",
@@ -372,7 +522,7 @@ function runSnapshot(fields) {
     removeAttribute(name) {
       delete attrs(this)[name];
     },
-    getBoundingClientRect: () => ({ width: 120, height: 24 }),
+    getBoundingClientRect: () => ({ left: 0, top: 0, width: 120, height: 24 }),
   }));
   const document = {
     title: "Sign in",
@@ -383,7 +533,16 @@ function runSnapshot(fields) {
   };
   const window = { getComputedStyle: () => ({ visibility: "visible", display: "block", opacity: "1" }) };
   const location = { href: "https://example.test/login" };
-  return new Function("document", "window", "location", `return (${SNAPSHOT})(120);`)(document, window, location);
+  const out = new Function("document", "window", "location", `return (${SNAPSHOT})(120, ${JSON.stringify(want ?? null)});`)(
+    document,
+    window,
+    location
+  );
+  if (want) {
+    // Asked for one element, it tags nothing: the model's refs stay valid.
+    assert.ok(elements.every((e) => !("data-onflip-ref" in e.attrs)), "no ref was set or moved");
+  }
+  return out;
 }
 
 test("a password in a field never leaves the page, whoever typed it", () => {
