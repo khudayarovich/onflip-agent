@@ -55,6 +55,12 @@ export type FailureCode =
   | "refused"
   /** The message went in but neither send button nor Enter would send it. */
   | "composer-refused"
+  /**
+   * A new chat refused this message but would take a one-character one: the
+   * message itself is the problem (its size, in practice), so the retry
+   * sends less rather than the same again.
+   */
+  | "message-refused"
   /** The message could not be typed into the composer at all. */
   | "composer-entry"
   /** Submitted, but the user's turn never appeared on the page. */
@@ -90,6 +96,7 @@ const BY_CODE: Record<FailureCode, { kind: FailureKind; seconds: number }> = {
   throttled: { kind: "cooldown", seconds: 5 * 60 },
   refused: { kind: "cooldown", seconds: DEFAULT_COOLDOWN_SECONDS },
   "composer-refused": { kind: "retry", seconds: 0 },
+  "message-refused": { kind: "retry", seconds: 0 },
   "composer-entry": { kind: "retry", seconds: 0 },
   "send-not-landed": { kind: "retry", seconds: 0 },
   anonymous: { kind: "retry", seconds: 0 },

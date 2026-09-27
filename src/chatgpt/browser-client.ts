@@ -3306,6 +3306,145 @@ export function usageLimit(text: string, now: Date = new Date()): { notice: stri
   return { notice, seconds: secondsUntilClock(text.slice(at, at + 80), now) };
 }
 
+/**
+ * What the page says around a refused send, in its own words: its alerts
+ * and toasts, the composer's surroundings with the typed message left out,
+ * and the rest of the page without the conversation, the sidebar or the
+ * editor.
+ *
+ * For the local log, and for the one line of it a refusal's error quotes.
+ * The page's greeting can carry the person's name, so none of this is a
+ * diagnostics field. It exists because a refusal used to leave behind only
+ * that the composer stayed full. A Free account's refusal loop on a
+ * Russian-language page left nothing to say why, and the usage-limit notice
+ * OnFlip knows is matched in English.
+ *
+ * Only text that is on screen. The live page keeps notices in the document
+ * that it is not showing ("Chat stopped unexpectedly", "Email is not valid."),
+ * and a first version that read the document's text quoted those, on a
+ * healthy page, as what the page was saying.
+ */
+export const REFUSAL_WORDS = `(() => {
+  const theirs = "textarea, [contenteditable], [data-message-author-role], nav, aside, script, style, noscript, template";
+  const onScreen = (el) =>
+    el.checkVisibility
+      ? el.checkVisibility({ checkOpacity: true, checkVisibilityCSS: true })
+      : el.getClientRects().length > 0;
+  const words = (root, cap) => {
+    if (!root) return "";
+    const out = [];
+    let size = 0;
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    for (let node = walker.nextNode(); node && size < cap; node = walker.nextNode()) {
+      const el = node.parentElement;
+      if (!el || el.closest(theirs) || !onScreen(el)) continue;
+      const text = (node.nodeValue || "").replace(/\\s+/g, " ").trim();
+      if (!text) continue;
+      out.push(text);
+      size += text.length + 1;
+    }
+    return out.join(" ").slice(0, cap);
+  };
+  const alerts = [...document.querySelectorAll("[role='alert'], [role='status'], [data-sonner-toast], .toast")]
+    .filter((el) => !el.closest("[data-message-author-role]") && onScreen(el))
+    .map((el) => words(el, 200))
+    .filter(Boolean);
+  const editor = document.querySelector("#prompt-textarea, [contenteditable='true'], textarea");
+  const form = editor ? editor.closest("form") : null;
+  return {
+    alerts: alerts.join(" | ").slice(0, 400),
+    composer: words(form, 400),
+    page: words(document.body, 600),
+  };
+})()`;
+
+export interface RefusalWords {
+  alerts: string;
+  composer: string;
+  page: string;
+}
+
+/** The page's own notice, as a clause for an error, or nothing. */
+function pageSaid(words: RefusalWords | null): string {
+  const text = [words?.alerts, words?.composer].filter((s) => s && s.trim()).join(" · ");
+  return text ? `; around the composer the page says "${text.slice(0, 160)}"` : "";
+}
+
+/** A new chat that would not take even one character: a pause, not a retry. */
+export function refusedEverything(words: RefusalWords | null): ChatGPTBrowserError {
+  return new ChatGPTBrowserError(
+    `ChatGPT is not taking any message from this account right now: in a new chat, even a single character leaves its send button off${pageSaid(words)}. ` +
+      `That is the page refusing, not this message, and it usually passes by itself — a usage limit, most often. Waiting ${REFUSAL_PAUSE_SECONDS / 60} minutes (retry-after ${REFUSAL_PAUSE_SECONDS}) rather than sending into it again.`,
+    "throttled"
+  );
+}
+
+/** A new chat that would take a short message but not this one: send less. */
+export function refusedThisMessage(chars: number): ChatGPTBrowserError {
+  return new ChatGPTBrowserError(
+    `ChatGPT would take a short message in a new chat but not this one, ${chars.toLocaleString("en-US")} characters long — too long for the model, most likely. Sending less of the conversation instead.`,
+    "message-refused"
+  );
+}
+
+/**
+ * How long a new chat that takes nothing waits before trying again.
+ *
+ * Ten minutes, as Qwen's risk hold: short enough that the engine carries on
+ * by itself afterwards (`AUTO_RESUME_MAX_COOLDOWN_MS` is fifteen), and long
+ * enough that a limit lasting hours costs a request every ten minutes rather
+ * than a reload, a fresh chat and a replay every forty-five seconds.
+ */
+const REFUSAL_PAUSE_SECONDS = 600;
+
+/**
+ * Would this page take a one-character message where it would not take
+ * this one?
+ *
+ * A refused send has two causes that want opposite answers, and the page
+ * says which only in words, in whatever language it is shown in. Either the
+ * page takes nothing (a usage limit, a model's limit, a chat at its end) and
+ * sending again only repeats the refusal, or it will not take this message,
+ * too long for the model in practice, and a shorter one goes through. One
+ * character in the composer tells them apart without sending anything: the
+ * send control comes on for it, or it does not. Null when the page shows no
+ * send control at all, which says nothing either way. The box is left empty.
+ */
+export async function takesOneCharacter(p: Page): Promise<boolean | null> {
+  try {
+    await typeMessage(p, "x");
+  } catch {
+    return null;
+  }
+  let seen = false;
+  let nudged = false;
+  let wait = 50;
+  const start = Date.now();
+  try {
+    for (;;) {
+      const button = await firstVisible(p, SEND_SELECTORS, 0);
+      if (button) {
+        seen = true;
+        const generating = await anyVisible(p, STOP_SELECTORS).catch(() => false);
+        if (!generating && (await button.isEnabled().catch(() => false))) return true;
+      }
+      if (Date.now() - start > 6_000) return seen ? false : null;
+      // The nudge a real send gets: text can land without the input event
+      // the page keys its send control on.
+      if (!nudged && Date.now() - start > 1_500) {
+        nudged = true;
+        await p.keyboard.type(" ").catch(() => {});
+        await p.keyboard.press("Backspace").catch(() => {});
+      }
+      await p.waitForTimeout(wait);
+      wait = Math.min(400, wait * 2);
+    }
+  } finally {
+    await p.keyboard.press("ControlOrMeta+A").catch(() => {});
+    await p.keyboard.press("Delete").catch(() => {});
+  }
+}
+
 async function throttleNotice(p: Page): Promise<string | null> {
   if (lastThrottle && Date.now() - lastThrottle.at < 90_000) {
     return `HTTP 429 from ${lastThrottle.url}`;
@@ -3830,6 +3969,22 @@ async function sendOnce(
     await submitMessage(p, opts?.signal, { attached: attachments.length > 0 });
   } catch (e) {
     if (!(e instanceof ChatGPTBrowserError) || !/would not accept it/.test(e.message)) throw e;
+    // Which refusal this is, before anything is sent again. Measured on a
+    // Free account's machine: a refused send in a new chat was answered with
+    // a reload, a fresh chat and the whole transcript typed again, every
+    // minute and a half for as long as it lasted, whatever the cause.
+    const fresh = userTurnsBefore === 0 && priorTurnCount === 0;
+    const takes = await takesOneCharacter(p);
+    const words = (await p.evaluate(REFUSAL_WORDS).catch(() => null)) as RefusalWords | null;
+    logger.warn("browser", "the page refused the send", {
+      verdict: takes === true ? "refuses-this-message" : takes === false ? "refuses-anything" : "no-send-control",
+      fresh,
+      chars: payload.length,
+      ...(words ?? {}),
+    });
+    throwIfAborted(opts?.signal);
+    if (fresh && takes === false) throw refusedEverything(words);
+    if (fresh && takes === true) throw refusedThisMessage(payload.length);
     // The user's own workaround, done programmatically: leave the page and
     // come back. Mid-conversation the composer sometimes refuses every send
     // while the page looks perfectly normal, and switching away and back

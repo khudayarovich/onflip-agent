@@ -19,6 +19,7 @@ import { loadConfig, firstPositiveInt } from "../config";
 import { logger } from "../log";
 import {
   assertNotCoolingDown,
+  failureCodeOf,
   paceSend,
   serviceMessage,
 } from "./backoff";
@@ -129,16 +130,25 @@ export interface TransportReply {
  */
 const MAX_PAYLOAD_CHARS = 80_000;
 
-function clampPayload(text: string): string {
-  if (text.length <= MAX_PAYLOAD_CHARS) return text;
+/**
+ * The least a typed message is cut down to after ChatGPT refused a longer one.
+ *
+ * The cut keeps the first 60% and the last 30% (`clampPayload`), and the head
+ * of a replay is the system prompt — about 23,000 characters, which is what
+ * tells the model it has tools at all. At 40,000 the head still holds it whole.
+ */
+export const MIN_TYPED_PAYLOAD_CHARS = 40_000;
+
+export function clampPayload(text: string, limit = MAX_PAYLOAD_CHARS): string {
+  if (text.length <= limit) return text;
   // Never silent: a truncated system prompt changes the agent's behaviour in
   // ways that look like model failures.
   logger.warn("transport", "payload truncated", {
     chars: text.length,
-    limit: MAX_PAYLOAD_CHARS,
+    limit,
   });
-  const keepHead = Math.floor(MAX_PAYLOAD_CHARS * 0.6);
-  const keepTail = Math.floor(MAX_PAYLOAD_CHARS * 0.3);
+  const keepHead = Math.floor(limit * 0.6);
+  const keepTail = Math.floor(limit * 0.3);
   return [
     text.slice(0, keepHead),
     `\n\n… ${text.length - keepHead - keepTail} characters omitted because the message exceeded the transport limit …\n\n`,
@@ -358,6 +368,12 @@ export class BrowserTransport implements Transport {
    * time, forever, for a path that has never once worked.
    */
   private attachmentsRejected = 0;
+  /**
+   * The most a typed message may carry, lowered when ChatGPT refused a
+   * message while it would take a short one (`message-refused`). Kept for
+   * the session: the model that refused it is still the one being typed to.
+   */
+  private typedLimit = MAX_PAYLOAD_CHARS;
 
   constructor(private cookies: SessionCookie[]) {}
 
@@ -420,7 +436,7 @@ export class BrowserTransport implements Transport {
     // Clamped only on the typed path: the file always carries the whole body,
     // and clamping it first was logging "payload truncated" for sends where
     // nothing was truncated.
-    if (message === undefined) message = clampPayload(body);
+    if (message === undefined) message = clampPayload(body, this.typedLimit);
 
     let content: string;
     try {
@@ -443,6 +459,16 @@ export class BrowserTransport implements Transport {
         /could not be entered into the ChatGPT composer/.test(e.message)
       ) {
         this.uploadNextTurn = true;
+      }
+      // A new chat that would take a short message refused this one: the
+      // retry types less of the conversation, not the same again.
+      if (!attachment && failureCodeOf(e) === "message-refused") {
+        const refused = (message ?? "").length;
+        const next = Math.max(MIN_TYPED_PAYLOAD_CHARS, Math.floor(refused * 0.6));
+        if (next < this.typedLimit) {
+          logger.warn("transport", "typing less after a refused message", { refused, limit: next });
+          this.typedLimit = next;
+        }
       }
       throw e;
     } finally {

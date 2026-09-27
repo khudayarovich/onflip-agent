@@ -55,6 +55,7 @@ test("every code maps to a verdict", () => {
     "throttled",
     "refused",
     "composer-refused",
+    "message-refused",
     "composer-entry",
     "send-not-landed",
     "anonymous",
@@ -105,6 +106,27 @@ test("a refused send is not a throttle, however its advice is worded", () => {
   const advice =
     "The message was typed but ChatGPT would not accept it. ChatGPT may be rate-limiting this account.";
   assert.equal(classifyFailure(advice, "composer-refused").kind, "retry");
+});
+
+test("a new chat that takes nothing is a ten-minute pause; one that takes a short message is a retry", () => {
+  // Both come from the one-character probe after a refused send, and they
+  // want opposite answers: stop sending, or send less.
+  const { refusedEverything, refusedThisMessage } = require("../dist/chatgpt/browser-client");
+  // Whatever the page says, in whatever language, is quoted as it is; this
+  // sample is placeholder text, not a notice ChatGPT was seen to show.
+  const nothing = refusedEverything({ alerts: "", composer: "текст страницы", page: "" });
+  const pause = classifyFailure(nothing.message, failureCodeOf(nothing));
+  assert.equal(pause.kind, "cooldown");
+  assert.equal(pause.seconds, 600);
+  assert.match(nothing.message, /the page says "текст страницы"/);
+  // Not resumed at once: the pause is waited out first.
+  assert.equal(isResumableFailure(nothing.message, failureCodeOf(nothing)), false);
+  const tooLong = refusedThisMessage(80_000);
+  assert.equal(failureCodeOf(tooLong), "message-refused");
+  assert.equal(classifyFailure(tooLong.message, failureCodeOf(tooLong)).kind, "retry");
+  assert.match(tooLong.message, /80,000 characters/);
+  // With nothing on the page to quote, nothing is made up.
+  assert.doesNotMatch(refusedEverything(null).message, /page says/);
 });
 
 test("the real abuse check is a cooldown, in the wording it actually arrives with", () => {
