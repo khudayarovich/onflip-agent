@@ -17,6 +17,7 @@ import { TERMINAL_TOOLS } from "./terminal";
 import { taskTools, SubAgentRunner } from "./task";
 import { deliverTools, DeliverFile } from "./deliver";
 import { err } from "./util";
+import { parseListValue } from "../agent/protocol";
 
 export { getShellCwd, setShellCwd, resetShellCwd, killAllJobs, listJobs } from "./shell";
 export { globToRegExp } from "./fs";
@@ -258,6 +259,16 @@ function coerceArgs(tool: ToolDefinition, args: Record<string, unknown>): Record
     const want = props[key]?.type;
     if ((want !== "array" && want !== "object") || typeof value !== "string") continue;
     const trimmed = value.trim();
+    // The same list the block form reads from `todos:` and indented items,
+    // sent as `todos: |` with the list as its text.
+    if (want === "array" && trimmed.startsWith("-")) {
+      const items = parseListValue(value);
+      if (items) {
+        out ??= { ...args };
+        out[key] = items;
+      }
+      continue;
+    }
     if (!trimmed.startsWith(want === "array" ? "[" : "{")) continue;
     try {
       const parsed = JSON.parse(trimmed) as unknown;

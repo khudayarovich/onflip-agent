@@ -769,6 +769,27 @@ function isListAhead(lines: string[], from: number): boolean {
 }
 
 /**
+ * A `key: |` value that is a `- ` list, read as the list it is — or null.
+ *
+ * The block form keeps every value as text, and only the registry knows
+ * which parameters are lists (`coerceArgs`), so this is the reader it asks.
+ * Live: `todo_write` sent `todos: |` with the task list under it, was told
+ * "`todos` must be an array", and sent the same list again without the `|`.
+ * A block value arrives with its indent removed, which `parseList` needs
+ * back. Null unless every line belongs to the list, so text that merely
+ * opens with a dash stays text.
+ */
+export function parseListValue(text: string): unknown[] | null {
+  const lines = String(text ?? "").replace(/\r\n?/g, "\n").split("\n");
+  const first = lines.find((l) => l.trim());
+  if (!first || !/^\s*-\s+\S/.test(first)) return null;
+  const indented = lines.map((l) => (l.trim() ? `  ${l}` : l));
+  const { items, next } = parseList(indented, 0);
+  if (items.length === 0 || indented.slice(next).some((l) => l.trim())) return null;
+  return items;
+}
+
+/**
  * Parse an indented list of objects:
  *
  *   - content: count the lines
