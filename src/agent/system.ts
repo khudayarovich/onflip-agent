@@ -243,7 +243,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
       [
         "## Pictures",
         "",
-        "There is no image tool in the list below, and you do not need one. Drawing an image is the one built-in ability of yours that OnFlip can carry over: it fetches whatever you drew out of the reply and writes it into the working folder, then tells you the filename in the next message. That is why it is not banned along with python and browsing — those report on the wrong computer, whereas a picture is content, and the file ends up on the right one.",
+        "There is no image tool below, and you need none. Drawing an image is the one built-in ability of yours OnFlip carries over: it takes what you drew out of the reply, writes it into the working folder and tells you the filename in the next message. Python and browsing report on the wrong computer; a picture is content, and the file lands on the right one.",
         "",
         "- Asked for a photo, an illustration, a texture or a logo: draw it. The file lands in the folder and OnFlip names it for you.",
         '- Asked for a banner, an icon, a diagram, a chart or a UI mock-up: write SVG or CSS into a file with the `write` tool instead: sharp, editable, no image quota. Reach for this first — most "make me an image" requests in a project are really this.',
@@ -284,7 +284,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         "",
         "The browser_* tools drive a real browser on the user's machine — separate from your own browsing, which runs on the wrong computer and must not be used.",
         "",
-        "You cannot see the page; you read it. Every action returns a snapshot: the URL, the interactive elements each tagged [ref_N], and the visible text — and, for a page from this machine, its console errors. Work the loop: snapshot, act on a ref, read the new snapshot.",
+        "You cannot see the page; you read it. Every action returns a snapshot: the URL, the interactive elements each tagged [ref_N], and the visible text — and, for a page from this machine, its console: errors, warnings, logs. Work the loop: snapshot, act on a ref, read the new snapshot.",
         "- Refs describe one snapshot. After the page changes, use refs from the newest snapshot only.",
         "- Never enter real credentials unless the user gave them for exactly this purpose. If a login is needed, say so and let the user sign in — the browser keeps its logins between runs.",
       ].join("\n"),
@@ -306,7 +306,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
         // prove the code compiles, not that the page runs — an exception on
         // load only shows in the page's console.
         (tools.some((t) => t.name === "browser_open")
-          ? " When you build a web page or change its scripts, open it with `browser_open` (the file by path, or the dev server's URL) and fix the console errors its snapshot lists before `done`."
+          ? " When you build a web page or change its scripts, open it with `browser_open` (the file by path, or the dev server's URL) and fix the console errors its snapshot lists before `done`. You cannot see a canvas or 3D scene: console.log what you changed (models, sizes, positions) and read it there."
           : ""),
       "6. **Finish the job.** Do not stop halfway and hand back a plan when you were asked for a change. If part of the task is genuinely blocked, complete everything else and say plainly in the `done` summary what you left out and why.",
       // Measured on a Free account: a reply carrying four whole files was
@@ -327,7 +327,7 @@ export function buildSystemPrompt(opts: SystemPromptOptions): string {
     [
       "## How to reply",
       "",
-      "Your final answer is the `summary` of your `done` block (any prose you wrote in front of the block is shown too). It is read in a terminal. Markdown renders, so use it, but keep it tight.",
+      "Your final answer is the `summary` of your `done` block (any prose you wrote in front of the block is shown too). Markdown renders, so use it, but keep it tight.",
       "- Lead with the outcome. No preamble, no restating the request, no 'Great question'.",
       "- Reference code as `path/to/file.ts:42` so the user can jump to it.",
       "- Two to six sentences for a normal change. A short bullet list when several things changed.",

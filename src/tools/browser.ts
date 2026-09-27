@@ -8,7 +8,7 @@ import { logger } from "../log";
 import { err, ok, denied, asArray, asBool, asNumber, clip } from "./util";
 import { ensureBundledBrowser } from "../chatgpt/browser-client";
 import { realPath } from "../agent/permissions";
-import { ProblemLog, isOwnPage, problemSection, stackLocation } from "./page-problems";
+import { ProblemLog, consoleSection, isOwnPage, isQuiet, stackLocation } from "./page-problems";
 
 /**
  * A browser the agent drives itself.
@@ -178,11 +178,24 @@ let lastShown: { key: string; at: number; brief: boolean } | null = null;
 const SAME_PAGE_WINDOW_MS = 90_000;
 
 /**
- * Errors from the page, between one snapshot and the next — see
+ * What the page said in its console, between one snapshot and the next — see
  * `page-problems.ts`. Listened for on every page this tool drives, from before
  * its first navigation, so an exception on load is not missed.
  */
 const problems = new ProblemLog();
+/**
+ * The console levels a snapshot reports. `debug`, `trace`, `table` and the
+ * like are left out: dev servers talk to themselves at `debug` ("[vite]
+ * connecting…"), and what a person — or the model — logs on purpose is
+ * `log`, `info`, `warn` or `error`.
+ */
+const LEVELS: Record<string, "error" | "warning" | "log"> = {
+  error: "error",
+  assert: "error",
+  warning: "warning",
+  log: "log",
+  info: "log",
+};
 const watched = new WeakSet<Page>();
 /**
  * Set by `browser_open` as it leaves a page. The page being left can keep
@@ -202,8 +215,8 @@ function watchProblems(p: Page): void {
     problems.add({ kind: "exception", text: `${error.name}: ${error.message}`, ...stackLocation(error.stack) }, p.url());
   });
   p.on("console", (message) => {
-    const type = message.type();
-    if (type !== "error" && type !== "assert") return;
+    const kind = Object.hasOwn(LEVELS, message.type()) ? LEVELS[message.type()] : undefined;
+    if (!kind) return;
     // Playwright's positions are 0-based; an editor's are not. A message with
     // no position — a resource that failed to load names only its URL —
     // arrives as 0:0, which is not "line 1, column 1" and is not shown as it.
@@ -211,7 +224,7 @@ function watchProblems(p: Page): void {
     const known = at.line > 0 || at.column > 0;
     problems.add(
       {
-        kind: "console",
+        kind,
         text: message.text(),
         url: at.url || undefined,
         line: known ? at.line + 1 : undefined,
@@ -884,7 +897,7 @@ async function respond(p: Page, note: string, cwd?: string): Promise<ToolResult>
     );
   }
   lastShown = { key: snapshotKey(shot), at: Date.now(), brief: false };
-  return ok(describe(shot, note, problemSection(problems.drain(cwd), shot.url)), { title: shot.title || shot.url });
+  return ok(describe(shot, note, consoleSection(problems.drain(cwd), shot.url)), { title: shot.title || shot.url });
 }
 
 // ---------------------------------------------------------------------------
@@ -981,12 +994,13 @@ export const browserSnapshotTool: ToolDefinition = {
     const shot = await snapshot(p);
     const key = snapshotKey(shot);
     const age = lastShown ? Date.now() - lastShown.at : Infinity;
-    // A page that has thrown since it was last read has changed, whatever its
-    // text says — and a look to see whether a timer or an animation frame
-    // failed is exactly what asking again is for.
+    // A page whose console has said anything since it was last read has
+    // changed, whatever its text says — and a look to see whether a timer, an
+    // animation frame or a model load failed or logged is exactly what asking
+    // again is for.
     const found = problems.drain(ctx.cwd);
-    const errors = problemSection(found, shot.url);
-    if (found.length === 0 && lastShown?.key === key && !lastShown.brief && age < SAME_PAGE_WINDOW_MS) {
+    const errors = consoleSection(found, shot.url);
+    if (isQuiet(found) && lastShown?.key === key && !lastShown.brief && age < SAME_PAGE_WINDOW_MS) {
       lastShown = { key, at: Date.now(), brief: true };
       const count = shot.elements.length;
       return ok(

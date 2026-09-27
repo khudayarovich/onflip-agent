@@ -102,9 +102,12 @@ test("a web page is checked in the browser, when there is a browser to check it 
   const withBrowser = build("chatgpt");
   assert.match(withBrowser, /When you build a web page or change its scripts, open it with `browser_open`/);
   assert.match(withBrowser, /fix the console errors its snapshot lists before `done`/);
-  assert.match(withBrowser, /for a page from this machine, its console errors/);
+  assert.match(withBrowser, /for a page from this machine, its console: errors, warnings, logs/);
+  // A scene it cannot see is checked by what it logs: live on a Mac, a
+  // Three.js game was "verified" three times by the absence of errors.
+  assert.match(withBrowser, /You cannot see a canvas or 3D scene: console\.log what you changed/);
   const offline = build("chatgpt", registry({ disableNetwork: true }));
-  assert.doesNotMatch(offline, /browser_open|console errors/);
+  assert.doesNotMatch(offline, /browser_open|console errors|console\.log what you changed/);
 });
 
 test("a question offers answers to click, the recommended one first", () => {

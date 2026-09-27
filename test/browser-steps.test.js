@@ -442,19 +442,45 @@ test("a page of this machine's own reports what it threw, where, and how often",
     "console",
     consoleError("Failed to load resource: the server responded with a status of 404 (Not Found)", "http://localhost:5173/style.css", 0, 0)
   );
-  fakePage.emit("console", { type: () => "warning", text: () => "a warning is not an error", location: () => ({ url: "" }) });
   const out = (await reg.run("browser_click", { ref: "ref_1" })).output;
-  assert.match(out, /^console errors since the last snapshot \(2\):$/m);
-  assert.match(out, /^ {2}Uncaught TypeError: board is null — http:\/\/localhost:5173\/src\/main\.js:12:18 \(×3\)$/m);
-  assert.match(out, /^ {2}Failed to load resource: .*404 \(Not Found\) — http:\/\/localhost:5173\/style\.css$/m);
-  assert.doesNotMatch(out, /a warning is not an error/);
+  assert.match(out, /^console since the last snapshot \(2 errors\):$/m);
+  assert.match(out, /^ {2}error: Uncaught TypeError: board is null — http:\/\/localhost:5173\/src\/main\.js:12:18 \(×3\)$/m);
+  assert.match(out, /^ {2}error: Failed to load resource: .*404 \(Not Found\) — http:\/\/localhost:5173\/style\.css$/m);
   // Above the page text, where a long page cannot push it out of view.
-  assert.ok(out.indexOf("console errors") < out.indexOf("page text:"));
+  assert.ok(out.indexOf("console since") < out.indexOf("page text:"));
   // Said once: the next snapshot reports what is new since.
   shot = devPage();
   shot.text = "Chess — your move";
   const next = (await reg.run("browser_snapshot", {})).output;
-  assert.match(next, /^console errors since the last snapshot: none$/m);
+  assert.match(next, /^console since the last snapshot: nothing$/m);
+});
+
+const said = (type, text, url = "http://localhost:5173/src/main.js", line = 24, column = 12) => ({
+  type: () => type,
+  text: () => text,
+  location: () => ({ url, line, column, lineNumber: line, columnNumber: column }),
+});
+
+test("warnings and logs come too, after the errors, and a dev server's chatter does not", async () => {
+  // Live on a Mac: the game's loader caught its own failed model loads and
+  // said so with console.warn, and "no console errors" read as verified.
+  shot = devPage();
+  await reg.run("browser_open", { url: "http://localhost:5173/" });
+  fakePage.emit("console", said("log", "vans loaded: 4 size: 5.1", undefined, 129, 4));
+  fakePage.emit("console", said("warning", "Vehicle asset unavailable: /assets/van.glb"));
+  fakePage.emit("console", said("info", "Download the React DevTools"));
+  fakePage.emit("console", said("debug", "[vite] connecting..."));
+  fakePage.emit("console", said("error", "Uncaught (in promise) Error: map missing"));
+  for (let i = 0; i < 60; i++) fakePage.emit("console", said("log", "frame", undefined, 200, 2));
+  const out = (await reg.run("browser_click", { ref: "ref_1" })).output;
+  assert.match(out, /^console since the last snapshot \(1 error, 1 warning, 3 logs\):$/m);
+  const at = (text) => out.indexOf(text);
+  assert.ok(at("error: Uncaught (in promise) Error: map missing") < at("warning: Vehicle asset unavailable"), "errors first");
+  assert.ok(at("warning: Vehicle asset unavailable") < at("log: vans loaded"), "then warnings, then logs");
+  assert.match(out, /^ {2}log: vans loaded: 4 size: 5\.1 — http:\/\/localhost:5173\/src\/main\.js:130:5$/m);
+  assert.match(out, /^ {2}log: frame — http:\/\/localhost:5173\/src\/main\.js:201:3 \(×60\)$/m, "a loop is one line");
+  assert.match(out, /^ {2}log: Download the React DevTools/m, "info is a log");
+  assert.doesNotMatch(out, /\[vite\] connecting/, "debug is a dev server talking to itself");
 });
 
 test("an error since the last look is never answered with 'nothing has changed'", async () => {
@@ -465,7 +491,7 @@ test("an error since the last look is never answered with 'nothing has changed'"
   fakePage.emit("console", consoleError("Uncaught (in promise) Error: fetch failed", "http://localhost:5173/src/api.js", 4, 9));
   const again = (await reg.run("browser_snapshot", {})).output;
   assert.doesNotMatch(again, /^Nothing has changed/);
-  assert.match(again, /^ {2}Uncaught \(in promise\) Error: fetch failed — http:\/\/localhost:5173\/src\/api\.js:5:10$/m);
+  assert.match(again, /^ {2}error: Uncaught \(in promise\) Error: fetch failed — http:\/\/localhost:5173\/src\/api\.js:5:10$/m);
 });
 
 test("what the page being left says on its way out is not blamed on the next one", async () => {
@@ -483,7 +509,7 @@ test("what the page being left says on its way out is not blamed on the next one
   try {
     const out = (await reg.run("browser_open", { url: "http://localhost:5174/" })).output;
     assert.doesNotMatch(out, /loop is broken/);
-    assert.match(out, /^ {2}Uncaught TypeError: new page broke — http:\/\/localhost:5174\/new\.js:1:1$/m);
+    assert.match(out, /^ {2}error: Uncaught TypeError: new page broke — http:\/\/localhost:5174\/new\.js:1:1$/m);
   } finally {
     onGoto = null;
   }
@@ -498,7 +524,7 @@ test("a single-page app changing route keeps what happened before it", async () 
   fakePage.emit("pageerror", thrown("move is not legal", "Error: move is not legal\n    at http://localhost:5173/src/rules.js:88:11"));
   fakePage.emit("framenavigated", mainFrame);
   const out = (await reg.run("browser_click", { ref: "ref_1" })).output;
-  assert.match(out, /^ {2}Uncaught TypeError: move is not legal — http:\/\/localhost:5173\/src\/rules\.js:88:11$/m);
+  assert.match(out, /^ {2}error: Uncaught TypeError: move is not legal — http:\/\/localhost:5173\/src\/rules\.js:88:11$/m);
 });
 
 test("a site on the internet keeps its console to itself", async () => {
@@ -507,9 +533,10 @@ test("a site on the internet keeps its console to itself", async () => {
   await onSignup();
   fakePage.emit("console", consoleError("Refused to load the script 'https://ads.example/x.js'", "https://example.test/signup", 0, 0));
   fakePage.emit("pageerror", thrown("ga is not defined", "TypeError: ga is not defined\n    at https://example.test/app.js:1:1"));
+  fakePage.emit("console", { type: () => "log", text: () => "analytics ready", location: () => ({ url: "", line: 0, column: 0 }) });
   const out = (await reg.run("browser_click", { ref: "ref_4" })).output;
-  assert.doesNotMatch(out, /console errors/);
-  assert.doesNotMatch(out, /ga is not defined|Refused to load/);
+  assert.doesNotMatch(out, /console since/);
+  assert.doesNotMatch(out, /ga is not defined|Refused to load|analytics ready/);
 });
 
 test("the tool says when a snapshot is worth asking for", () => {

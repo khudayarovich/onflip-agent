@@ -17,7 +17,8 @@ const os = require("node:os");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
 
-const { ProblemLog, MAX_REPORTED, isOwnPage, place, problemSection, stackLocation } = require("../dist/tools/page-problems");
+const { ProblemLog, MAX_REPORTED, isOwnPage, place, consoleSection, stackLocation } = require("../dist/tools/page-problems");
+const quiet = { errors: [], warnings: [], logs: [] };
 
 const GAME = path.join(os.tmpdir(), "onflip-game", "app.js");
 const GAME_URL = pathToFileURL(GAME).href;
@@ -59,40 +60,65 @@ test("a problem seen again is counted, not repeated", () => {
   for (let i = 0; i < 57; i++) {
     log.add({ kind: "exception", text: "TypeError: board is null", url: GAME_URL, line: 1, column: 1 }, GAME_URL);
   }
-  log.add({ kind: "console", text: "boom", url: "http://localhost:5173/b.js", line: 2, column: 2 }, "http://localhost:5173/");
-  assert.deepEqual(log.drain(path.dirname(GAME)), [
+  log.add({ kind: "error", text: "boom", url: "http://localhost:5173/b.js", line: 2, column: 2 }, "http://localhost:5173/");
+  assert.deepEqual(log.drain(path.dirname(GAME)).errors, [
     "Uncaught TypeError: board is null — app.js:1:1 (×57)",
     "boom — http://localhost:5173/b.js:2:2",
   ]);
   // Drained is forgotten.
-  assert.deepEqual(log.drain(), []);
+  assert.deepEqual(log.drain(), quiet);
+});
+
+test("errors, warnings and logs are kept apart", () => {
+  const log = new ProblemLog();
+  log.add({ kind: "log", text: "vans loaded: 4" }, "http://localhost:5173/");
+  log.add({ kind: "warning", text: "Vehicle asset unavailable: /assets/van.glb" }, "http://localhost:5173/");
+  log.add({ kind: "exception", text: "TypeError: x is null" }, "http://localhost:5173/");
+  assert.deepEqual(log.drain(), {
+    errors: ["Uncaught TypeError: x is null"],
+    warnings: ["Vehicle asset unavailable: /assets/van.glb"],
+    logs: ["vans loaded: 4"],
+  });
 });
 
 test("other people's pages are not recorded at all", () => {
   const log = new ProblemLog();
-  log.add({ kind: "console", text: "blocked by an ad blocker" }, "https://news.example/");
+  log.add({ kind: "error", text: "blocked by an ad blocker" }, "https://news.example/");
+  log.add({ kind: "log", text: "analytics ready" }, "https://news.example/");
   assert.equal(log.size, 0);
 });
 
-test("a snapshot carries so many lines and counts the rest", () => {
+test("a snapshot carries so many lines of each kind and counts the rest", () => {
   const log = new ProblemLog();
-  for (let i = 0; i < MAX_REPORTED + 5; i++) log.add({ kind: "console", text: `error ${i}` }, "http://localhost:3000/");
-  const lines = log.drain();
-  assert.equal(lines.length, MAX_REPORTED + 1);
-  assert.equal(lines[lines.length - 1], "… and 5 more");
-  // A single message cannot be the whole snapshot either.
-  log.add({ kind: "console", text: "x".repeat(5_000) }, "http://localhost:3000/");
-  assert.ok(log.drain()[0].length <= 300);
+  for (let i = 0; i < MAX_REPORTED.error + 5; i++) log.add({ kind: "error", text: `error ${i}` }, "http://localhost:3000/");
+  for (let i = 0; i < MAX_REPORTED.log + 2; i++) log.add({ kind: "log", text: `log ${i}` }, "http://localhost:3000/");
+  const news = log.drain();
+  assert.equal(news.errors.length, MAX_REPORTED.error + 1);
+  assert.equal(news.errors[news.errors.length - 1], "… and 5 more");
+  assert.equal(news.logs.length, MAX_REPORTED.log + 1);
+  assert.equal(news.logs[news.logs.length - 1], "… and 2 more", "a noisy log does not crowd out the errors");
+  // Bounded in fact, not only by whatever the constant says: a page that
+  // logs fifty different things fills ten lines of the snapshot, not fifty.
+  for (let i = 0; i < 50; i++) log.add({ kind: "log", text: `step ${i}` }, "http://localhost:3000/");
+  const flood = log.drain().logs;
+  assert.ok(flood.length <= 11, `${flood.length} log lines`);
+  assert.match(flood[flood.length - 1], /^… and \d+ more$/);
+  // A single message cannot be the whole snapshot either; a log is held shorter.
+  log.add({ kind: "error", text: "x".repeat(5_000) }, "http://localhost:3000/");
+  log.add({ kind: "log", text: "y".repeat(5_000) }, "http://localhost:3000/");
+  const long = log.drain();
+  assert.ok(long.errors[0].length <= 300);
+  assert.ok(long.logs[0].length <= 200);
   // Already-uncaught text is not called uncaught twice.
   log.add({ kind: "exception", text: "Uncaught (in promise) Error: nope" }, "http://localhost:3000/");
-  assert.deepEqual(log.drain(), ["Uncaught (in promise) Error: nope"]);
+  assert.deepEqual(log.drain().errors, ["Uncaught (in promise) Error: nope"]);
 });
 
-test("the section says 'none' for this machine's page and nothing for anyone else's", () => {
-  assert.equal(problemSection([], "http://localhost:5173/"), "console errors since the last snapshot: none");
-  assert.equal(problemSection([], "https://example.com/"), null);
+test("the section says 'nothing' for this machine's page and nothing at all for anyone else's", () => {
+  assert.equal(consoleSection(quiet, "http://localhost:5173/"), "console since the last snapshot: nothing");
+  assert.equal(consoleSection(quiet, "https://example.com/"), null);
   assert.equal(
-    problemSection(["boom"], "http://localhost:5173/"),
-    "console errors since the last snapshot (1):\n  boom"
+    consoleSection({ errors: ["boom"], warnings: [], logs: ["ready", "go"] }, "http://localhost:5173/"),
+    "console since the last snapshot (1 error, 2 logs):\n  error: boom\n  log: ready\n  log: go"
   );
 });
