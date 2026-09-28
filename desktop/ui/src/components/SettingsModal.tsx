@@ -60,23 +60,42 @@ export function SettingsModal({
     key: "maxIterations" | "replyTimeout" | "compactAfterChars",
     name: string,
     desc: string
-  ) =>
-    config && (
+  ) => {
+    if (!config) return null;
+    // Only the context budget has an automatic value to go back to: the other
+    // two are plain numbers with a default. Once someone had typed one here
+    // there was no way back — the field saved only another number.
+    const auto = key === "compactAfterChars";
+    const own = auto && Boolean(config.compactAfterCharsOwn);
+    return (
       <div className="setting-row">
         <div className="info">
           <div className="name">{name}</div>
           <div className="desc">{desc}</div>
         </div>
+        {own && (
+          <button className="btn" title={t("setCompactAfterAutoHint")} onClick={() => setValue(key, null)}>
+            {t("setCompactAfterAuto")}
+          </button>
+        )}
         <input
+          // Keyed on the value, so the box shows what the engine answered
+          // with — after a return to automatic, the automatic number.
+          key={`${key}:${config[key]}:${own}`}
           type="number"
           defaultValue={config[key]}
           onBlur={(e) => {
+            if (auto && !e.target.value.trim()) {
+              if (own) setValue(key, null);
+              return;
+            }
             const v = Number(e.target.value);
             if (Number.isFinite(v) && v >= 1 && v !== config[key]) setValue(key, v);
           }}
         />
       </div>
     );
+  };
 
   return (
     <Modal title={t("settings")} onClose={onClose} wide>

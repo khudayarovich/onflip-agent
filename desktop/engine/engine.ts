@@ -3168,6 +3168,9 @@ export class Engine {
       // budget is sized from the plan and the model, and showing "45000"
       // here made auto-sizing look like a stuck setting.
       compactAfterChars: cfg.compactAfterChars ?? this.contextBudgetChars(),
+      // Whether that number is the person's own, so Settings can offer the
+      // way back to automatic only when there is somewhere to go back from.
+      compactAfterCharsOwn: Boolean(cfg.compactAfterChars),
       autoResume: cfg.autoResume !== false,
       rules,
       allowedCommands: cfg.allowedCommands ?? [],
@@ -3319,7 +3322,16 @@ export class Engine {
       autoResume: (v) => ({ autoResume: Boolean(v) }),
       maxIterations: (v) => ({ maxIterations: firstPositiveInt([v as number], DEFAULT_STEP_BUDGET) }),
       replyTimeout: (v) => ({ replyTimeout: firstPositiveInt([v as number], 600) }),
-      compactAfterChars: (v) => ({ compactAfterChars: firstPositiveInt([v as number], 45_000) }),
+      // Null, or an emptied field, hands the budget back to the plan and the
+      // model. There was no way back once a number had been typed: a Windows
+      // PC set to 280,000 kept it, and the Settings field would only save
+      // another number. Saved as undefined, which the file drops, wherever
+      // the key lives - it is shared, so `clearConfigKeys` (the active
+      // service's room only) would miss it on DeepSeek or Qwen.
+      compactAfterChars: (v) =>
+        v === null || v === undefined || (typeof v === "string" && !v.trim())
+          ? { compactAfterChars: undefined }
+          : { compactAfterChars: firstPositiveInt([v as number], 45_000) },
       allowedCommands: (v) => ({ allowedCommands: Array.isArray(v) ? v.map(String) : [] }),
       allowedWriteDirs: (v) => ({ allowedWriteDirs: Array.isArray(v) ? v.map(String) : [] }),
     };

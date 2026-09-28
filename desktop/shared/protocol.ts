@@ -409,6 +409,8 @@ export interface ConfigView {
   maxIterations: number;
   replyTimeout: number;
   compactAfterChars: number;
+  /** True when `compactAfterChars` is the person's own setting rather than automatic. */
+  compactAfterCharsOwn?: boolean;
   autoResume: boolean;
   rules: { pattern: string; action: RuleAction }[];
   allowedCommands: string[];

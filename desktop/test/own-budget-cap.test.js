@@ -58,6 +58,46 @@ test("with no setting, the automatic budget is untouched", { skip: needsBuild },
   assert.equal(engine.contextBudgetChars(), compactionBudget("free", false, 34_834, PROMPT.length));
 });
 
+test("an own setting can be handed back to automatic, and Settings is told which it is", { skip: needsBuild }, () => {
+  // There was no way back: the Settings field saved only another number, so
+  // the 280,000 typed on that PC stayed until someone edited config.json.
+  const engine = makeEngine({ planType: "free", model: "gpt-5-6-mini", discoveredModels: LUNA, replyTimeout: 900 });
+  const cfg = require(path.join(ROOT, "dist", "config.js"));
+  let view = engine.setConfigValue("compactAfterChars", 280_000);
+  assert.equal(view.compactAfterCharsOwn, true);
+  assert.equal(view.compactAfterChars, 280_000, "the number shown is the one typed");
+  view = engine.setConfigValue("compactAfterChars", null);
+  assert.equal(cfg.loadConfig().compactAfterChars, undefined, "gone from the file");
+  assert.equal(view.compactAfterCharsOwn, false);
+  assert.equal(view.compactAfterChars, engine.contextBudgetChars(), "and the box shows the automatic size");
+  assert.equal(engine.contextBudgetSource(), "what one message can carry");
+  assert.equal(cfg.loadConfig().replyTimeout, 900, "nothing else is touched");
+});
+
+test("an emptied box means the same as the button", { skip: needsBuild }, () => {
+  const engine = makeEngine({ planType: "free", model: "gpt-5-6-mini", discoveredModels: LUNA, compactAfterChars: 60_000 });
+  const cfg = require(path.join(ROOT, "dist", "config.js"));
+  engine.setConfigValue("compactAfterChars", "  ");
+  assert.equal(cfg.loadConfig().compactAfterChars, undefined);
+});
+
+test("on DeepSeek the shared key is found where it lives, at the top of the file", { skip: needsBuild }, () => {
+  // `clearConfigKeys` clears only the active service's room, which is right
+  // for sessions and wrong here: this key is shared, so on DeepSeek it
+  // would have been left in place with the button reporting success.
+  process.env.ONFLIP_PROVIDER = "deepseek";
+  try {
+    const engine = makeEngine({ compactAfterChars: 150_000 });
+    const raw = () => JSON.parse(fs.readFileSync(path.join(process.env.ONFLIP_CONFIG_DIR, "config.json"), "utf8"));
+    assert.equal(raw().compactAfterChars, 150_000);
+    const view = engine.setConfigValue("compactAfterChars", null);
+    assert.equal(raw().compactAfterChars, undefined);
+    assert.equal(view.compactAfterCharsOwn, false);
+  } finally {
+    process.env.ONFLIP_PROVIDER = "chatgpt";
+  }
+});
+
 test("DeepSeek's own setting passes as it is", { skip: needsBuild }, () => {
   process.env.ONFLIP_PROVIDER = "deepseek";
   try {

@@ -304,7 +304,9 @@ const en = {
   setReplyTimeout: "Reply timeout (seconds)",
   setReplyTimeoutDesc: "How long one model reply may take. Reasoning models can think for minutes.",
   setCompactAfter: "Compact after (characters)",
-  setCompactAfterDesc: "Summarise the transcript once it grows past this size. Sized automatically from your plan and model; edit to override.",
+  setCompactAfterDesc: "Summarise the transcript once it grows past this size. Sized automatically from your plan and model; edit to override, or clear the box to go back to automatic.",
+  setCompactAfterAuto: "Automatic",
+  setCompactAfterAutoHint: "Forget your own number and size it from your plan and model again.",
   setProvider: "Chat service",
   setProviderName: "Which service OnFlip drives",
   setProviderDesc:
@@ -726,7 +728,9 @@ const ru: Partial<Record<StringKey, string>> = {
   setReplyTimeout: "Таймаут ответа (сек.)",
   setReplyTimeoutDesc: "Сколько может длиться один ответ. Размышляющие модели думают минутами.",
   setCompactAfter: "Сжимать после (символов)",
-  setCompactAfterDesc: "Суммировать переписку, когда она превысит этот размер. Подбирается автоматически по плану и модели; измените, чтобы переопределить.",
+  setCompactAfterDesc: "Суммировать переписку, когда она превысит этот размер. Подбирается автоматически по плану и модели; измените, чтобы переопределить, или очистите поле, чтобы вернуть автоматический размер.",
+  setCompactAfterAuto: "Автоматически",
+  setCompactAfterAutoHint: "Забыть своё число и снова подбирать размер по плану и модели.",
   setProvider: "Чат-сервис",
   setProviderName: "Какой сервис использует OnFlip",
   setProviderDesc:
@@ -1146,7 +1150,9 @@ const uz: Partial<Record<StringKey, string>> = {
   setReplyTimeout: "Javob taymauti (soniya)",
   setReplyTimeoutDesc: "Bitta javob qancha davom etishi mumkin. Fikrlaydigan modellar daqiqalab o'ylaydi.",
   setCompactAfter: "Siqish chegarasi (belgi)",
-  setCompactAfterDesc: "Yozishma shu hajmdan oshsa, xulosalab siqiladi. Reja va modelga qarab avtomatik tanlanadi; o'zgartirsangiz, shu qiymat ishlatiladi.",
+  setCompactAfterDesc: "Yozishma shu hajmdan oshsa, xulosalab siqiladi. Reja va modelga qarab avtomatik tanlanadi; o'zgartirsangiz, shu qiymat ishlatiladi, maydonni tozalasangiz, yana avtomatik tanlanadi.",
+  setCompactAfterAuto: "Avtomatik",
+  setCompactAfterAutoHint: "O'z raqamingizni unutib, hajmni yana reja va modelga qarab tanlash.",
   setProvider: "Chat xizmati",
   setProviderName: "OnFlip qaysi xizmatdan foydalanadi",
   setProviderDesc:
