@@ -20,8 +20,9 @@ import type { ChatMessage } from "../../types";
 
 export const GEMINI_BASE = "https://generativelanguage.googleapis.com/v1beta";
 
-/** Where a person gets a key. Named in errors, so it lives in one place. */
-export const GEMINI_KEY_URL = "aistudio.google.com/apikey";
+/** Where a person gets a key. Named in errors, so it lives in one place.
+ * The path AI Studio itself uses in October 2026; the old /apikey redirects. */
+export const GEMINI_KEY_URL = "aistudio.google.com/api-keys";
 
 /**
  * The key this run sends with, or null when none is stored.
@@ -71,8 +72,9 @@ export function cleanGeminiKeyPaste(value: string): string {
   // Zero-width characters ride along with copies from styled web pages, and
   // are invisible in the box that then says "that does not look like a key".
   let v = (value ?? "").replace(/[​-‍﻿]/g, "").trim();
-  const quoted = /^(["'`])([\s\S]*)\1$/.exec(v);
-  if (quoted) v = quoted[2].trim();
+  // Straight quotes from a config file, curly ones from a styled page.
+  const quoted = /^(?:(["'`])([\s\S]*)\1|[“‘]([\s\S]*)[”’])$/.exec(v);
+  if (quoted) v = (quoted[2] ?? quoted[3] ?? "").trim();
   if (looksLikeGeminiKey(v)) return v;
   const KEY = /AIza[0-9A-Za-z_-]{30,}/g;
   // The paste as written first: whitespace separates tokens there, so two
@@ -229,20 +231,25 @@ export function classifyGeminiHttp(
 }
 
 /**
- * Why a paste was refused, said about the paste rather than about keys.
+ * Why a paste cannot even be tried, or null when Google should judge it.
  *
- * The generic refusal was shown twice in a row to a real person with no way
- * to tell what was wrong with *their* paste. This names the first thing that
- * disqualifies it — the "…" of AI Studio's shortened display, a character no
- * key contains, a length no key has — without echoing the paste back:
- * whatever it is, it may be a secret, so only its length and, for common
- * punctuation, the one offending character are ever named.
+ * This began as a strict shape check and refused a real person three times,
+ * the last time on a key copied from the real keys page — because it
+ * demanded the letters-only `AIza…` shape Google used for years, and the
+ * shape is Google's to change. So the rule inverted: anything that is one
+ * unbroken token of printable characters is *tried against the API*, whose
+ * answer is the only authoritative one, and a local refusal is reserved for
+ * what is confidently not a key — the "…" of a shortened display, the
+ * look-alikes Google's consoles hand out beside the key, whitespace the
+ * cleaner could not resolve. Nothing here ever echoes the paste back:
+ * whatever it is, it may be a secret, so only its length and a structural
+ * description are named.
  */
-export function describeKeyRefusal(pasted: string): string {
+export function describeKeyRefusal(pasted: string): string | null {
   const v = pasted ?? "";
   if (!v) return "Nothing arrived in the box.";
   if (/…|\.\.\./.test(v)) {
-    return "The paste contains “…” — that is AI Studio's shortened display of the key, not the key itself.";
+    return "The paste contains “…” — that is the shortened display of the key, not the key itself.";
   }
   // The look-alikes Google's own consoles hand out next to the key. Each is
   // recognisable by a public, structural shape, so naming it gives nothing
@@ -262,22 +269,18 @@ export function describeKeyRefusal(pasted: string): string {
   if (/^https?:\/\//i.test(v) || /\.(com|org|net|dev|ai)(\/|$)/i.test(v)) {
     return "That looks like a web address, not a key.";
   }
-  const bad = /[^A-Za-z0-9_-]/.exec(v);
-  if (bad) {
-    const SAFE_TO_NAME = new Set([...".,:;'\"`/\\=@()<>[]{}+*&%$#!?|~^ "]);
-    const which =
-      bad[0] === " "
-        ? "a space"
-        : /[\r\n\t]/.test(bad[0])
-          ? "a line break"
-          : SAFE_TO_NAME.has(bad[0])
-            ? `“${bad[0]}”`
-            : "an unexpected character";
-    return `The paste contains ${which}, which never appears in a key — a key is one unbroken run of letters, digits, “-” and “_”.`;
+  const ws = /\s/.exec(v);
+  if (ws) {
+    return `The paste contains ${/[\r\n]/.test(ws[0]) ? "a line break" : "a space"}, and no single key was found inside it — a key is one unbroken string.`;
   }
-  if (v.length < 20) return `What arrived is ${v.length} characters long, and a real key is about 39.`;
-  if (v.length > 200) return `What arrived is ${v.length} characters long, far more than any key.`;
-  return "It does not have the shape of an API key.";
+  if (/[^\x21-\x7E]/.test(v)) {
+    return "The paste contains a character keys never carry — often an invisible one a styled page copies along. Try copying it again, from the key's own copy button.";
+  }
+  if (v.length < 10) return `What arrived is only ${v.length} characters long — shorter than any key.`;
+  if (v.length > 500) return `What arrived is ${v.length} characters long — far more than any key.`;
+  // One printable token. Whether it is a key is Google's to say, not this
+  // function's: the API is asked, and its refusal comes back verbatim.
+  return null;
 }
 
 // ---------------------------------------------------------------------------

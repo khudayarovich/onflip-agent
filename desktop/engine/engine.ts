@@ -2964,16 +2964,22 @@ export class Engine {
       this.pushStatus();
       return { ok: true };
     }
-    if (!looksLikeGeminiKey(trimmed)) {
+    // Only what is confidently not a key is refused here; any single
+    // unbroken token goes to Google, whose answer is the authority on what
+    // a key looks like — the local shape check refused a real person's key
+    // copied from the real keys page, because the shape is Google's to
+    // change and it had. See `describeKeyRefusal`.
+    const refusal = describeKeyRefusal(trimmed);
+    if (refusal) {
       // Shape only, never content: the length and whether it began like a
       // key are what a later diagnosis needs, and neither can leak it.
       logger.info("gemini", "key paste refused", {
         length: trimmed.length,
-        startsLikeKey: trimmed.startsWith("AIza"),
+        startsLikeKey: looksLikeGeminiKey(trimmed) || trimmed.startsWith("AIza"),
       });
       return {
         ok: false,
-        reason: `${describeKeyRefusal(trimmed)} In ${GEMINI_KEY_URL}, click the key and use its copy button — the full key is one unbroken AIza… string, about 39 characters.`,
+        reason: `${refusal} In ${GEMINI_KEY_URL}, use the key's own copy button and paste it unchanged.`,
       };
     }
     saveConfig({ geminiApiKey: trimmed, signedOut: false });

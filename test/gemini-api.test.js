@@ -194,6 +194,7 @@ test("the key is found inside what people actually paste", () => {
   assert.equal(cleanGeminiKeyPaste(KEY), KEY, "a clean paste is untouched");
   assert.equal(cleanGeminiKeyPaste(`  ${KEY}\n`), KEY, "stray whitespace");
   assert.equal(cleanGeminiKeyPaste(`"${KEY}"`), KEY, "quotes from a config file");
+  assert.equal(cleanGeminiKeyPaste(`“${KEY}”`), KEY, "curly quotes from a styled page");
   assert.equal(cleanGeminiKeyPaste(`GEMINI_API_KEY=${KEY}`), KEY, "an .env line");
   assert.equal(cleanGeminiKeyPaste(`API key: ${KEY}`), KEY, "a labelled copy");
   assert.equal(
@@ -220,24 +221,32 @@ test("but a paste with no key in it, or two, is still refused", () => {
   assert.equal(cleanGeminiKeyPaste(`${KEY} ${KEY}`), KEY);
 });
 
-test("a refusal says what is wrong with this paste, never echoing it", () => {
+test("only what is confidently not a key is refused; Google judges the rest", () => {
   const { describeKeyRefusal } = require("../dist/providers/gemini/api");
+  // Null is "try it against the API": the local shape check refused a real
+  // key copied from the real keys page, because the shape had changed and
+  // shapes are Google's to change. A dotted or otherwise unfamiliar single
+  // token is no longer second-guessed locally.
+  assert.equal(describeKeyRefusal("AIzaSyD-8f2kQ9x7wLmNopQRstuVWxyZ0123456"), null);
+  assert.equal(describeKeyRefusal("some.dotted.key-format_v2"), null);
+  assert.equal(describeKeyRefusal("x".repeat(500)), null);
+
+  // The confident refusals that remain, none echoing the paste.
   assert.match(describeKeyRefusal("AIza...Z456"), /shortened display/);
-  assert.match(describeKeyRefusal("AIzaShort"), /9 characters/);
-  assert.match(describeKeyRefusal("x".repeat(500)), /500 characters/);
+  assert.match(describeKeyRefusal("AIzaShrt"), /only 8 characters/);
+  assert.match(describeKeyRefusal("x".repeat(501)), /501 characters/);
   assert.match(describeKeyRefusal("two AIza-looking words"), /a space/);
+  assert.match(describeKeyRefusal(""), /Nothing arrived/);
   // The look-alikes the Google consoles hand out beside the key.
   assert.match(describeKeyRefusal("123456-abc123.apps.googleusercontent.com"), /OAuth client ID/);
   assert.match(describeKeyRefusal("ya29.a0AfB_byC-example-token"), /access token/);
   assert.match(describeKeyRefusal("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.sig"), /JWT/);
   assert.match(describeKeyRefusal("gemini-2.5-flash"), /model name/);
-  assert.match(describeKeyRefusal("aistudio.google.com/apikey"), /web address/);
-  assert.match(describeKeyRefusal("some.file.name"), /“\.”/, "an unrecognised dotted token still names the dot");
-  assert.match(describeKeyRefusal(""), /Nothing arrived/);
+  assert.match(describeKeyRefusal("aistudio.google.com/api-keys"), /web address/);
   // A secret pasted by mistake: its own characters are not repeated back.
   const secret = describeKeyRefusal("hunter2£password");
-  assert.match(secret, /an unexpected character/);
-  assert.ok(!secret.includes("£"), "the odd character itself stays private unless it is common punctuation");
+  assert.match(secret, /character keys never carry/);
+  assert.ok(!secret.includes("£"), "the odd character itself stays private");
 });
 
 // --- the stream -------------------------------------------------------------
