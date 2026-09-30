@@ -530,6 +530,45 @@ export const QwenMark = ({ size = 14, className }: IconProps = {}): React.ReactE
 );
 
 /**
+ * Gemini's spark, in the same tile the other three sit in.
+ *
+ * The glyph is the four quarter-arcs Google ships in its own product SVGs —
+ * a 24-unit grid, each side of the star an arc bowing to the centre —
+ * scaled into the tile at the same size and position as Qwen's, so the four
+ * read as logos of equal standing. The gradient is the brand's blue-to-
+ * violet sweep; a flat fill read as a generic sparkle rather than Gemini,
+ * and the recognition is the icon's whole job here.
+ */
+export const GeminiMark = ({ size = 14, className }: IconProps = {}): React.ReactElement => (
+  <svg
+    viewBox="0 0 512 509.639"
+    width={size}
+    height={size}
+    className={className}
+    aria-hidden
+    focusable={false}
+  >
+    <path
+      d="M115.612 0h280.775C459.974 0 512 52.026 512 115.612v278.415c0 63.587-52.026 115.613-115.613 115.613H115.612C52.026 509.64 0 457.614 0 394.027V115.612C0 52.026 52.026 0 115.612 0z"
+      fill="#fff"
+    />
+    <defs>
+      <linearGradient id="onflip-gemini-mark" x1="0%" y1="100%" x2="100%" y2="0%">
+        <stop offset="0%" stopColor="#217BFE" />
+        <stop offset="52%" stopColor="#5788EB" />
+        <stop offset="100%" stopColor="#9168C0" />
+      </linearGradient>
+    </defs>
+    <g transform="translate(86 85) scale(14.1667)">
+      <path
+        d="M12 24C12 17.3726 6.62742 12 0 12C6.62742 12 12 6.62742 12 0C12 6.62742 17.3726 12 24 12C17.3726 12 12 17.3726 12 24Z"
+        fill="url(#onflip-gemini-mark)"
+      />
+    </g>
+  </svg>
+);
+
+/**
  * The mark for a provider id.
  *
  * One lookup, because two places draw these — the title bar's "OnFlip ×
@@ -541,5 +580,6 @@ export const QwenMark = ({ size = 14, className }: IconProps = {}): React.ReactE
 export function providerMark(id: string): (props?: IconProps) => React.ReactElement {
   if (id === "deepseek") return DeepSeekMark;
   if (id === "qwen") return QwenMark;
+  if (id === "gemini") return GeminiMark;
   return ChatGptMark;
 }
