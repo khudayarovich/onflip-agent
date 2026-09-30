@@ -51,6 +51,47 @@ export function looksLikeGeminiKey(value: string): boolean {
   return /^[A-Za-z0-9_-]{20,200}$/.test((value ?? "").trim());
 }
 
+/**
+ * The key inside whatever was actually pasted.
+ *
+ * Live within the hour of shipping the field: a real paste was refused as
+ * "not a key". What lands in a paste box is rarely the bare string — AI
+ * Studio's own list shows keys shortened with a literal "…" in the middle,
+ * and a key copied out of an .env file, a chat message or a note arrives
+ * wearing quotes, a `GEMINI_API_KEY=` label, or a line-wrap the copy kept.
+ * Refusing those teaches nothing; finding the key inside them costs nothing.
+ *
+ * The rescue is anchored on the `AIza` prefix Google's keys have carried for
+ * a decade, and only fires when the paste holds exactly one candidate — a
+ * sentence without a key in it is still refused, and a paste holding two
+ * different keys is ambiguous rather than guessed at. A clean paste of some
+ * future prefix still passes through the plain check above.
+ */
+export function cleanGeminiKeyPaste(value: string): string {
+  // Zero-width characters ride along with copies from styled web pages, and
+  // are invisible in the box that then says "that does not look like a key".
+  let v = (value ?? "").replace(/[​-‍﻿]/g, "").trim();
+  const quoted = /^(["'`])([\s\S]*)\1$/.exec(v);
+  if (quoted) v = quoted[2].trim();
+  if (looksLikeGeminiKey(v)) return v;
+  const KEY = /AIza[0-9A-Za-z_-]{30,}/g;
+  // The paste as written first: whitespace separates tokens there, so two
+  // keys on two lines are two candidates and stay ambiguous. Joining first
+  // would glue them into one long blob that reads as a single "key".
+  const inPlace = new Set(v.match(KEY) ?? []);
+  if (inPlace.size === 1) return [...inPlace].pop() as string;
+  if (inPlace.size === 0) {
+    // Nothing whole in the paste: a line-wrap may have cut the key itself,
+    // so the halves only match once the whitespace is gone. (A wrap late
+    // enough that the first half alone looks like a key still gets through
+    // truncated — Google then refuses it out loud, which is the acceptable
+    // end of that edge.)
+    const joined = new Set(v.replace(/\s+/g, "").match(KEY) ?? []);
+    if (joined.size === 1) return [...joined].pop() as string;
+  }
+  return v;
+}
+
 export interface GeminiKeyCheck {
   signedIn: boolean;
   /** False only when Google could not be reached at all. */

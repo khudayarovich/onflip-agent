@@ -17,6 +17,13 @@
 const test = require("node:test");
 const assert = require("node:assert/strict");
 
+// `runDeepDoctor`'s offline half reads the real machine, and since the
+// doctor became provider-aware that includes the real config's provider —
+// so a development machine switched to Gemini failed the ChatGPT-shaped
+// assertions below. Pinned, because these tests are about ChatGPT's checks;
+// Gemini's have their own section at the end.
+process.env.ONFLIP_PROVIDER = "chatgpt";
+
 const { runChecks, runDeepDoctor } = require("../dist/chatgpt/doctor");
 
 /** A machine where everything is fine; each test breaks one thing. */
@@ -224,4 +231,33 @@ test("and a machine with neither is still warned", () => {
   const check = find(runChecks(healthy({ electronPath: undefined })), "cookie-reader");
   assert.equal(check.status, "warn");
   assert.match(check.message, /whatever Node is on PATH/);
+});
+
+// ---------------------------------------------------------------------------
+// Gemini, where the whole authentication story is one stored key
+// ---------------------------------------------------------------------------
+
+test("on Gemini the report is about the key, not machinery it does not use", () => {
+  const report = runChecks(healthy({ provider: "gemini", apiKeySet: true }));
+  assert.equal(report.status, "ok", JSON.stringify(report.checks, null, 1));
+  const ids = report.checks.map((c) => c.id);
+  assert.ok(ids.includes("session") && ids.includes("cooldown") && ids.includes("storage"));
+  for (const id of ["cookie-reader", "profile", "plan"]) {
+    assert.ok(!ids.includes(id), `${id} is browser/ChatGPT machinery and would mislead on Gemini`);
+  }
+  assert.match(find(report, "session").title, /Gemini API key/);
+});
+
+test("a missing key is the failure, with the fix named", () => {
+  const check = find(runChecks(healthy({ provider: "gemini", apiKeySet: false })), "session");
+  assert.equal(check.status, "fail");
+  assert.match(check.message, /aistudio\.google\.com/);
+});
+
+test("a report with no provider reads exactly as it always did", () => {
+  // Every DoctorEnvironment built before the field existed is this case.
+  const ids = runChecks(healthy()).checks.map((c) => c.id);
+  for (const id of ["session", "cooldown", "cookie-reader", "profile", "storage", "plan"]) {
+    assert.ok(ids.includes(id), `${id} missing from the ChatGPT-shaped report`);
+  }
 });

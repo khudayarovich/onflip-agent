@@ -50,6 +50,7 @@ import {
   storedGeminiKey,
   checkGeminiKey,
   looksLikeGeminiKey,
+  cleanGeminiKeyPaste,
   GEMINI_KEY_URL,
 } from "onflip/dist/providers/gemini/api";
 import {
@@ -2946,7 +2947,10 @@ export class Engine {
    * the second is the one the banner claims.
    */
   async setGeminiKey(key: string): Promise<{ ok: boolean; reason?: string }> {
-    const trimmed = (key ?? "").trim();
+    // The key inside whatever was pasted: quotes, an env-line label, a
+    // line-wrap or AI Studio's own "…"-shortened display are what actually
+    // arrive. See `cleanGeminiKeyPaste`.
+    const trimmed = cleanGeminiKeyPaste(key ?? "");
     if (!trimmed) {
       saveConfig({ geminiApiKey: undefined });
       this.config = loadConfig();
@@ -2962,7 +2966,9 @@ export class Engine {
     if (!looksLikeGeminiKey(trimmed)) {
       return {
         ok: false,
-        reason: `That does not look like an API key — copy it whole from ${GEMINI_KEY_URL}.`,
+        // The usual cause named: AI Studio's list shows keys shortened, and
+        // copying that display copies a literal "…" that is not the key.
+        reason: `That does not look like an API key. In ${GEMINI_KEY_URL}, use the key's copy button — the list shows keys shortened with "…", and the full key is one unbroken AIza… string.`,
       };
     }
     saveConfig({ geminiApiKey: trimmed, signedOut: false });

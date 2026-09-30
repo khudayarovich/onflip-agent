@@ -26,6 +26,7 @@ const {
   thinkingBudgetFor,
   classifyGeminiHttp,
   looksLikeGeminiKey,
+  cleanGeminiKeyPaste,
   drainSseBuffer,
   eventText,
 } = require("../dist/providers/gemini/api");
@@ -184,6 +185,39 @@ test("a paste that is plainly not a key is refused before Google sees it", () =>
   assert.equal(looksLikeGeminiKey("https://aistudio.google.com/apikey"), false, "the page, not the key");
   assert.equal(looksLikeGeminiKey("short"), false);
   assert.equal(looksLikeGeminiKey(""), false);
+});
+
+test("the key is found inside what people actually paste", () => {
+  // Live within the hour of shipping the field: a real paste refused as
+  // "not a key". These are the shapes a key arrives in.
+  const KEY = "AIzaSyD-8f2kQ9x7wLmNopQRstuVWxyZ0123456";
+  assert.equal(cleanGeminiKeyPaste(KEY), KEY, "a clean paste is untouched");
+  assert.equal(cleanGeminiKeyPaste(`  ${KEY}\n`), KEY, "stray whitespace");
+  assert.equal(cleanGeminiKeyPaste(`"${KEY}"`), KEY, "quotes from a config file");
+  assert.equal(cleanGeminiKeyPaste(`GEMINI_API_KEY=${KEY}`), KEY, "an .env line");
+  assert.equal(cleanGeminiKeyPaste(`API key: ${KEY}`), KEY, "a labelled copy");
+  assert.equal(
+    cleanGeminiKeyPaste(`${KEY.slice(0, 20)}\n${KEY.slice(20)}`),
+    KEY,
+    "a key a chat window wrapped across lines"
+  );
+  assert.equal(cleanGeminiKeyPaste(`​${KEY}﻿`), KEY, "invisible characters from a web copy");
+});
+
+test("but a paste with no key in it, or two, is still refused", () => {
+  const KEY = "AIzaSyD-8f2kQ9x7wLmNopQRstuVWxyZ0123456";
+  const OTHER = "AIzaSyOther-key-000000000000000000000000";
+  // AI Studio's list shows keys shortened; copying the display copies a
+  // literal "…" that is not the key, and must not be "rescued" into one.
+  assert.equal(looksLikeGeminiKey(cleanGeminiKeyPaste("AIza...Z456")), false, "the shortened display");
+  assert.equal(looksLikeGeminiKey(cleanGeminiKeyPaste("please paste your api key here")), false, "a sentence");
+  assert.equal(
+    looksLikeGeminiKey(cleanGeminiKeyPaste(`${KEY} or ${OTHER}`)),
+    false,
+    "two different keys are ambiguous, not a guess"
+  );
+  // The same key twice is one candidate, not an ambiguity.
+  assert.equal(cleanGeminiKeyPaste(`${KEY} ${KEY}`), KEY);
 });
 
 // --- the stream -------------------------------------------------------------
