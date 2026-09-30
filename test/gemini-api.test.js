@@ -220,6 +220,20 @@ test("but a paste with no key in it, or two, is still refused", () => {
   assert.equal(cleanGeminiKeyPaste(`${KEY} ${KEY}`), KEY);
 });
 
+test("a refusal says what is wrong with this paste, never echoing it", () => {
+  const { describeKeyRefusal } = require("../dist/providers/gemini/api");
+  assert.match(describeKeyRefusal("AIza...Z456"), /shortened display/);
+  assert.match(describeKeyRefusal("AIzaShort"), /9 characters/);
+  assert.match(describeKeyRefusal("x".repeat(500)), /500 characters/);
+  assert.match(describeKeyRefusal("two AIza-looking words"), /a space/);
+  assert.match(describeKeyRefusal("client.apps.googleusercontent.com-shaped-id"), /“\.”/);
+  assert.match(describeKeyRefusal(""), /Nothing arrived/);
+  // A secret pasted by mistake: its own characters are not repeated back.
+  const secret = describeKeyRefusal("hunter2£password");
+  assert.match(secret, /an unexpected character/);
+  assert.ok(!secret.includes("£"), "the odd character itself stays private unless it is common punctuation");
+});
+
 // --- the stream -------------------------------------------------------------
 
 test("SSE events split across reads are reassembled, not lost", () => {

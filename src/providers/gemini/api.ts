@@ -228,6 +228,40 @@ export function classifyGeminiHttp(
   };
 }
 
+/**
+ * Why a paste was refused, said about the paste rather than about keys.
+ *
+ * The generic refusal was shown twice in a row to a real person with no way
+ * to tell what was wrong with *their* paste. This names the first thing that
+ * disqualifies it — the "…" of AI Studio's shortened display, a character no
+ * key contains, a length no key has — without echoing the paste back:
+ * whatever it is, it may be a secret, so only its length and, for common
+ * punctuation, the one offending character are ever named.
+ */
+export function describeKeyRefusal(pasted: string): string {
+  const v = pasted ?? "";
+  if (!v) return "Nothing arrived in the box.";
+  if (/…|\.\.\./.test(v)) {
+    return "The paste contains “…” — that is AI Studio's shortened display of the key, not the key itself.";
+  }
+  const bad = /[^A-Za-z0-9_-]/.exec(v);
+  if (bad) {
+    const SAFE_TO_NAME = new Set([...".,:;'\"`/\\=@()<>[]{}+*&%$#!?|~^ "]);
+    const which =
+      bad[0] === " "
+        ? "a space"
+        : /[\r\n\t]/.test(bad[0])
+          ? "a line break"
+          : SAFE_TO_NAME.has(bad[0])
+            ? `“${bad[0]}”`
+            : "an unexpected character";
+    return `The paste contains ${which}, which never appears in a key — a key is one unbroken run of letters, digits, “-” and “_”.`;
+  }
+  if (v.length < 20) return `What arrived is ${v.length} characters long, and a real key is about 39.`;
+  if (v.length > 200) return `What arrived is ${v.length} characters long, far more than any key.`;
+  return "It does not have the shape of an API key.";
+}
+
 // ---------------------------------------------------------------------------
 // the request
 // ---------------------------------------------------------------------------

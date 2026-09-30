@@ -51,6 +51,7 @@ import {
   checkGeminiKey,
   looksLikeGeminiKey,
   cleanGeminiKeyPaste,
+  describeKeyRefusal,
   GEMINI_KEY_URL,
 } from "onflip/dist/providers/gemini/api";
 import {
@@ -2964,11 +2965,15 @@ export class Engine {
       return { ok: true };
     }
     if (!looksLikeGeminiKey(trimmed)) {
+      // Shape only, never content: the length and whether it began like a
+      // key are what a later diagnosis needs, and neither can leak it.
+      logger.info("gemini", "key paste refused", {
+        length: trimmed.length,
+        startsLikeKey: trimmed.startsWith("AIza"),
+      });
       return {
         ok: false,
-        // The usual cause named: AI Studio's list shows keys shortened, and
-        // copying that display copies a literal "…" that is not the key.
-        reason: `That does not look like an API key. In ${GEMINI_KEY_URL}, use the key's copy button — the list shows keys shortened with "…", and the full key is one unbroken AIza… string.`,
+        reason: `${describeKeyRefusal(trimmed)} In ${GEMINI_KEY_URL}, click the key and use its copy button — the full key is one unbroken AIza… string, about 39 characters.`,
       };
     }
     saveConfig({ geminiApiKey: trimmed, signedOut: false });
