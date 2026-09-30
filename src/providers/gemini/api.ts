@@ -244,6 +244,24 @@ export function describeKeyRefusal(pasted: string): string {
   if (/…|\.\.\./.test(v)) {
     return "The paste contains “…” — that is AI Studio's shortened display of the key, not the key itself.";
   }
+  // The look-alikes Google's own consoles hand out next to the key. Each is
+  // recognisable by a public, structural shape, so naming it gives nothing
+  // away and saves the round of guessing a generic refusal costs.
+  if (/\.apps\.googleusercontent\.com$/i.test(v)) {
+    return "That is an OAuth client ID (…apps.googleusercontent.com), not an API key — it comes from the Cloud Console's Credentials page, which lists both.";
+  }
+  if (/^ya29\./.test(v)) {
+    return "That looks like an OAuth access token (ya29.…), not an API key — tokens expire within the hour.";
+  }
+  if (/^eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\./.test(v)) {
+    return "That looks like a signed token (JWT), not an API key.";
+  }
+  if (/^gemini-/i.test(v)) {
+    return "That is a model name, not an API key.";
+  }
+  if (/^https?:\/\//i.test(v) || /\.(com|org|net|dev|ai)(\/|$)/i.test(v)) {
+    return "That looks like a web address, not a key.";
+  }
   const bad = /[^A-Za-z0-9_-]/.exec(v);
   if (bad) {
     const SAFE_TO_NAME = new Set([...".,:;'\"`/\\=@()<>[]{}+*&%$#!?|~^ "]);

@@ -226,7 +226,13 @@ test("a refusal says what is wrong with this paste, never echoing it", () => {
   assert.match(describeKeyRefusal("AIzaShort"), /9 characters/);
   assert.match(describeKeyRefusal("x".repeat(500)), /500 characters/);
   assert.match(describeKeyRefusal("two AIza-looking words"), /a space/);
-  assert.match(describeKeyRefusal("client.apps.googleusercontent.com-shaped-id"), /“\.”/);
+  // The look-alikes the Google consoles hand out beside the key.
+  assert.match(describeKeyRefusal("123456-abc123.apps.googleusercontent.com"), /OAuth client ID/);
+  assert.match(describeKeyRefusal("ya29.a0AfB_byC-example-token"), /access token/);
+  assert.match(describeKeyRefusal("eyJhbGciOiJSUzI1NiJ9.eyJzdWIiOiJ4In0.sig"), /JWT/);
+  assert.match(describeKeyRefusal("gemini-2.5-flash"), /model name/);
+  assert.match(describeKeyRefusal("aistudio.google.com/apikey"), /web address/);
+  assert.match(describeKeyRefusal("some.file.name"), /“\.”/, "an unrecognised dotted token still names the dot");
   assert.match(describeKeyRefusal(""), /Nothing arrived/);
   // A secret pasted by mistake: its own characters are not repeated back.
   const secret = describeKeyRefusal("hunter2£password");
