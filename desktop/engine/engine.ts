@@ -52,6 +52,8 @@ import {
   looksLikeGeminiKey,
   cleanGeminiKeyPaste,
   describeKeyRefusal,
+  discoverGeminiModels,
+  probeGeminiModel,
   GEMINI_KEY_URL,
 } from "onflip/dist/providers/gemini/api";
 import {
@@ -828,9 +830,11 @@ export class Engine {
     this.notice(
       from === "auto"
         ? `Auto is no longer offered — on a paid plan it routed the agent's turns into Pro thinking, which kept timing out. Using ${wanted} instead; pick another model in the chip under the composer if you prefer.`
-        : limitedPin
-          ? `${named(from)} has a message limit on the ${planName(cfg.planType) ?? cfg.planType} plan, and once it runs out ChatGPT stops taking messages on it. Using ${named(wanted)} instead, which has none.`
-          : `Using ${named(wanted)}, which this plan can run without a message limit.`
+        : isApiKeyProvider()
+          ? `Using ${named(wanted)} — the default from the model list your key reports.`
+          : limitedPin
+            ? `${named(from)} has a message limit on the ${planName(cfg.planType) ?? cfg.planType} plan, and once it runs out ChatGPT stops taking messages on it. Using ${named(wanted)} instead, which has none.`
+            : `Using ${named(wanted)}, which this plan can run without a message limit.`
     );
   }
 
@@ -866,6 +870,9 @@ export class Engine {
         this.emitConnect("ready");
         this.startSessionWatch();
         this.offerUnsentPrompt();
+        // A working key can also say which models it runs, which is the
+        // only current answer — see `refreshGeminiModels`.
+        if (isApiKeyProvider()) await this.refreshGeminiModels();
         return;
       }
       // Point at the button in this app, not at a terminal command: a
@@ -2939,6 +2946,53 @@ export class Engine {
   }
 
   /**
+   * Read the key's own model list and act on it.
+   *
+   * Exists because the built-in list went stale by a generation within a
+   * day: the first real Gemini turn was a 404 — the 2.5 family retired for
+   * new users, Google's error naming `gemini-3.8-flash` as the way
+   * forward — and then two automatic resumes into the same 404. The list
+   * is Google's to change, so it is read from Google whenever the key
+   * proves live, cached per key (`geminiModels`), and the default model is
+   * re-decided from it so an unpinned session steps off a retired slug by
+   * itself. Best-effort: a failed read leaves the cached list standing.
+   */
+  private async refreshGeminiModels(): Promise<void> {
+    try {
+      let models = await discoverGeminiModels();
+      if (models.length) {
+        logger.info("gemini", "model list read from the key", {
+          count: models.length,
+          first: models[0]?.slug,
+        });
+        // The listing is the catalogue, not the entitlement: a new key's
+        // list still opened with the retired 2.5 family, and defaulting
+        // into it was a 404 on the first turn. So the would-be default is
+        // held against the key with a free countTokens call, and a model
+        // the key definitely cannot run is dropped and the choice remade —
+        // bounded, and only ever on a definite 404.
+        for (let attempt = 0; attempt < 4 && models.length; attempt++) {
+          saveConfig({ geminiModels: models });
+          this.config = loadConfig();
+          const candidate = defaultModel();
+          const verdict = await probeGeminiModel(candidate);
+          if (verdict !== "gone") break;
+          logger.warn("gemini", "the key cannot run a listed model; dropping it", {
+            model: candidate,
+          });
+          models = models.filter((m) => m.slug !== candidate);
+        }
+      }
+      this.adoptDefaultModel();
+      this.pushStatus();
+    } catch (e) {
+      logger.warn("gemini", "could not read the key's model list", {
+        error: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
+  /**
    * Gemini's whole sign-in: store the pasted key and ask Google whether it
    * works. An empty string is the sign-out spelled from Settings.
    *
@@ -2989,6 +3043,9 @@ export class Engine {
       this.probeSignedIn = true;
       this.emitConnect("ready");
       this.notice("The Gemini API key was saved, and Google accepted it.");
+      // Another key can be another account with another model list, and
+      // the list is what keeps the session off retired models.
+      await this.refreshGeminiModels();
       this.pushStatus();
       return { ok: true };
     }
@@ -3162,7 +3219,13 @@ export class Engine {
     // and put 53 stored cookies into a profile. Worse, start() awaits this,
     // so a ChatGPT page that is slow or being challenged holds the whole
     // engine short of ready and every message sits at "sending".
-    if (isBrowserProvider() || isApiKeyProvider()) return allModels();
+    if (isApiKeyProvider()) {
+      // Gemini's discovery is its own — one GET against the key, nothing
+      // of ChatGPT's — so the refresh button works there too.
+      await this.refreshGeminiModels();
+      return allModels();
+    }
+    if (isBrowserProvider()) return allModels();
     const result = await discoverModels(this.auth);
     cacheModels(
       result.models.map((m) => ({

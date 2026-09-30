@@ -1,6 +1,7 @@
 import { loadConfig, saveConfig } from "./config";
 import { prefersLunaByDefault, rationedPlan } from "./chatgpt/plans";
 import { activeProvider, isApiKeyProvider, isBrowserProvider } from "./providers/id";
+import { geminiSlugVersion } from "./providers/gemini/api";
 
 /**
  * Model slugs.
@@ -119,6 +120,10 @@ const RETIRED_DEEPSEEK: Record<string, string> = {
   "deepseek-vision": "deepseek-chat",
 };
 
+/** The Gemini built-ins Google retired; `normalizeModel` maps a stored one
+ * to the key's own default unless the key's list still offers it. */
+const RETIRED_GEMINI = new Set(["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"]);
+
 /**
  * Qwen's two, as its own picker lists them.
  *
@@ -148,42 +153,45 @@ const QWEN_MODELS: ModelInfo[] = [
 ];
 
 /**
- * Gemini's, as Google publishes them.
+ * Gemini's list is the key's own, read from the API's /models endpoint.
  *
- * Stable aliases only — `gemini-2.5-flash`, not a dated snapshot — because
- * an alias keeps working when Google rotates the snapshot behind it. The
- * list is a starting point, not a wall: `normalizeModel` passes an unknown
- * slug through by design, so a model newer than this build is usable by
- * typing its name, and a wrong name fails loudly here (the API answers 404)
- * rather than silently running something else the way ChatGPT's `?model=`
- * does.
+ * A built-in list was tried first and went stale by a whole generation
+ * within a day of shipping: it offered the 2.5 family, and the first real
+ * turn was Google's 404 — "no longer available to new users. Please update
+ * your code to use models/gemini-3.8-flash". The catalogue is Google's to
+ * change, so it is read from Google when the key is checked and cached in
+ * `geminiModels`; the fallback below is only for the moment before the
+ * first check, and it is the one slug Google's own error named rather than
+ * three guesses. An unknown slug still passes through `normalizeModel` by
+ * design, and a wrong one fails loudly with the API's own 404.
  */
-const GEMINI_MODELS: ModelInfo[] = [
+const GEMINI_FALLBACK: ModelInfo[] = [
   {
-    slug: "gemini-2.5-flash",
-    label: "Gemini 2.5 Flash",
-    description: "fast and capable — the everyday model, with the free tier's best balance of rate and quality",
-  },
-  {
-    slug: "gemini-2.5-pro",
-    label: "Gemini 2.5 Pro",
-    description: "the strongest model — slower, and the free tier allows only a few requests a minute",
-  },
-  {
-    slug: "gemini-2.5-flash-lite",
-    label: "Gemini 2.5 Flash-Lite",
-    description: "lightest and fastest — the highest free-tier limits, for long unattended runs",
+    slug: "gemini-3.8-flash",
+    label: "Gemini 3.8 Flash",
+    description: "the current everyday model — the full list is read from your key when it is checked",
   },
 ];
 
-/** The built-in list each non-ChatGPT service offers, by provider. */
+function geminiModelInfos(): ModelInfo[] {
+  const cached = loadConfig().geminiModels;
+  if (!cached?.length) return GEMINI_FALLBACK;
+  return cached.map((m) => ({
+    slug: m.slug,
+    label: m.title || m.slug,
+    description: m.description || "",
+    discovered: true,
+  }));
+}
+
+/** The built-in list each browser-driven service offers, by provider. */
 const FIXED_MODELS: Record<string, ModelInfo[]> = {
   deepseek: DEEPSEEK_MODELS,
   qwen: QWEN_MODELS,
-  gemini: GEMINI_MODELS,
 };
 
 export function allModels(): ModelInfo[] {
+  if (isApiKeyProvider()) return geminiModelInfos();
   const fixed = FIXED_MODELS[activeProvider()];
   if (fixed) return fixed;
   const cached = loadConfig().discoveredModels;
@@ -357,6 +365,20 @@ export const DEFAULT_MODEL = "gpt-5-6-mini";
  * the unlimited one is `gpt-5-6-mini`, the same slug a paid plan's Luna has.
  */
 export function defaultModel(planId?: string): string {
+  if (isApiKeyProvider()) {
+    // The everyday tier out of the key's own list: a plain Flash, not the
+    // Lite that trades quality for rate and not the Pro whose free-tier
+    // allowance an agent run empties in minutes. The *newest* one, because
+    // the catalogue keeps listing retired generations — measured, a new
+    // key's list opened with the 2.5 family that 404s for it — and Google
+    // retires backwards, never forwards. With no list cached yet, the
+    // fallback slug is the one Google's own retirement notice named.
+    const models = geminiModelInfos();
+    const newest = (pool: ModelInfo[]) =>
+      pool.reduce((a, b) => (geminiSlugVersion(b.slug) > geminiSlugVersion(a.slug) ? b : a));
+    const flashes = models.filter((m) => /flash/i.test(m.slug) && !/lite|preview/i.test(m.slug));
+    return newest(flashes.length ? flashes : models).slug;
+  }
   const fixed = FIXED_MODELS[activeProvider()];
   if (fixed) return fixed[0].slug;
   const cfg = loadConfig();
@@ -402,10 +424,12 @@ export function modelContextTokens(slug: string | undefined): number | null {
     const hasSol = allModels().some((m) => /\bsol\b/i.test(`${m.slug} ${m.label}`));
     return hasSol ? 1_050_000 : null;
   }
-  // The 2.5 family's published input window, the same figure for Pro, Flash
-  // and Flash-Lite. Claimed by prefix so a newer Gemini typed by name still
-  // gets a window rather than the unknown-plan default — the family has
-  // never shipped a smaller one.
+  // The key's own list carries each model's real input window; the prefix
+  // fallback below is the figure every Gemini generation so far has shipped
+  // with, so a model typed by name still gets a window rather than the
+  // unknown-plan default.
+  const gemini = loadConfig().geminiModels?.find((m) => m.slug === slug)?.maxTokens;
+  if (typeof gemini === "number" && Number.isFinite(gemini) && gemini > 0) return gemini;
   if (/^gemini-/i.test(slug)) return 1_048_576;
   const entry = allModels().find((m) => m.slug === slug);
   const name = `${slug} ${entry?.label ?? ""}`.toLowerCase();
@@ -448,6 +472,14 @@ export function normalizeModel(value: string | undefined): string | undefined {
   // name a mode that no longer exists; it opens on the model that
   // replaced all three rather than on a slug nothing answers to.
   if (Object.hasOwn(RETIRED_DEEPSEEK, v)) return RETIRED_DEEPSEEK[v];
+
+  // The 2.5 slugs this build briefly shipped as Gemini's built-ins, retired
+  // by Google for new users before the feature's first real turn ("Please
+  // update your code to use models/gemini-3.8-flash"). A session or config
+  // that stored one lands on the key's own default rather than on a 404 —
+  // but only when the key's list does not still offer it, because an older
+  // account may genuinely keep 2.5 (the notice said "new users").
+  if (RETIRED_GEMINI.has(v)) return defaultModel();
 
   // A service that is gone leaves its model names behind: Arena's were
   // written into ChatGPT's own slot by builds before 0.10.51, and an

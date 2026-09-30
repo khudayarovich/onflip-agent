@@ -249,6 +249,37 @@ test("only what is confidently not a key is refused; Google judges the rest", ()
   assert.ok(!secret.includes("£"), "the odd character itself stays private");
 });
 
+test("the key's model list is filtered to what a chat can run", () => {
+  const { usableGeminiModels } = require("../dist/providers/gemini/api");
+  const raw = [
+    // Listed first by the API, as the real listing does — the catalogue
+    // keeps retired generations, so order must not decide anything.
+    { name: "models/gemini-2.5-flash", displayName: "Gemini 2.5 Flash", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-3.8-flash", displayName: "Gemini 3.8 Flash", description: "Fast and capable.", inputTokenLimit: 1_048_576, supportedGenerationMethods: ["generateContent", "countTokens"] },
+    // The dated snapshot behind the alias above: absorbed, because the
+    // alias is the name that keeps working when Google rotates it.
+    { name: "models/gemini-3.8-flash-001", displayName: "Snapshot", supportedGenerationMethods: ["generateContent"] },
+    // A snapshot with no alias in the list stays — it is the only name.
+    { name: "models/gemini-3.8-pro-002", displayName: "Pro", inputTokenLimit: 2_097_152, supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-embedding-002", supportedGenerationMethods: ["embedContent"] },
+    { name: "models/gemini-3.8-flash-image", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-3.8-flash-preview-tts", supportedGenerationMethods: ["generateContent"] },
+    // From the live list: transcription answers generateContent too.
+    { name: "models/gemini-3.5-transcribe", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemini-3.8-flash-exp", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/gemma-3-27b-it", supportedGenerationMethods: ["generateContent"] },
+    { name: "models/veo-3", supportedGenerationMethods: ["predictLongRunning"] },
+  ];
+  const models = usableGeminiModels(raw);
+  assert.deepEqual(
+    models.map((m) => m.slug),
+    ["gemini-3.8-flash", "gemini-3.8-pro-002", "gemini-2.5-flash"],
+    "newest generation first, whatever order the catalogue used"
+  );
+  assert.equal(models[0].title, "Gemini 3.8 Flash");
+  assert.equal(models[0].maxTokens, 1_048_576);
+});
+
 // --- the stream -------------------------------------------------------------
 
 test("SSE events split across reads are reassembled, not lost", () => {

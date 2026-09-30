@@ -35,8 +35,9 @@ const {
   providerStateDir,
   activeProvider,
 } = require("../dist/providers/id");
-const { allModels, defaultModel, modelBelongsToProvider, effectiveModel, modelContextTokens } =
+const { allModels, defaultModel, modelBelongsToProvider, effectiveModel, modelContextTokens, normalizeModel } =
   require("../dist/models");
+const { saveConfig } = require("../dist/config");
 const { chooseTransport } = require("../dist/providers/transport");
 
 test("it is one of the services the app offers", () => {
@@ -71,13 +72,45 @@ test("Gemini's transport is Gemini's, and it is not the browser kind", () => {
   chosen.transport.reset();
 });
 
-test("the picker offers the published stable aliases, Flash first", () => {
-  const models = allModels();
+test("the picker is the key's own list; before it, the one slug Google named", () => {
+  // A built-in catalogue went stale by a generation within a day (the 2.5
+  // family retired for new users, a 404 on the first real turn), so the
+  // fallback is a single slug — the one Google's own error named — and the
+  // key's discovered list replaces it entirely.
   assert.deepEqual(
-    models.map((m) => m.slug),
-    ["gemini-2.5-flash", "gemini-2.5-pro", "gemini-2.5-flash-lite"]
+    allModels().map((m) => m.slug),
+    ["gemini-3.8-flash"]
   );
-  assert.equal(defaultModel(), "gemini-2.5-flash");
+  assert.equal(defaultModel(), "gemini-3.8-flash");
+  // With no list saying otherwise, a stored retired built-in lands on the
+  // default rather than on a 404.
+  assert.equal(normalizeModel("gemini-2.5-flash"), "gemini-3.8-flash");
+
+  saveConfig({
+    geminiModels: [
+      // A retired generation first, as the real catalogue listed it: the
+      // default must be the newest Flash, never "the first flash listed".
+      { slug: "gemini-2.5-flash", title: "Gemini 2.5 Flash", description: "retired for new keys" },
+      { slug: "gemini-3.8-pro", title: "Gemini 3.8 Pro", description: "strongest", maxTokens: 2_097_152 },
+      { slug: "gemini-3.8-flash", title: "Gemini 3.8 Flash", description: "fast", maxTokens: 1_048_576 },
+      { slug: "gemini-3.8-flash-lite", title: "Gemini 3.8 Flash-Lite", description: "light" },
+    ],
+  });
+  assert.deepEqual(
+    allModels().map((m) => m.slug),
+    ["gemini-2.5-flash", "gemini-3.8-pro", "gemini-3.8-flash", "gemini-3.8-flash-lite"]
+  );
+  assert.equal(
+    defaultModel(),
+    "gemini-3.8-flash",
+    "the newest plain Flash — not the 2.5 listed first, not the Pro, not the Lite"
+  );
+  assert.equal(modelContextTokens("gemini-3.8-pro"), 2_097_152, "the window the key itself reported");
+  assert.equal(
+    normalizeModel("gemini-2.5-flash"),
+    "gemini-2.5-flash",
+    "a retired slug the key's own list still offers is kept — an older account may genuinely run it"
+  );
 });
 
 test("a model belongs to the service that can serve it", () => {

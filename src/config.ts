@@ -253,6 +253,15 @@ export interface OnFlipConfig {
    * switch-and-relaunch is still there when the Gemini engine starts.
    */
   geminiApiKey?: string;
+  /**
+   * The model list the key's own account reports, read from the API's
+   * /models endpoint when the key is checked. Authoritative when present:
+   * the built-in list went stale by a whole model generation within a day
+   * of shipping — Google retired the 2.5 family for new users and the
+   * first real turn was a 404 naming the replacement. Provider-scoped,
+   * like ChatGPT's `discoveredModels`.
+   */
+  geminiModels?: { slug: string; title: string; description: string; maxTokens?: number }[];
 
   /**
    * Per-service settings, one room each, keyed by provider id.
@@ -314,6 +323,8 @@ const PROVIDER_SETTINGS = [
   // Picking a Qwen model pinned ChatGPT's choice, so ChatGPT stopped
   // adopting its account's default.
   "modelPinned",
+  // What one Gemini key's account can run is that key's business.
+  "geminiModels",
 ] as const satisfies readonly (keyof OnFlipConfig)[];
 
 /**

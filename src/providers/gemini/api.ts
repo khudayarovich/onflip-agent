@@ -140,6 +140,135 @@ export async function checkGeminiKey(key: string | null = storedGeminiKey()): Pr
   }
 }
 
+// ---------------------------------------------------------------------------
+// the key's own model list
+// ---------------------------------------------------------------------------
+
+/** One row of the API's /models listing, as this module needs it. */
+export interface RawGeminiModel {
+  name?: string;
+  displayName?: string;
+  description?: string;
+  inputTokenLimit?: number;
+  supportedGenerationMethods?: string[];
+}
+
+export interface GeminiModelEntry {
+  slug: string;
+  title: string;
+  description: string;
+  maxTokens?: number;
+}
+
+/**
+ * The chat models in a /models listing, in the account's own order.
+ *
+ * Pure and exported because the filter is where a quiet mistake lives: the
+ * listing mixes chat models with embeddings, image and video generators,
+ * TTS voices and live-session variants, plus a dated snapshot behind most
+ * aliases. Kept: whatever this key can run `generateContent` on under a
+ * `gemini-` name. Dropped: the non-chat families by name, `-exp` builds,
+ * and a dated `-NNN` snapshot whose alias is also in the list — the alias
+ * is the name that keeps working when Google rotates the snapshot.
+ */
+/** The generation a slug belongs to, for ordering; "latest" outranks all. */
+export function geminiSlugVersion(slug: string): number {
+  if (/-latest$/i.test(slug)) return Number.MAX_SAFE_INTEGER;
+  const m = /^gemini-(\d+(?:\.\d+)?)/i.exec(slug);
+  return m ? Number(m[1]) : 0;
+}
+
+export function usableGeminiModels(raw: RawGeminiModel[]): GeminiModelEntry[] {
+  // "transcribe" earned its place from the live list: an audio-transcription
+  // model that supports generateContent and is still not a chat model.
+  const NOT_CHAT = /(embed|imagen|image|veo|tts|audio|live|aqa|learnlm|robotics|transcribe)/i;
+  const models = raw
+    .map((m) => ({ ...m, slug: (m.name ?? "").replace(/^models\//, "") }))
+    .filter(
+      (m) =>
+        /^gemini-/i.test(m.slug) &&
+        (m.supportedGenerationMethods ?? []).includes("generateContent") &&
+        !NOT_CHAT.test(m.slug) &&
+        !/-exp\b/i.test(m.slug)
+    );
+  const slugs = new Set(models.map((m) => m.slug));
+  return (
+    models
+      .filter((m) => {
+        const alias = m.slug.replace(/-\d{3}$/, "");
+        return alias === m.slug || !slugs.has(alias);
+      })
+      // Newest generation first, and only then the cap. The API lists
+      // oldest first, and capping that order cut the current family out of
+      // a 15-entry list that opened with the retired one.
+      .sort((a, b) => geminiSlugVersion(b.slug) - geminiSlugVersion(a.slug))
+      .slice(0, 15)
+      .map((m) => ({
+        slug: m.slug,
+        title: m.displayName?.trim() || m.slug,
+        description: (m.description ?? "").trim().slice(0, 140),
+        ...(typeof m.inputTokenLimit === "number" && m.inputTokenLimit > 0
+          ? { maxTokens: m.inputTokenLimit }
+          : {}),
+      }))
+  );
+}
+
+/**
+ * Can this key actually run this model? Asked with `countTokens`, which is
+ * free and entitlement-gated like generation itself.
+ *
+ * Exists because the /models listing is the catalogue, not the entitlement:
+ * measured on a real new-user key, it still listed the whole retired 2.5
+ * family — first — while `generateContent` on any of it answered 404. Only
+ * a definite 404 says "gone"; a throttle or an outage must not delete a
+ * model from anyone's picker.
+ */
+export async function probeGeminiModel(
+  model: string,
+  key: string | null = storedGeminiKey()
+): Promise<"ok" | "gone" | "unknown"> {
+  if (!key) return "unknown";
+  try {
+    const res = await fetch(`${GEMINI_BASE}/models/${encodeURIComponent(model)}:countTokens`, {
+      method: "POST",
+      headers: { "x-goog-api-key": key, "content-type": "application/json" },
+      body: JSON.stringify({ contents: [{ role: "user", parts: [{ text: "hi" }] }] }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (res.ok) return "ok";
+    return res.status === 404 ? "gone" : "unknown";
+  } catch {
+    return "unknown";
+  }
+}
+
+/**
+ * Ask the key which models it can run. One GET; the caller caches it.
+ *
+ * This exists because the built-in list went stale by a whole generation
+ * within a day of shipping: the first real turn was Google's 404 saying the
+ * 2.5 family "is no longer available to new users" and naming its
+ * replacement. A catalogue is the service's to change, so it is read from
+ * the service — the same conclusion `onflip models --refresh` reached for
+ * ChatGPT.
+ */
+export async function discoverGeminiModels(
+  key: string | null = storedGeminiKey()
+): Promise<GeminiModelEntry[]> {
+  if (!key) return [];
+  const res = await fetch(`${GEMINI_BASE}/models?pageSize=200`, {
+    headers: { "x-goog-api-key": key },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new GeminiError(classifyGeminiHttp(res.status, body, res.headers.get("retry-after")).message);
+  }
+  const parsed = (await res.json()) as { models?: RawGeminiModel[] };
+  return usableGeminiModels(parsed.models ?? []);
+}
+
 /** A failure the transport can throw with the code already decided. */
 export class GeminiError extends Error {
   code?: FailureCode;
