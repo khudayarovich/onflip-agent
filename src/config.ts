@@ -245,6 +245,16 @@ export interface OnFlipConfig {
   provider?: string;
 
   /**
+   * The Google AI Studio key the Gemini API provider sends with.
+   *
+   * Deliberately at the top level rather than in Gemini's room: only the
+   * Gemini transport reads it, so there is no cross-service bleed for the
+   * rooms to prevent — and keeping it shared means a key pasted before the
+   * switch-and-relaunch is still there when the Gemini engine starts.
+   */
+  geminiApiKey?: string;
+
+  /**
    * Per-service settings, one room each, keyed by provider id.
    *
    * ChatGPT is not in here: its settings stay at the top level, exactly where
@@ -266,7 +276,7 @@ export interface OnFlipConfig {
  * out which provider is active would be a cycle. `providers/id.ts` re-exports
  * these so there is still one list.
  */
-export const PROVIDER_IDS = ["chatgpt", "deepseek", "qwen"] as const;
+export const PROVIDER_IDS = ["chatgpt", "deepseek", "qwen", "gemini"] as const;
 export type ProviderId = (typeof PROVIDER_IDS)[number];
 export const DEFAULT_PROVIDER: ProviderId = "chatgpt";
 

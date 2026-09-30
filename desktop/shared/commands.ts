@@ -43,6 +43,9 @@ export const SLASH_COMMANDS: SlashCommand[] = [
 const CHATGPT_ONLY = new Set(["/chats", "/project"]);
 
 export function slashCommands(provider: string | undefined): SlashCommand[] {
+  // Gemini keeps no chats on any server and has no projects, so the two
+  // ChatGPT commands go; its thinking control is the ordinary dial.
+  if (provider === "gemini") return SLASH_COMMANDS.filter((c) => !CHATGPT_ONLY.has(c.name));
   if (provider !== "deepseek") return SLASH_COMMANDS;
   return SLASH_COMMANDS.filter((c) => !CHATGPT_ONLY.has(c.name)).map((c) =>
     c.name === "/thinking" ? { ...c, args: "on|off", description: "DeepThink: on · off" } : c

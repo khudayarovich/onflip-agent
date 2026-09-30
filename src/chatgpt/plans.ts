@@ -125,6 +125,22 @@ export const DEEPSEEK_CEILING_CHARS = 150_000;
 export const QWEN_CEILING_CHARS = 40_000;
 
 /**
+ * What a Gemini API turn may carry before it is compacted.
+ *
+ * The API takes the whole conversation in one request, so neither a
+ * composer nor a typed-message clamp bounds it — the model's million-token
+ * window would allow ~4M characters. What actually bounds it is the free
+ * tier's per-minute token allowance: an agent replays the transcript on
+ * every send, so a transcript of N tokens costs N tokens a turn, and
+ * 400,000 characters (~100k tokens) keeps a busy loop inside the published
+ * free-tier rates with room for the reply. Chosen from those published
+ * figures rather than measured; the signal that it is wrong is 429s
+ * arriving on ordinary turns, and the setting beside it in Settings is the
+ * way down.
+ */
+export const GEMINI_CEILING_CHARS = 400_000;
+
+/**
  * The ceiling once a turn too large to type is uploaded instead.
  *
  * Typing was the binding constraint, so the plan never got to be. With the

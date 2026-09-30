@@ -10,6 +10,7 @@ import { Modal, Toggle } from "./common";
 import { Lang, LANGS, useT } from "../i18n";
 import { Close, RadioOff, RadioOn } from "./icons";
 import { serviceLabel } from "../../../shared/providers";
+import { composing } from "../../../shared/escape";
 
 export function SettingsModal({
   status,
@@ -100,6 +101,16 @@ export function SettingsModal({
   return (
     <Modal title={t("settings")} onClose={onClose} wide>
       <ProviderSection />
+      {status?.provider === "gemini" && (
+        <GeminiKeySection
+          keySet={Boolean(config?.geminiKeySet)}
+          notify={notify}
+          onChanged={() => {
+            void api.getConfig().then(setConfig).catch(() => {});
+            onStatusChange();
+          }}
+        />
+      )}
 
       <div className="settings-section">
         <h3>{t("setAppearance")}</h3>
@@ -597,6 +608,80 @@ function ProviderSection(): React.ReactElement | null {
         </div>
       </div>
       {busy && <p className="modal-note">{t("setProviderSwitching")}</p>}
+    </div>
+  );
+}
+
+/**
+ * The Gemini API key, which is that service's whole sign-in.
+ *
+ * Only ever shown while Gemini is the active service, and only the fact of
+ * a key — never its value — comes back from the engine: the box is
+ * write-only, which is why a stored key reads as a hint under it rather
+ * than dots in it.
+ */
+function GeminiKeySection({
+  keySet,
+  notify,
+  onChanged,
+}: {
+  keySet: boolean;
+  notify: (text: string) => void;
+  onChanged: () => void;
+}): React.ReactElement {
+  const t = useT();
+  const [value, setValue] = React.useState("");
+  const [busy, setBusy] = React.useState(false);
+
+  const submit = (key: string) => {
+    if (busy) return;
+    setBusy(true);
+    void api
+      .setGeminiKey(key)
+      .then((r) => {
+        if (r.reason) notify(r.reason);
+        if (r.ok) setValue("");
+        onChanged();
+      })
+      .catch((e: Error) => notify(e.message))
+      .finally(() => setBusy(false));
+  };
+
+  return (
+    <div className="settings-section">
+      <h3>{t("setGeminiKey")}</h3>
+      <div className="setting-row">
+        <div className="info">
+          <div className="name">{t("setGeminiKeyName")}</div>
+          <div className="desc">
+            {t("setGeminiKeyDesc")}
+            {keySet ? ` ${t("geminiKeyStored")}` : ""}
+          </div>
+        </div>
+        {keySet && (
+          <button className="btn" disabled={busy} onClick={() => submit("")}>
+            {t("geminiKeyRemove")}
+          </button>
+        )}
+        <input
+          type="password"
+          placeholder={t("geminiKeyPlaceholder")}
+          value={value}
+          disabled={busy}
+          onChange={(e) => setValue(e.target.value)}
+          onKeyDown={(e) => {
+            if (composing(e)) return;
+            if (e.key === "Enter" && value.trim()) submit(value.trim());
+          }}
+        />
+        <button
+          className="btn primary"
+          disabled={busy || !value.trim()}
+          onClick={() => submit(value.trim())}
+        >
+          {busy ? t("geminiKeySaving") : t("geminiKeySave")}
+        </button>
+      </div>
     </div>
   );
 }

@@ -34,6 +34,7 @@ test("the services it knows are spelled the way they spell themselves", { skip: 
   const serviceLabel = load();
   assert.equal(serviceLabel("chatgpt"), "ChatGPT");
   assert.equal(serviceLabel("deepseek"), "DeepSeek");
+  assert.equal(serviceLabel("gemini"), "Gemini API");
 });
 
 test("not knowing yet is answered with nothing, not with a service", { skip: needsBuild }, () => {
@@ -49,14 +50,14 @@ test("an unrecognised service is shown as itself", { skip: needsBuild }, () => {
   const serviceLabel = load();
   // Honest, and it survives a service being added to the engine before this
   // table hears about it. "ChatGPT" here would be a plain lie.
-  assert.equal(serviceLabel("gemini"), "gemini");
+  assert.equal(serviceLabel("grok"), "grok");
   assert.equal(serviceLabel("deepseek-v2"), "deepseek-v2");
 });
 
 test("no input can make it answer ChatGPT except ChatGPT", { skip: needsBuild }, () => {
   const serviceLabel = load();
   // The rule the previous two fixes were missing, stated once.
-  for (const input of [undefined, null, "", "deepseek", "gemini", "unknown", "0", "false"]) {
+  for (const input of [undefined, null, "", "deepseek", "gemini", "grok", "unknown", "0", "false"]) {
     if (input === "chatgpt") continue;
     assert.notEqual(serviceLabel(input), "ChatGPT", JSON.stringify(input));
   }

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from "react";
 import { api } from "../api";
 import { Modal } from "./common";
 import { useT } from "../i18n";
+import { composing } from "../../../shared/escape";
 
 /**
  * The way in.
@@ -132,6 +133,37 @@ export function SignInModal({
       });
   };
 
+  // Gemini has no browser flow at all: the key is the sign-in, so the
+  // window is a paste box rather than a launch button.
+  const isGemini = provider?.id === "gemini";
+  const [keyValue, setKeyValue] = useState("");
+  const [savingKey, setSavingKey] = useState(false);
+  const saveKey = () => {
+    if (!keyValue.trim() || savingKey) return;
+    setSavingKey(true);
+    setReason(null);
+    void api
+      .setGeminiKey(keyValue.trim())
+      .then((r) => {
+        if (!live.current) return;
+        if (r.ok && !r.reason) {
+          // No source name: "Signed in using your api-key session" is not a
+          // sentence anyone should read.
+          onSignedIn();
+          return;
+        }
+        setReason(r.reason ?? null);
+        // Saved-but-unverified still closes nothing: the person decides.
+        if (r.ok) setKeyValue("");
+      })
+      .catch((e: Error) => {
+        if (live.current) setReason(e.message);
+      })
+      .finally(() => {
+        if (live.current) setSavingKey(false);
+      });
+  };
+
   const name = browser?.name ?? "your browser";
   const service = provider?.label ?? null;
   // Importing reads a cookie out of Firefox or Safari, and only ChatGPT
@@ -157,7 +189,11 @@ export function SignInModal({
         onClose();
       }}
       footer={
-        busy ? (
+        isGemini ? (
+          <button className="btn primary" disabled={!keyValue.trim() || savingKey} onClick={saveKey}>
+            {savingKey ? t("geminiKeySaving") : t("geminiKeySave")}
+          </button>
+        ) : busy ? (
           <>
             <button className="btn" onClick={cancel}>
               {t("cancel")}
@@ -182,13 +218,39 @@ export function SignInModal({
         )
       }
     >
-      {service && <p className="modal-note">{t("signInLead", { service })}</p>}
-      {browser === null ? (
-        <p className="modal-note" style={{ color: "var(--yellow)" }}>
-          {t("signInNoBrowser")}
-        </p>
+      {isGemini ? (
+        <>
+          <p className="modal-note">{t("geminiKeyLead")}</p>
+          <input
+            type="password"
+            className="gemini-key-input"
+            style={{ width: "100%", boxSizing: "border-box", marginTop: 8 }}
+            placeholder={t("geminiKeyPlaceholder")}
+            value={keyValue}
+            autoFocus
+            onChange={(e) => setKeyValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (composing(e)) return;
+              if (e.key === "Enter") saveKey();
+            }}
+          />
+          {reason && (
+            <p className="modal-note" style={{ color: "var(--yellow)" }}>
+              {reason}
+            </p>
+          )}
+        </>
       ) : (
-        service && <p className="modal-note">{t("signInHow", { browser: name, service })}</p>
+        <>
+          {service && <p className="modal-note">{t("signInLead", { service })}</p>}
+          {browser === null ? (
+            <p className="modal-note" style={{ color: "var(--yellow)" }}>
+              {t("signInNoBrowser")}
+            </p>
+          ) : (
+            service && <p className="modal-note">{t("signInHow", { browser: name, service })}</p>
+          )}
+        </>
       )}
       {phase === "waiting" && (
         <div className="content-loading" style={{ padding: "18px 0" }}>
@@ -209,7 +271,7 @@ export function SignInModal({
         </div>
       )}
 
-      {!busy && reason && (
+      {!isGemini && !busy && reason && (
         <p className="modal-note" style={{ color: "var(--yellow)" }}>
           {reason}
         </p>

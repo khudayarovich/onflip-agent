@@ -5,6 +5,8 @@ import { loadConfig, configDir } from "../config";
 import { cooldownRemainingMs, describeWait } from "./backoff";
 import { logger } from "../log";
 import { openCookieDb, readWithCopy } from "../auth/session";
+import { activeProvider } from "../providers/id";
+import { storedGeminiKey } from "../providers/gemini/api";
 
 /**
  * Checks that are *run*, not printed.
@@ -81,6 +83,13 @@ export interface DoctorEnvironment {
   signedOut: boolean;
   /** The browser channel the profile was created with. */
   browserChannel?: string;
+  /**
+   * The service this run drives. Absent means ChatGPT, which keeps every
+   * report written before providers existed reading exactly as it did.
+   */
+  provider?: string;
+  /** Whether a Gemini API key is stored; only read when provider is gemini. */
+  apiKeySet?: boolean;
 }
 
 const worst = (a: CheckStatus, b: CheckStatus): CheckStatus =>
@@ -93,6 +102,43 @@ export function runChecks(env: DoctorEnvironment): DoctorReport {
   const checks: Check[] = [];
   const add = (id: string, title: string, status: CheckStatus, message: string) =>
     checks.push({ id, title, status, message });
+
+  // Gemini has no session, profile, cookie reader or plan — its whole
+  // authentication story is one stored key — so the checks below would each
+  // report a fault about machinery it does not use. Reduced to what can
+  // actually break: the key, the throttle, and somewhere to write.
+  if (env.provider === "gemini") {
+    add(
+      "session",
+      "Gemini API key",
+      env.apiKeySet ? "ok" : "fail",
+      env.apiKeySet
+        ? "A key is stored. Whether Google accepts it is checked at start and shown in the account menu."
+        : "No API key. Create a free one at aistudio.google.com/apikey and paste it in Settings."
+    );
+    if (env.cooldownMs > 0) {
+      add(
+        "cooldown",
+        "Rate limit",
+        "warn",
+        `The Gemini API is rate-limiting this key — ${describeWait(env.cooldownMs)} left. The next turn waits it out.`
+      );
+    } else {
+      add("cooldown", "Rate limit", "ok", "No cooldown is running.");
+    }
+    const home = configDir();
+    if (!env.writable(home)) {
+      add(
+        "storage",
+        "Local storage",
+        "fail",
+        `${home} is not writable, so sessions, logs and settings cannot be saved. Check the folder's permissions.`
+      );
+    } else {
+      add("storage", "Local storage", "ok", `Writable at ${home}.`);
+    }
+    return { checks, status: checks.reduce((s, c) => worst(s, c.status), "ok" as CheckStatus) };
+  }
 
   // ---- the session, which is what actually breaks -------------------------
   if (env.signedOut) {
@@ -267,6 +313,8 @@ export function inspectEnvironment(): DoctorEnvironment {
     planType: cfg.planType,
     signedOut: cfg.signedOut === true,
     browserChannel: cfg.browserChannel,
+    provider: activeProvider(),
+    apiKeySet: Boolean(storedGeminiKey()),
   };
 }
 

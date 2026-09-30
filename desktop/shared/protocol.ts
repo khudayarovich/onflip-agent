@@ -415,6 +415,12 @@ export interface ConfigView {
   rules: { pattern: string; action: RuleAction }[];
   allowedCommands: string[];
   allowedWriteDirs: string[];
+  /**
+   * Whether a Gemini API key is stored (config or environment). The key
+   * itself never crosses the bridge: the settings panel only needs to know
+   * which of "paste one" and "replace it" to say.
+   */
+  geminiKeySet?: boolean;
 }
 
 export interface ExportResult {
@@ -534,6 +540,11 @@ export interface EngineMethods {
   /** The user says they are done in the window: close it and check. */
   finishBrowserSignIn: { params: Record<string, never>; result: boolean };
   cancelBrowserSignIn: { params: Record<string, never>; result: boolean };
+  /**
+   * Save (or, with an empty string, remove) the Gemini API key, checking it
+   * against Google before answering. Gemini's whole sign-in.
+   */
+  setGeminiKey: { params: { key: string }; result: { ok: boolean; reason?: string } };
   setBrowserViewport: {
     params: { width: number; height: number; scale?: number };
     result: { ok: boolean };

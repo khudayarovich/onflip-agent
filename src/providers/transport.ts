@@ -6,6 +6,7 @@ import {
 } from "../chatgpt/transport";
 import { DeepSeekTransport } from "./deepseek/transport";
 import { QwenTransport } from "./qwen/transport";
+import { GeminiTransport } from "./gemini/transport";
 import { activeProvider } from "./id";
 
 /**
@@ -32,6 +33,8 @@ export function chooseTransport(auth: {
       return { transport: new DeepSeekTransport(), reason: "DeepSeek browser profile" };
     case "qwen":
       return { transport: new QwenTransport(), reason: "Qwen browser profile" };
+    case "gemini":
+      return { transport: new GeminiTransport(), reason: "Gemini API key" };
     default:
       return chooseChatGptTransport(auth);
   }

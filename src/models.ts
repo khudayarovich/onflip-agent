@@ -1,6 +1,6 @@
 import { loadConfig, saveConfig } from "./config";
 import { prefersLunaByDefault, rationedPlan } from "./chatgpt/plans";
-import { activeProvider, isBrowserProvider } from "./providers/id";
+import { activeProvider, isApiKeyProvider, isBrowserProvider } from "./providers/id";
 
 /**
  * Model slugs.
@@ -147,10 +147,40 @@ const QWEN_MODELS: ModelInfo[] = [
   },
 ];
 
-/** The built-in list each browser-driven service offers, by provider. */
+/**
+ * Gemini's, as Google publishes them.
+ *
+ * Stable aliases only — `gemini-2.5-flash`, not a dated snapshot — because
+ * an alias keeps working when Google rotates the snapshot behind it. The
+ * list is a starting point, not a wall: `normalizeModel` passes an unknown
+ * slug through by design, so a model newer than this build is usable by
+ * typing its name, and a wrong name fails loudly here (the API answers 404)
+ * rather than silently running something else the way ChatGPT's `?model=`
+ * does.
+ */
+const GEMINI_MODELS: ModelInfo[] = [
+  {
+    slug: "gemini-2.5-flash",
+    label: "Gemini 2.5 Flash",
+    description: "fast and capable — the everyday model, with the free tier's best balance of rate and quality",
+  },
+  {
+    slug: "gemini-2.5-pro",
+    label: "Gemini 2.5 Pro",
+    description: "the strongest model — slower, and the free tier allows only a few requests a minute",
+  },
+  {
+    slug: "gemini-2.5-flash-lite",
+    label: "Gemini 2.5 Flash-Lite",
+    description: "lightest and fastest — the highest free-tier limits, for long unattended runs",
+  },
+];
+
+/** The built-in list each non-ChatGPT service offers, by provider. */
 const FIXED_MODELS: Record<string, ModelInfo[]> = {
   deepseek: DEEPSEEK_MODELS,
   qwen: QWEN_MODELS,
+  gemini: GEMINI_MODELS,
 };
 
 export function allModels(): ModelInfo[] {
@@ -258,7 +288,9 @@ export function effectiveModel(model: string, thinking: string | undefined): str
   // The browser-driven services reach reasoning through the page, not
   // through a slug, so there is no variant for a thinking level to open:
   // DeepSeek has a toggle beside its composer, and Qwen decides for itself.
-  if (isBrowserProvider()) return model;
+  // Gemini reaches it through a request parameter (`thinkingBudget`), which
+  // its transport sets — the slug never changes.
+  if (isBrowserProvider() || isApiKeyProvider()) return model;
   // On a rationed plan the reasoning variants are the metered models wearing
   // a different name: `-thinking` is not "the same model trying harder", it
   // is the allowance that runs out in minutes and locks for hours. The plan
@@ -370,6 +402,11 @@ export function modelContextTokens(slug: string | undefined): number | null {
     const hasSol = allModels().some((m) => /\bsol\b/i.test(`${m.slug} ${m.label}`));
     return hasSol ? 1_050_000 : null;
   }
+  // The 2.5 family's published input window, the same figure for Pro, Flash
+  // and Flash-Lite. Claimed by prefix so a newer Gemini typed by name still
+  // gets a window rather than the unknown-plan default — the family has
+  // never shipped a smaller one.
+  if (/^gemini-/i.test(slug)) return 1_048_576;
   const entry = allModels().find((m) => m.slug === slug);
   const name = `${slug} ${entry?.label ?? ""}`.toLowerCase();
   if (/\bsol\b|-sol\b/.test(name)) return 1_050_000;
@@ -463,7 +500,7 @@ export function modelBelongsToProvider(slug: string): boolean {
 }
 
 /**
- * How each browser-driven service's slugs begin.
+ * How each non-ChatGPT service's slugs begin.
  *
  * Only these can be recognised by shape. ChatGPT's are discovered per
  * account and change faster than any list here could, which is why it is the
@@ -472,6 +509,7 @@ export function modelBelongsToProvider(slug: string): boolean {
 const SLUG_PREFIX: Record<string, string> = {
   deepseek: "deepseek-",
   qwen: "qwen3-",
+  gemini: "gemini-",
 };
 
 /** A slug has to at least look like one before it is worth sending. */

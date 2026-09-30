@@ -36,6 +36,7 @@ import {
   COMPOSER_CEILING_CHARS,
   DEEPSEEK_CEILING_CHARS,
   QWEN_CEILING_CHARS,
+  GEMINI_CEILING_CHARS,
   ownBudgetCeiling,
   describePlan,
   planName,
@@ -44,7 +45,13 @@ import {
   rationedPlan,
   replyLimitFor,
 } from "onflip/dist/chatgpt/plans";
-import { activeProvider, isBrowserProvider, providerLabel } from "onflip/dist/providers/id";
+import { activeProvider, isApiKeyProvider, isBrowserProvider, providerLabel } from "onflip/dist/providers/id";
+import {
+  storedGeminiKey,
+  checkGeminiKey,
+  looksLikeGeminiKey,
+  GEMINI_KEY_URL,
+} from "onflip/dist/providers/gemini/api";
 import {
   reportsSignedIn,
   watchVerdict,
@@ -511,8 +518,9 @@ export class Engine {
     //
     // A browser-driven service starts with nothing, which is the truth: its
     // session lives in its own browser profile and the probe is what finds
-    // it.
-    this.auth = isBrowserProvider()
+    // it. Gemini likewise — its key is read by its own transport, and a
+    // ChatGPT token would be just as useless to it.
+    this.auth = isBrowserProvider() || isApiKeyProvider()
       ? { accessToken: "", model: "", maxIterations: 0, cookies: [], sessionToken: "" }
       : await resolveAuth();
     const choice = chooseTransport(this.auth);
@@ -578,13 +586,13 @@ export class Engine {
     // Free account's first start read no plan — the plan's navigation and
     // the first chat's aborted each other — so the session was sized as an
     // unknown plan and its first chat opened on the built-in model rather
-    // than the account's own. DeepSeek and Qwen have no plan or model list
-    // to learn, only a sign-in probe, and are not held for it.
+    // than the account's own. DeepSeek, Qwen and Gemini have no plan or
+    // model list to learn, only a probe, and are not held for it.
     const warming = (async () => {
       await this.checkSignInState().catch(() => {});
       await this.learnAccountModels().catch(() => {});
     })();
-    this.warming = isBrowserProvider() ? null : warming;
+    this.warming = isBrowserProvider() || isApiKeyProvider() ? null : warming;
 
     this.pushTranscript();
     const status = this.statusPayload();
@@ -754,7 +762,8 @@ export class Engine {
    */
   private relearnAccount(): void {
     this.accountVerified = false;
-    if (isBrowserProvider()) return;
+    // Only ChatGPT has a plan and a discovered model list to relearn.
+    if (isBrowserProvider() || isApiKeyProvider()) return;
     this.warming = this.learnAccountModels({ accountChanged: true }).catch(() => {});
   }
 
@@ -831,7 +840,12 @@ export class Engine {
     // signed-out account as ready. Reported from the field on the first
     // switch: "it says connected, but I have not signed in to DeepSeek".
     const onBrowserService = isBrowserProvider();
-    if (!onBrowserService && (this.transport.name !== "browser" || this.auth.cookies.length > 0)) {
+    // Gemini is probed like the browser services — a stored key is not a
+    // working key until Google has said so — its probe is just an HTTPS GET
+    // rather than a page. Without this, its transport (not named "browser")
+    // took the ChatGPT shortcut below and a keyless install reported ready.
+    const probesItself = onBrowserService || isApiKeyProvider();
+    if (!probesItself && (this.transport.name !== "browser" || this.auth.cookies.length > 0)) {
       this.emitConnect("ready");
       return;
     }
@@ -856,13 +870,17 @@ export class Engine {
       // desktop user on a fresh machine has no CLI, and when the cookie
       // reader could not run at all, saying "no session found" would blame
       // the account for a missing runtime.
-      const why = takeExtractError();
+      // The cookie reader's error is ChatGPT's alone: on Gemini it would
+      // explain a missing key with a story about browser cookies.
+      const why = activeProvider() === "chatgpt" ? takeExtractError() : null;
       const service = providerLabel();
       this.offerUnsentPrompt();
       this.emitConnect(
         "signed-out",
         state.reachable
-          ? `OnFlip is not signed in to ${service} — open the account menu (bottom left) and choose "Sign in".${why && !onBrowserService ? ` (${why})` : ""}`
+          ? isApiKeyProvider()
+            ? `OnFlip has no working ${service} key — open the account menu (bottom left) and choose "Sign in" to paste one. ${state.detail}`
+            : `OnFlip is not signed in to ${service} — open the account menu (bottom left) and choose "Sign in".${why ? ` (${why})` : ""}`
           : `${service} could not be reached (${state.detail}).`
       );
     } catch (e) {
@@ -1117,8 +1135,9 @@ export class Engine {
       tools: registry.list,
       context: this.context,
       approvalMode: this.approvalMode,
-      // ChatGPT's plans only: the browser-driven services have none.
-      replyLimitChars: isBrowserProvider() ? undefined : replyLimitFor(loadConfig().planType),
+      // ChatGPT's plans only: no other service has one.
+      replyLimitChars:
+        isBrowserProvider() || isApiKeyProvider() ? undefined : replyLimitFor(loadConfig().planType),
       shellEnabled: this.shellEnabled && this.approvalMode !== "read-only",
       // The prompt says different things to different services: only
       // ChatGPT has drawings OnFlip can carry into the folder, and only
@@ -1226,7 +1245,7 @@ export class Engine {
    */
   private contextBudgetSource(): string {
     if (this.config.compactAfterChars) {
-      const cap = isBrowserProvider() ? null : this.ownBudgetCap();
+      const cap = isBrowserProvider() || isApiKeyProvider() ? null : this.ownBudgetCap();
       if (cap && cap.chars < this.config.compactAfterChars) {
         return cap.because === "the model"
           ? "your own setting, capped at what the model can hold"
@@ -1234,7 +1253,7 @@ export class Engine {
       }
       return "your own setting";
     }
-    if (isBrowserProvider()) return `${providerLabel()}'s own limit`;
+    if (isBrowserProvider() || isApiKeyProvider()) return `${providerLabel()}'s own limit`;
     // With turns typed rather than uploaded, what one message can carry is
     // usually the binding limit and the plan only matters when it is
     // smaller - which is exactly the case worth naming.
@@ -1253,13 +1272,17 @@ export class Engine {
     // is how a Free account ended up sending more than its window holds.
     // DeepSeek's ceiling is its own, and it is not the composer's: measured,
     // 80,069 characters arrived in one send and were read to the end.
-    if (!this.config.compactAfterChars && isBrowserProvider()) {
+    if (!this.config.compactAfterChars && (isBrowserProvider() || isApiKeyProvider())) {
       // A table, not a chain with a fallback. The chain read "qwen, else
       // DeepSeek", so a fourth provider silently inherited DeepSeek's
       // 150,000 - a number measured on DeepSeek and on nothing else.
       const ceilings: Record<string, number> = {
         qwen: QWEN_CEILING_CHARS,
         deepseek: DEEPSEEK_CEILING_CHARS,
+        // Not a composer bound: the API takes the whole turn in one
+        // request. The free tier's per-minute token rate is what this
+        // protects — see the constant.
+        gemini: GEMINI_CEILING_CHARS,
       };
       return ceilings[activeProvider()] ?? COMPOSER_CEILING_CHARS;
     }
@@ -1268,8 +1291,9 @@ export class Engine {
       // Honoured up to what works, and capped there (see `ownBudgetCeiling`):
       // a transcript past the model's window is one it cannot see the start
       // of, and one past a typed message cannot be replayed when a chat is
-      // lost. DeepSeek's and Qwen's own settings pass as they are.
-      const cap = isBrowserProvider() ? null : this.ownBudgetCap();
+      // lost. DeepSeek's, Qwen's and Gemini's own settings pass as they are —
+      // Gemini's window is a million tokens, and nothing there is typed.
+      const cap = isBrowserProvider() || isApiKeyProvider() ? null : this.ownBudgetCap();
       return cap ? Math.min(own, cap.chars) : own;
     }
     return compactionBudget(
@@ -1363,7 +1387,10 @@ export class Engine {
     // Qwen as signed in.
     return reportsSignedIn({
       signedOut: Boolean(loadConfig().signedOut),
-      browserProvider: isBrowserProvider(),
+      // Gemini counts as "probe only" too: a stored key proves nothing
+      // until Google has accepted it, exactly as a browser profile proves
+      // nothing until its page answers.
+      browserProvider: isBrowserProvider() || isApiKeyProvider(),
       hasCookies: Boolean(this.auth?.cookies.length),
       hasStoredToken: Boolean(loadConfig().sessionToken),
       probe: this.probeSignedIn,
@@ -2793,6 +2820,10 @@ export class Engine {
     // app is not signing out of their browser. The flag is what stops the
     // next start from silently importing those cookies again.
     saveConfig({ signedOut: true });
+    // Signing out of Gemini is forgetting the key — nothing else exists.
+    // Saved as undefined so the file drops it: the key is shared rather
+    // than roomed, and `clearConfigKeys` only reaches the active room.
+    if (isApiKeyProvider()) saveConfig({ geminiApiKey: undefined });
     clearConfigKeys([
       "sessionInProfile",
       "sessionToken",
@@ -2818,7 +2849,11 @@ export class Engine {
       "signed-out",
       `Signed out of ${providerLabel()}. Use "Sign in to ${providerLabel()}" in the account menu when you want to work again.`
     );
-    this.notice("Signed out — the stored session and the browser profile have been cleared.");
+    this.notice(
+      isApiKeyProvider()
+        ? "Signed out — the stored API key has been removed."
+        : "Signed out — the stored session and the browser profile have been cleared."
+    );
     this.pushStatus();
     return { ok: true };
   }
@@ -2899,6 +2934,58 @@ export class Engine {
 
   cancelBrowserSignIn(): boolean {
     return cancelRealBrowserSignIn();
+  }
+
+  /**
+   * Gemini's whole sign-in: store the pasted key and ask Google whether it
+   * works. An empty string is the sign-out spelled from Settings.
+   *
+   * A refused key is still kept — a transient 403 must not eat a paste —
+   * but it is reported as refused, and the account state follows the check
+   * rather than the paste: "saved" and "working" are different facts, and
+   * the second is the one the banner claims.
+   */
+  async setGeminiKey(key: string): Promise<{ ok: boolean; reason?: string }> {
+    const trimmed = (key ?? "").trim();
+    if (!trimmed) {
+      saveConfig({ geminiApiKey: undefined });
+      this.config = loadConfig();
+      this.probeSignedIn = false;
+      this.account = null;
+      this.emitConnect(
+        "signed-out",
+        `The Gemini API key was removed. Paste a new one from ${GEMINI_KEY_URL} to work again.`
+      );
+      this.pushStatus();
+      return { ok: true };
+    }
+    if (!looksLikeGeminiKey(trimmed)) {
+      return {
+        ok: false,
+        reason: `That does not look like an API key — copy it whole from ${GEMINI_KEY_URL}.`,
+      };
+    }
+    saveConfig({ geminiApiKey: trimmed, signedOut: false });
+    this.config = loadConfig();
+    const check = await checkGeminiKey(trimmed);
+    if (check.signedIn) {
+      this.probeSignedIn = true;
+      this.emitConnect("ready");
+      this.notice("The Gemini API key was saved, and Google accepted it.");
+      this.pushStatus();
+      return { ok: true };
+    }
+    if (!check.reachable) {
+      // Saved, unverified. The probe answers for real on the next start or
+      // send; claiming either verdict now would be a guess.
+      this.notice(`The Gemini API key was saved, but ${check.detail} It will be tried on the first message.`);
+      this.pushStatus();
+      return { ok: true, reason: check.detail };
+    }
+    this.probeSignedIn = false;
+    this.emitConnect("signed-out", check.detail);
+    this.pushStatus();
+    return { ok: false, reason: check.detail };
   }
 
   removeSession(id: string): { ok: boolean } {
@@ -3058,7 +3145,7 @@ export class Engine {
     // and put 53 stored cookies into a profile. Worse, start() awaits this,
     // so a ChatGPT page that is slow or being challenged holds the whole
     // engine short of ready and every message sits at "sending".
-    if (isBrowserProvider()) return allModels();
+    if (isBrowserProvider() || isApiKeyProvider()) return allModels();
     const result = await discoverModels(this.auth);
     cacheModels(
       result.models.map((m) => ({
@@ -3175,6 +3262,8 @@ export class Engine {
       rules,
       allowedCommands: cfg.allowedCommands ?? [],
       allowedWriteDirs: cfg.allowedWriteDirs ?? [],
+      // Presence only — the key itself never crosses the bridge.
+      geminiKeySet: Boolean(storedGeminiKey()),
     };
   }
 
@@ -3219,6 +3308,7 @@ export class Engine {
     // over as a file, which every plan now declines by default.
     add("large turns", uploadsAvailable() ? "sent as a file" : "typed into the composer");
     add("signed in", this.hasSession() ? "yes" : "no");
+    if (isApiKeyProvider()) add("api key", storedGeminiKey() ? "stored" : "not stored");
     add("cooldown", cooldown > 0 ? `${Math.ceil(cooldown / 1000)}s remaining` : "none");
     lines.push("");
     add("approval", this.approvalMode);

@@ -39,12 +39,12 @@ const {
 
 // --- what counts as a provider ---------------------------------------------
 
-test("the three supported ids are accepted and retired providers are not", () => {
+test("the four supported ids are accepted and retired providers are not", () => {
   assert.equal(isProviderId("chatgpt"), true);
   assert.equal(isProviderId("deepseek"), true);
   assert.equal(isProviderId("qwen"), true);
+  assert.equal(isProviderId("gemini"), true);
   assert.equal(isProviderId("arena"), false);
-  assert.equal(isProviderId("gemini"), false);
   assert.equal(isProviderId(""), false);
   assert.equal(isProviderId(undefined), false);
   assert.equal(isProviderId(42), false);
@@ -62,7 +62,7 @@ test("no provider written means ChatGPT", () => {
 test("a value nobody recognises means ChatGPT, not a broken run", () => {
   // A hand-edited or corrupted config must not be able to strand someone on
   // a provider they have never signed in to.
-  write({ provider: "gemini" });
+  write({ provider: "grok" });
   assert.equal(activeProvider(), "chatgpt");
   write({ provider: "" });
   assert.equal(activeProvider(), "chatgpt");
@@ -111,4 +111,5 @@ test("the two cannot collide", () => {
 test("names are spelled for people", () => {
   assert.equal(providerLabel("chatgpt"), "ChatGPT");
   assert.equal(providerLabel("deepseek"), "DeepSeek");
+  assert.equal(providerLabel("gemini"), "Gemini API");
 });

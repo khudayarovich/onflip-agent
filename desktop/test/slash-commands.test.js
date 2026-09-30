@@ -50,6 +50,15 @@ test("and /thinking describes the switch DeepSeek actually has", { skip: needsBu
   assert.ok(!/medium/.test(thinking.description), "no levels that do not exist there");
 });
 
+test("Gemini loses the ChatGPT-only commands and keeps the real dial", { skip: needsBuild }, () => {
+  const offered = names(slashCommands("gemini"));
+  assert.ok(!offered.includes("/project"), "Gemini has no projects");
+  assert.ok(!offered.includes("/chats"), "and keeps no chats on any server");
+  const thinking = slashCommands("gemini").find((c) => c.name === "/thinking");
+  assert.ok(thinking, "the thinking dial is a real control — it sets the thinking budget");
+  assert.match(thinking.description, /medium/, "all four levels exist on Gemini");
+});
+
 test("filtering one service does not edit the list the other reads", { skip: needsBuild }, () => {
   slashCommands("deepseek");
   const chatgpt = slashCommands("chatgpt").find((c) => c.name === "/thinking");

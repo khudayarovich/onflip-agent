@@ -135,6 +135,8 @@ peer.onRequest = async (method, rawParams) => {
       return engine.finishBrowserSignIn();
     case "cancelBrowserSignIn":
       return engine.cancelBrowserSignIn();
+    case "setGeminiKey":
+      return engine.setGeminiKey(String(params.key ?? ""));
 
     case "recentProjects":
       return engine.recentProjectList();

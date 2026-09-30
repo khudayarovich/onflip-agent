@@ -70,6 +70,7 @@ const LABELS: Record<ProviderId, string> = {
   chatgpt: "ChatGPT",
   deepseek: "DeepSeek",
   qwen: "Qwen",
+  gemini: "Gemini API",
 };
 
 export function providerLabel(id: ProviderId = activeProvider()): string {
@@ -82,14 +83,28 @@ export function providerLabel(id: ProviderId = activeProvider()): string {
  * The question most of the app is actually asking when it asks whether it is
  * on DeepSeek. ChatGPT has an API behind it — a bearer token, a cookie jar,
  * projects, plans, a conversation list, a discovered model list — and the
- * others have none of that: their session lives in a browser profile and
- * everything happens on the page.
+ * browser-driven services have none of that: their session lives in a
+ * browser profile and everything happens on the page.
  *
- * Written as "not ChatGPT" rather than as a list, deliberately. A fourth
- * browser-driven service should need no edit here, and the one thing that
- * would need editing — a second service with a real API — is the one the
- * type system will not let anyone add quietly.
+ * This used to be written as "not ChatGPT", so a fourth browser-driven
+ * service needed no edit here. Gemini is the case that prediction reserved:
+ * a second service with a real API. It is not browser-driven — no profile,
+ * no page, no sign-in window, no selectors — so it is carved out rather than
+ * listed in, keeping the old property that a fifth *browser* service still
+ * needs no edit.
  */
 export function isBrowserProvider(id: ProviderId = activeProvider()): boolean {
-  return id !== "chatgpt";
+  return id !== "chatgpt" && !isApiKeyProvider(id);
+}
+
+/**
+ * Is this service reached with an API key rather than any kind of session?
+ *
+ * Gemini alone, today. Everything that follows from it: there is no browser
+ * to launch, park or clear, no sign-in window, no cookies to import, no page
+ * whose selectors can drift — and "signed in" means nothing more than "a key
+ * is stored and Google accepts it".
+ */
+export function isApiKeyProvider(id: ProviderId = activeProvider()): boolean {
+  return id === "gemini";
 }

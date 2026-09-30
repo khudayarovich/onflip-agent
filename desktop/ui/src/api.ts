@@ -52,6 +52,8 @@ export const api = {
     call<{ ok: boolean; reason?: string; browser?: string }>("signInWithBrowser"),
   finishBrowserSignIn: () => call<boolean>("finishBrowserSignIn"),
   cancelBrowserSignIn: () => call<boolean>("cancelBrowserSignIn"),
+  /** Gemini's whole sign-in: save the pasted key; empty removes it. */
+  setGeminiKey: (key: string) => call<{ ok: boolean; reason?: string }>("setGeminiKey", { key }),
 
 
   recentProjects: () => call<RecentProjectDTO[]>("recentProjects"),

@@ -53,8 +53,15 @@ test("DeepSeek gets its own transport, and needs no token", () => {
 });
 
 test("an unrecognised provider still lands on ChatGPT", () => {
-  write({ provider: "gemini" });
+  write({ provider: "grok" });
   assert.equal(chooseTransport(AUTH).transport.constructor.name, "BrowserTransport");
+});
+
+test("Gemini gets its own transport, and needs no token", () => {
+  write({ provider: "gemini" });
+  const { transport, reason } = chooseTransport(AUTH);
+  assert.equal(transport.constructor.name, "GeminiTransport");
+  assert.match(reason, /Gemini/);
 });
 
 test("both transports satisfy the contract the loop calls", () => {

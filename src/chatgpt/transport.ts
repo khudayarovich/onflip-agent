@@ -14,7 +14,7 @@ import {
 } from "./browser-client";
 import { buildTurnPrompt } from "../agent/protocol";
 import { planLimitNote, rationedPlan, TYPED_MESSAGE_CEILING_CHARS } from "./plans";
-import { isBrowserProvider } from "../providers/id";
+import { isBrowserProvider, isApiKeyProvider } from "../providers/id";
 import { loadConfig, firstPositiveInt } from "../config";
 import { logger } from "../log";
 import {
@@ -53,7 +53,11 @@ function replyTimeoutMs(): number {
  * what is new; the API replays the whole transcript every call.
  */
 export interface Transport {
-  readonly name: "browser" | "api";
+  // "browser" is both ChatGPT's browser transport and the browser-driven
+  // services'; "gemini" is the API-key transport. Everything that keys on
+  // the name asks "browser or not", so the new member changes no ChatGPT
+  // behaviour.
+  readonly name: "browser" | "api" | "gemini";
   send(history: ChatMessage[], opts: SendOptions): Promise<TransportReply>;
   /** Abandon the current conversation; the next send starts a new one. */
   reset(): void;
@@ -259,7 +263,8 @@ export function shouldAttachTurn(state: {
 export function uploadsAvailable(): boolean {
   // No browser-driven service has an upload path here: their transports type
   // every turn, and there is no attachment code behind them to fall back to.
-  if (isBrowserProvider()) return false;
+  // The Gemini transport is text-only too.
+  if (isBrowserProvider() || isApiKeyProvider()) return false;
   if (rationedPlan(loadConfig().planType)) return false;
   // Read live rather than from the module constant, so a test — or a session
   // launched with the override — answers for its own environment.

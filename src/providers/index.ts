@@ -6,7 +6,8 @@ import { deepseekProfileDir } from "./deepseek/session";
 import * as qw from "./qwen/browser";
 import * as qwSignIn from "./qwen/signin";
 import { qwenProfileDir } from "./qwen/session";
-import { activeProvider, isBrowserProvider, providerLabel } from "./id";
+import * as gemini from "./gemini/api";
+import { activeProvider, isApiKeyProvider, isBrowserProvider, providerLabel } from "./id";
 
 /**
  * The seam a provider plugs into.
@@ -100,25 +101,44 @@ const DRIVERS: Record<string, BrowserDriver> = {
   },
 };
 
-/** The driver for this run, or null when ChatGPT is answering. */
+/** The driver for this run, or null when ChatGPT or Gemini is answering. */
 function driver(): BrowserDriver | null {
   return isBrowserProvider() ? (DRIVERS[activeProvider()] ?? null) : null;
 }
 
+/**
+ * Gemini's side of this seam, spelled out route by route.
+ *
+ * It fits neither half of the old split. It is not a browser driver — no
+ * profile, no page, no sign-in window — so putting it in `DRIVERS` would
+ * hand it a `profileDir` that a sign-out would then delete, and it is not
+ * ChatGPT, so falling through to the default branch would launch ChatGPT's
+ * browser to answer questions about a service that has no browser at all.
+ * So every function below asks `isApiKeyProvider()` before the driver, and
+ * answers with the shape that means absence — or, for the session, with a
+ * key check against the API itself.
+ */
+
+
 // --- what the browser-driven services genuinely have -----------------------
 
 export function configureBrowser(opts: Parameters<typeof chatgpt.configureBrowser>[0]): void {
-  // Headed/profile options are ChatGPT's; the others read their own.
-  if (driver()) return;
+  // Headed/profile options are ChatGPT's; the others read their own, and
+  // Gemini has no browser for them to describe.
+  if (driver() || isApiKeyProvider()) return;
   chatgpt.configureBrowser(opts);
 }
 
 export async function closeBrowser(): Promise<void> {
+  if (isApiKeyProvider()) return;
   const d = driver();
   return d ? d.closeBrowser() : chatgpt.closeBrowser();
 }
 
 export async function clearBrowserProfile(): Promise<void> {
+  // Nothing of Gemini's lives in a browser profile — and falling through
+  // would clear ChatGPT's, which a Gemini sign-out has no business touching.
+  if (isApiKeyProvider()) return;
   const d = driver();
   if (!d) return chatgpt.clearBrowserProfile();
   const { rm } = await import("node:fs/promises");
@@ -129,6 +149,8 @@ export async function clearBrowserProfile(): Promise<void> {
 export async function checkSignedIn(
   cookies: SessionCookie[]
 ): Promise<{ signedIn: boolean; reachable: boolean; detail: string }> {
+  // "Signed in" on Gemini means one thing: a stored key Google accepts.
+  if (isApiKeyProvider()) return gemini.checkGeminiKey();
   const d = driver();
   if (!d) return chatgpt.checkSignedIn(cookies);
   // More than one look. A cold headless browser on a profile takes seconds to
@@ -155,6 +177,12 @@ export async function checkSignedIn(
 export async function signInWithRealBrowser(
   onProgress?: (state: "waiting" | "verifying" | "downloading") => void
 ): Promise<Awaited<ReturnType<typeof chatgpt.signInWithRealBrowser>>> {
+  if (isApiKeyProvider()) {
+    return {
+      ok: false,
+      reason: `Gemini API signs in with a key, not a browser. Create a free one at ${gemini.GEMINI_KEY_URL} and paste it in the sign-in window or in Settings.`,
+    };
+  }
   const d = driver();
   if (!d) return chatgpt.signInWithRealBrowser(onProgress);
   const result = await d.signIn.signInWithRealBrowser((state) => onProgress?.(state));
@@ -166,6 +194,7 @@ export async function signInWithRealBrowser(
 }
 
 export function finishRealBrowserSignIn(): boolean {
+  if (isApiKeyProvider()) return false;
   const d = driver();
   if (!d) return chatgpt.finishRealBrowserSignIn();
   if (!d.signIn.signInRunning()) return false;
@@ -174,6 +203,7 @@ export function finishRealBrowserSignIn(): boolean {
 }
 
 export function cancelRealBrowserSignIn(): boolean {
+  if (isApiKeyProvider()) return false;
   const d = driver();
   if (!d) return chatgpt.cancelRealBrowserSignIn();
   if (!d.signIn.signInRunning()) return false;
@@ -182,6 +212,9 @@ export function cancelRealBrowserSignIn(): boolean {
 }
 
 export function currentConversationId(): string | null {
+  // The Gemini API is stateless: there is no conversation on any server to
+  // have an id.
+  if (isApiKeyProvider()) return null;
   const d = driver();
   return d ? d.currentConversationId() : chatgpt.currentConversationId();
 }
@@ -195,25 +228,28 @@ export function currentConversationId(): string | null {
  * Temporary Chat — the default — never reaches the account's history.
  */
 export function chatsAreFiled(): boolean {
-  return driver() ? false : !chatgpt.temporaryChats();
+  return driver() || isApiKeyProvider() ? false : !chatgpt.temporaryChats();
 }
 
-/** Projects are ChatGPT's; neither of the others has an equivalent. */
+/** Projects are ChatGPT's; none of the others has an equivalent. */
 export async function listProjects(cookies: SessionCookie[]): Promise<chatgpt.RemoteProject[]> {
-  return driver() ? [] : chatgpt.listProjects(cookies);
+  return driver() || isApiKeyProvider() ? [] : chatgpt.listProjects(cookies);
 }
 
 export async function createProject(
   cookies: SessionCookie[],
   name: string
 ): Promise<chatgpt.RemoteProject> {
+  if (isApiKeyProvider()) {
+    throw new Error(`${providerLabel()} has no projects. Use a folder on this machine instead.`);
+  }
   const d = driver();
   if (d) throw new Error(`${d.label} has no projects. Use a folder on this machine instead.`);
   return chatgpt.createProject(cookies, name);
 }
 
 export function setActiveProject(project: chatgpt.RemoteProject | null): void {
-  if (driver()) return;
+  if (driver() || isApiKeyProvider()) return;
   chatgpt.setActiveProject(project);
 }
 
@@ -222,16 +258,16 @@ export async function listProjectConversations(
   projectId: string,
   limit?: number
 ): Promise<chatgpt.RemoteConversation[]> {
-  return driver() ? [] : chatgpt.listProjectConversations(cookies, projectId, limit);
+  return driver() || isApiKeyProvider() ? [] : chatgpt.listProjectConversations(cookies, projectId, limit);
 }
 
 export async function sweepConversationsIntoProject(ids: string[]): Promise<void> {
-  if (driver()) return;
+  if (driver() || isApiKeyProvider()) return;
   return chatgpt.sweepConversationsIntoProject(ids);
 }
 
 export function takeProjectWarning(): string | null {
-  return driver() ? null : chatgpt.takeProjectWarning();
+  return driver() || isApiKeyProvider() ? null : chatgpt.takeProjectWarning();
 }
 
 /**
@@ -243,7 +279,7 @@ export function takeProjectWarning(): string | null {
  * service's limit is what its composer will take.
  */
 export async function fetchAccountPlan(cookies: SessionCookie[]): Promise<string | null> {
-  return driver() ? null : chatgpt.fetchAccountPlan(cookies);
+  return driver() || isApiKeyProvider() ? null : chatgpt.fetchAccountPlan(cookies);
 }
 
 /** Conversation listing is ChatGPT's sidebar; the others' are not read yet. */
@@ -251,20 +287,23 @@ export async function listConversations(
   cookies: SessionCookie[],
   limit?: number
 ): Promise<chatgpt.RemoteConversation[]> {
-  return driver() ? [] : chatgpt.listConversations(cookies, limit);
+  return driver() || isApiKeyProvider() ? [] : chatgpt.listConversations(cookies, limit);
 }
 
 export async function openConversation(
   cookies: SessionCookie[],
   id: string
 ): Promise<chatgpt.RemoteMessage[]> {
+  if (isApiKeyProvider()) {
+    throw new Error(`${providerLabel()} keeps no conversations on a server, so there is nothing to reopen.`);
+  }
   const d = driver();
   if (d) throw new Error(`Opening an existing ${d.label} conversation is not supported yet.`);
   return chatgpt.openConversation(cookies, id);
 }
 
 export function openedConversationIds(): string[] {
-  return driver() ? [] : chatgpt.openedConversationIds();
+  return driver() || isApiKeyProvider() ? [] : chatgpt.openedConversationIds();
 }
 
 export async function deleteConversations(
@@ -272,12 +311,17 @@ export async function deleteConversations(
   ids: string[]
 ): Promise<{ deleted: string[]; failed: string[] }> {
   // Nothing was opened remotely, so there is nothing of OnFlip's to remove.
-  return driver() ? { deleted: [], failed: [] } : chatgpt.deleteConversations(cookies, ids);
+  return driver() || isApiKeyProvider()
+    ? { deleted: [], failed: [] }
+    : chatgpt.deleteConversations(cookies, ids);
 }
 
 export async function pageSessionUser(
   cookies: SessionCookie[]
 ): Promise<{ name?: string; email?: string; planType?: string } | null> {
+  // An API key carries no account identity worth showing; the sidebar's
+  // honest fallback ("Gemini API account") is better than a guess.
+  if (isApiKeyProvider()) return null;
   const d = driver();
   if (!d) return chatgpt.pageSessionUser(cookies);
   const check = await d.checkSignedIn();
@@ -288,7 +332,7 @@ export async function pageSessionUser(
 }
 
 export function takeReplyImages(): chatgpt.ReplyImage[] {
-  return driver() ? [] : chatgpt.takeReplyImages();
+  return driver() || isApiKeyProvider() ? [] : chatgpt.takeReplyImages();
 }
 
 /**
@@ -306,11 +350,16 @@ export function takeReplyImages(): chatgpt.ReplyImage[] {
  * that silently discards what was put in it is the failure worth avoiding.
  */
 export function queueAttachments(paths: string[]): void {
+  // Gemini takes the paths, drops them, and says so through the warning
+  // channel — the Qwen rule: declining out loud beats a queue that silently
+  // discards what was put in it.
+  if (isApiKeyProvider()) return gemini.declineAttachments(paths);
   const d = driver();
   return d ? d.queueAttachments(paths) : chatgpt.queueAttachments(paths);
 }
 
 export function takeComposerWarning(): string | null {
+  if (isApiKeyProvider()) return gemini.takeComposerWarning();
   const d = driver();
   return d ? d.takeComposerWarning() : chatgpt.takeComposerWarning();
 }
@@ -325,6 +374,12 @@ export function takeComposerWarning(): string | null {
 export async function checkSelectorsLive(
   cookies: SessionCookie[]
 ): Promise<{ ok: boolean; matches: Record<string, number>; detail: string }> {
+  // Gemini has no page whose selectors could drift; what can break is the
+  // key, so the deep check asks the API the same question the probe does.
+  if (isApiKeyProvider()) {
+    const check = await gemini.checkGeminiKey();
+    return { ok: check.signedIn, matches: {}, detail: check.detail };
+  }
   const d = driver();
   if (!d) return chatgpt.checkSelectorsLive(cookies);
   return d.checkSelectors();
@@ -338,6 +393,7 @@ export {
   providerStateDir,
   providerLabel,
   isBrowserProvider,
+  isApiKeyProvider,
   isProviderId,
   DEFAULT_PROVIDER,
   PROVIDER_IDS,
