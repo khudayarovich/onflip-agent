@@ -87,7 +87,7 @@ export const COMMAND_MENU: { name: CommandName; description: string }[] = [
   // word the config, the engine and the account menu all use. Renaming either
   // to match the other would be worse: "provider" means nothing to someone
   // holding a phone, and the code would then have two names for one idea.
-  { name: "provider", description: "Switch service — ChatGPT, DeepSeek or Qwen" },
+  { name: "provider", description: "Switch service — ChatGPT, DeepSeek, Qwen or Gemini API" },
   { name: "thinking", description: "How hard it should reason" },
   { name: "access", description: "What it may do without asking" },
   { name: "stop", description: "Stop the turn that is running" },

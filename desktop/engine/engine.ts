@@ -2709,6 +2709,18 @@ export class Engine {
     cookies: { name: string; value: string }[],
     account?: { name?: string; email?: string }
   ): Promise<{ ok: boolean }> {
+    // ChatGPT's cookies are the only thing this can be handed, so on any
+    // other service it must refuse rather than oblige: run here, it would
+    // report "signed in to DeepSeek/Gemini" on the strength of a ChatGPT
+    // session and file the ChatGPT account's name into that service's room
+    // — the cross-service identity bug this app has shipped twice. The UI
+    // hides its buttons off ChatGPT and the main process refuses its own
+    // route, but this is an exposed RPC, and an exposed RPC guards itself.
+    if (activeProvider() !== "chatgpt") {
+      throw new Error(
+        `This sign-in imports a ChatGPT session, and ${providerLabel()} is the service running. Use "Sign in" in the account menu instead.`
+      );
+    }
     // The session token may arrive whole or split across `.0`/`.1`; anything
     // else in the jar is a session cookie but not *the* one, and picking the
     // first long value would happily store a Cloudflare cookie instead.
@@ -2792,6 +2804,14 @@ export class Engine {
     reason?: string;
     report?: { browser: string; outcome: string; detail?: string }[];
   }> {
+    // Firefox and Safari hold ChatGPT sessions, nothing another service can
+    // use — see `applySignIn` for what obliging anyway would file where.
+    if (activeProvider() !== "chatgpt") {
+      return {
+        ok: false,
+        reason: `A browser import finds ChatGPT sessions, and ${providerLabel()} is the service running. Use "Sign in" in the account menu instead.`,
+      };
+    }
     const extracted = spawnExtractToken();
     const report = lastBrowserFindings();
     // Logged either way. This ran silently before, so an import that failed
@@ -2831,8 +2851,13 @@ export class Engine {
     saveConfig({ signedOut: true });
     // Signing out of Gemini is forgetting the key — nothing else exists.
     // Saved as undefined so the file drops it: the key is shared rather
-    // than roomed, and `clearConfigKeys` only reaches the active room.
-    if (isApiKeyProvider()) saveConfig({ geminiApiKey: undefined });
+    // than roomed, and `clearConfigKeys` only reaches the active room. The
+    // model list goes with it: it was that key's account's answer, and the
+    // next key discovers its own.
+    if (isApiKeyProvider()) {
+      saveConfig({ geminiApiKey: undefined });
+      clearConfigKeys(["geminiModels"]);
+    }
     clearConfigKeys([
       "sessionInProfile",
       "sessionToken",
@@ -3472,7 +3497,9 @@ export class Engine {
           ...base.checks,
           {
             id: "selectors",
-            title: "ChatGPT page",
+            // The same title the finished check would carry — on Gemini the
+            // live half asks the API about the key, not a page.
+            title: isApiKeyProvider() ? "Gemini API" : "ChatGPT page",
             status: "warn" as const,
             message: "Skipped while a turn is running — try again once it has finished.",
           },

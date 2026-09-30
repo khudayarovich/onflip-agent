@@ -610,16 +610,23 @@ export async function generateStream(args: {
 
   const reader = res.body?.getReader();
   if (!reader) throw new GeminiError("The Gemini API answered with an empty body.");
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    const { events, rest } = drainSseBuffer(buffer);
-    buffer = rest;
-    for (const payload of events) take(payload);
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const { events, rest } = drainSseBuffer(buffer);
+      buffer = rest;
+      for (const payload of events) take(payload);
+    }
+    buffer += decoder.decode();
+    for (const payload of drainSseBuffer(`${buffer}\n`).events) take(payload);
+  } catch (e) {
+    // A throw mid-stream — a blocked prompt, an abort — must not leave the
+    // connection open behind it.
+    await reader.cancel().catch(() => {});
+    throw e;
   }
-  buffer += decoder.decode();
-  for (const payload of drainSseBuffer(`${buffer}\n`).events) take(payload);
 
   return reply;
 }
