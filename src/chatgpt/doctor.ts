@@ -414,12 +414,16 @@ export async function runDeepDoctor(
   checkLive: () => Promise<{ ok: boolean; matches: Record<string, number>; detail: string }>
 ): Promise<DoctorReport> {
   const base = runDoctor();
+  // Gemini has no page; its "live" half asks the API about the key, and
+  // titling that "ChatGPT page" would be the label bug this app has already
+  // shipped twice. The other services keep the title they have always had.
+  const title = activeProvider() === "gemini" ? "Gemini API" : "ChatGPT page";
   let live: Check;
   try {
     const result = await checkLive();
     live = {
       id: "selectors",
-      title: "ChatGPT page",
+      title,
       // A check that could not run is not a check that failed: no network,
       // or a signed-out page, says nothing about whether the selectors are
       // still right.
@@ -429,7 +433,7 @@ export async function runDeepDoctor(
   } catch (e) {
     live = {
       id: "selectors",
-      title: "ChatGPT page",
+      title,
       status: "warn",
       message: `The page could not be checked: ${e instanceof Error ? e.message.slice(0, 160) : String(e)}`,
     };
