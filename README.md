@@ -4,9 +4,9 @@
 
 # OnFlip
 
-**An agent for coding and everyday tasks, powered by a chat account you already have — ChatGPT, DeepSeek or Qwen.**
+**An agent for coding and everyday tasks, powered by a chat account you already have — ChatGPT, DeepSeek, Qwen, or Google's Gemini API.**
 
-No API key. No per-token billing. On ChatGPT's free plan — or on DeepSeek or Qwen — no bill at all.
+No per-token billing. On ChatGPT's free plan — or on DeepSeek, Qwen, or Gemini's free API tier — no bill at all.
 
 [![Download](https://img.shields.io/github/v/release/khudayarovich/onflip-agent?label=download&sort=semver)](https://github.com/khudayarovich/onflip-agent/releases/latest)
 [![CI](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml/badge.svg)](https://github.com/khudayarovich/onflip-agent/actions/workflows/ci.yml)
@@ -24,10 +24,10 @@ One task is never one message. "Fix this failing test" is a dozen or more: read
 the file, run the build, read the error, edit, run it again. That multiplication
 is what makes API-priced agents expensive — every step is billed.
 
-OnFlip is not priced per step, because it does not use the API. It drives the
-chat session you are already signed in to — ChatGPT, DeepSeek or Qwen —
-so an agent that works all afternoon costs exactly what your account already
-costs:
+OnFlip is not priced per step. It drives the chat session you are already
+signed in to — ChatGPT, DeepSeek or Qwen — or, on Gemini, Google's own API on
+its free tier, so an agent that works all afternoon costs exactly what your
+account already costs:
 
 > **On the Free and Go plans, that is nothing.** In August 2026 OpenAI made
 > **GPT-5.6 Luna** the default for Free and Go users and
@@ -45,10 +45,13 @@ The honest caveat: unlimited covers *text*. Free accounts still have limits on
 file uploads, which OnFlip uses to hand over unusually large turns, so very
 long sessions go further on a paid plan.
 
-> **Or skip plans entirely.** OnFlip also drives two free services, switched
-> from the account menu. **DeepSeek** has no tiers to work around: Instant,
-> Expert and Vision modes, DeepThink on or off, and image attachments. **Qwen**
-> offers two models and decides for itself when to think.
+> **Or skip plans entirely.** OnFlip also drives three free services, switched
+> from the account menu. **DeepSeek** has no tiers to work around: one model
+> for everything, DeepThink on or off, and image attachments. **Qwen** offers
+> two models and decides for itself when to think. **Gemini API** needs no
+> sign-in at all — a free key from
+> [Google AI Studio](https://aistudio.google.com/api-keys), pasted once, and
+> OnFlip talks to Google's API directly on its free tier.
 
 ## What it is
 
@@ -66,15 +69,16 @@ OnFlip drives one service at a time, switched from the account menu — the app
 restarts on the one you pick. Each keeps its own sign-in, chats, projects and
 settings, and nothing crosses between them.
 
-| | ChatGPT | DeepSeek | Qwen |
-| --- | --- | --- | --- |
-| Cost | Free plan upward | Free | Free |
-| Models | Whatever your plan offers | Instant · Expert · Vision | Qwen3 Plus · Qwen3 Max |
-| Reasoning | Off · low · medium · high | DeepThink on or off | Decides for itself |
-| Attachments | Yes (upload limits by plan) | Yes | Not yet |
-| Projects | Yes — chats filed into an "OnFlip" project | No | No |
-| Reopen earlier chats | Yes | Only ones OnFlip started | Only ones OnFlip started |
-| Usage caps | Per plan, as above | None to work around | A daily allowance |
+| | ChatGPT | DeepSeek | Qwen | Gemini API |
+| --- | --- | --- | --- | --- |
+| Sign-in | Browser session | Browser session | Browser session | A free API key, pasted once |
+| Cost | Free plan upward | Free | Free | Free tier upward |
+| Models | Whatever your plan offers | One model | Qwen3 Plus · Qwen3 Max | Whatever your key offers, newest first |
+| Reasoning | Off · low · medium · high | DeepThink on or off | Decides for itself | Off · low · medium · high (thinking budget) |
+| Attachments | Yes (upload limits by plan) | Yes | Not yet | Not yet |
+| Projects | Yes — chats filed into an "OnFlip" project | No | No | No |
+| Reopen earlier chats | Yes | Only ones OnFlip started | Only ones OnFlip started | Chats live only on your machine |
+| Usage caps | Per plan, as above | None to work around | A daily allowance | Free-tier rate limits, waited out |
 
 ## Install
 
@@ -87,14 +91,19 @@ Download the latest build from the [releases page](https://github.com/khudayarov
 | macOS (Intel) | `OnFlip-<version>-mac-x64.dmg` | Same as above. |
 
 On first launch OnFlip asks you to sign in to the service it is set to — ChatGPT
-by default; DeepSeek and Qwen sign in the same way. **Open Chrome to sign in** starts your real Chrome (or Edge, or the bundled browser when neither is installed) on a private profile that belongs to OnFlip — no automation, no flags, exactly the browser you use every day, so Google, Apple, Microsoft and email sign-ins all work. Sign in there, close the window when the chat page appears, and OnFlip drives that same profile from then on. Nothing is decrypted or copied out of your own browser, and your everyday browser profile is never touched.
+by default; DeepSeek and Qwen sign in the same way, and **Gemini API skips all
+of this**: paste a free key from
+[Google AI Studio](https://aistudio.google.com/api-keys) into the sign-in
+window or Settings, and there is no browser involved at all. For the
+browser-based services, **Open Chrome to sign in** starts your real Chrome (or Edge, or the bundled browser when neither is installed) on a private profile that belongs to OnFlip — no automation, no flags, exactly the browser you use every day, so Google, Apple, Microsoft and email sign-ins all work. Sign in there, close the window when the chat page appears, and OnFlip drives that same profile from then on. Nothing is decrypted or copied out of your own browser, and your everyday browser profile is never touched.
 
 Already signed in to ChatGPT in Firefox, or in Safari on a Mac? **Use my Firefox or Safari session** imports it directly (Safari needs OnFlip to be granted Full Disk Access). Chrome and Edge encrypt their cookies with a key bound to the browser, so those sessions cannot be read by anything else — that is the browser's protection, and OnFlip does not go around it; the sign-in above is the way in for them. A machine with neither Chrome nor Edge gets OnFlip's own bundled browser, downloaded once (about 150 MB) the first time it is needed.
 
 The session lives in `~/.onflip/browser-profile` (each other service's in
 `~/.onflip/providers/<service>/browser-profile`), together with the browser it
-was made with, and survives restarts. **Sign out** in the account menu clears
-the one for the service you are on, and leaves the rest alone.
+was made with, and survives restarts. Gemini keeps no profile at all — its key
+sits in OnFlip's config. **Sign out** in the account menu clears the one for
+the service you are on (the key, on Gemini), and leaves the rest alone.
 
 Google refuses OAuth inside an embedded or automated browser, so every
 service's sign-in opens your real one — which is why signing in with Google,
@@ -107,7 +116,7 @@ Apple or Microsoft works at all.
 - **Run commands.** A real shell, behind an approval layer you control — from read-only through to unrestricted.
 - **Browse.** A real browser you can watch *and touch*: click, scroll and type into the page the agent is driving, then hand it back.
 - **Two sessions at once.** Each window runs its own agent with its own browser, the way two chat tabs are two conversations.
-- **Three services.** ChatGPT, DeepSeek or Qwen, switched from the account menu, each with its own sign-in and its own chats.
+- **Four services.** ChatGPT, DeepSeek, Qwen or Gemini API, switched from the account menu, each with its own sign-in and its own chats.
 - **Sub-tasks.** Hand a self-contained job to a second agent with a conversation of its own, and watch what it did in the Sub-tasks panel. Off by default — it spends more of your allowance — and one switch away in Settings.
 - **Telegram.** Add a bot token and drive the same agent from your phone: send tasks, approve actions, switch models and services.
 - **Look after itself.** A turn that goes silent is restarted automatically (three attempts, then it tells you); a service's own errors are quoted in the chat rather than spun on; updates install in place, checksum-verified.
@@ -159,17 +168,17 @@ Approvals can be granted once or remembered as a rule (`git *` allowed, `rm *` d
 ## How it works
 
 ```
-┌──────────────┐     ndjson RPC     ┌───────────────┐    Playwright    ┌────────────┐
-│  Electron UI │ ◄────────────────► │ engine (Node) │ ◄──────────────► │  ChatGPT   │
-└──────────────┘                    └───────────────┘                  │  DeepSeek  │
-                                            │                          │    Qwen    │
-                                            │                          └────────────┘
-                                       tools│ files · shell · browser · web
+┌──────────────┐     ndjson RPC     ┌───────────────┐    Playwright     ┌────────────┐
+│  Electron UI │ ◄────────────────► │ engine (Node) │ ◄───────────────► │  ChatGPT   │
+└──────────────┘                    └───────────────┘                   │  DeepSeek  │
+                                            │        ◄── HTTPS ──────►  │    Qwen    │
+                                            │                           │ Gemini API │
+                                       tools│ files · shell · browser   └────────────┘
                                             ▼
                                      your computer
 ```
 
-The renderer draws; it never touches your files. The **engine** is a separate Node process that owns the agent loop, the tools and the approval policy. It talks to the chat service by driving a real browser session — the same pages you would use yourself — and turns replies into tool calls it executes locally. Which service that is sits behind one seam, so the agent loop, the tools and the approval policy are the same code either way.
+The renderer draws; it never touches your files. The **engine** is a separate Node process that owns the agent loop, the tools and the approval policy. It talks to the chat services by driving a real browser session — the same pages you would use yourself — except Gemini, which it reaches over plain HTTPS with your key, and turns replies into tool calls it executes locally. Which service that is sits behind one seam, so the agent loop, the tools and the approval policy are the same code either way.
 
 One window pairs with one engine, which is what makes two concurrent sessions genuinely independent.
 
@@ -177,7 +186,7 @@ There is no OnFlip server. Nothing is sent anywhere except to the chat service y
 
 ## Your data
 
-- **Your sessions** — one per service — are stored on your machine (`~/.onflip`) and used only to talk to that service. They are kept apart on disk, and none can read another's.
+- **Your sessions** — one per service — are stored on your machine (`~/.onflip`) and used only to talk to that service. They are kept apart on disk, and none can read another's. The Gemini key is stored the same way, sent only to Google, and never shown back once pasted.
 - **Conversations** are plain JSON on disk, readable and deletable by hand.
 - **Files** are read and written where you point the agent; nothing is uploaded anywhere else.
 - **Chats OnFlip creates** on chatgpt.com are filed into an "OnFlip" project so they stay out of your main list, and deleting a session offers to delete them too. DeepSeek has no projects, so its chats stay in its own list.
@@ -188,13 +197,13 @@ There is no OnFlip server. Nothing is sent anywhere except to the chat service y
 
 **Why can't it just read my Chrome session?** Chrome and Edge encrypt their cookies with a key bound to the browser itself, and recent Chrome refuses to be driven with its own profile. Both are deliberate anti-theft protections, and the ways around them are the ways malware gets in — so OnFlip does not go around them. Instead it signs in inside the real browser on a profile of its own, and drives that profile afterwards with the same browser, which can read its own cookies. Firefox sessions can still be imported directly.
 
-**Which model does it use?** On ChatGPT, whatever your account offers, chosen from the model chip: Free and Go accounts default to GPT-5.6 Luna, the plan with unlimited text chats; Plus and Pro run GPT-5.6 Sol in regular chat. On DeepSeek the chip offers its three modes — Instant, Expert and Vision. On Qwen, two models that decide for themselves when to think. OnFlip sizes its context budget from whichever service and model you are on.
+**Which model does it use?** On ChatGPT, whatever your account offers, chosen from the model chip: Free and Go accounts default to GPT-5.6 Luna, the plan with unlimited text chats; Plus and Pro run GPT-5.6 Sol in regular chat. On DeepSeek there is one model, with DeepThink on or off. On Qwen, two models that decide for themselves when to think. On Gemini, the chip lists what your own key reports, newest generation first, and defaults to the current Flash. OnFlip sizes its context budget from whichever service and model you are on.
 
 **Can I use several accounts?** Yes, one at a time. Switching restarts the app on the service you pick; every sign-in stays valid, so switching back needs no new login.
 
-**Does it cost anything per message?** No. There is no API key and nothing metered — the work costs whatever your ChatGPT account costs, which on the Free and Go plans is nothing. Limits still apply to things that are not plain text (image generation, file uploads), and when ChatGPT throttles an account OnFlip waits it out rather than hammering it.
+**Does it cost anything per message?** No. Nothing is billed per token — the work costs whatever your account costs, which on ChatGPT's Free and Go plans, on DeepSeek and Qwen, and on Gemini's free API tier is nothing. Limits still apply (image generation and file uploads on ChatGPT; requests per minute and per day on Gemini's free tier), and when a service throttles an account OnFlip waits out the stated pause rather than hammering it.
 
-**Do I need a paid plan?** No. A free ChatGPT account runs the agent, and unlimited text chats suit an agent workload of many small messages. A paid plan buys a much larger context window, so long sessions compact themselves less often — and DeepSeek is free outright, with no tiers at all.
+**Do I need a paid plan?** No. A free ChatGPT account runs the agent, and unlimited text chats suit an agent workload of many small messages. A paid plan buys a much larger context window, so long sessions compact themselves less often — DeepSeek is free outright, and a Gemini key's free tier is made for exactly this kind of use.
 
 ## Building from source
 
@@ -218,4 +227,4 @@ Bug reports and pull requests are welcome — see [CONTRIBUTING.md](CONTRIBUTING
 
 [MIT](LICENSE) © Farrukh Khudayarovich Yuldashev
 
-OnFlip is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI, DeepSeek or Alibaba Cloud (Qwen).
+OnFlip is an independent project. It is not affiliated with, endorsed by, or sponsored by OpenAI, DeepSeek, Alibaba Cloud (Qwen) or Google (Gemini).

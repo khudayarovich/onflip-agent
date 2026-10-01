@@ -361,7 +361,7 @@ const en = {
   aboutTagline: "Your agent for code and everyday tasks, powered by a chat account you already have.",
   aboutIdeaTitle: "How it works",
   aboutIdea:
-    "OnFlip drives an ordinary chat through a real browser — the same conversation you could type at chatgpt.com, chat.deepseek.com or chat.qwen.ai. No API key, no per-token billing: the agent rides on an account you already have, so it adds no separate API costs or usage limits. The model does the thinking on the service's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
+    "OnFlip drives an ordinary chat through a real browser — the same conversation you could type at chatgpt.com, chat.deepseek.com or chat.qwen.ai — or, on Gemini, Google's own API with a free key. No per-token billing either way: the agent rides on an account you already have. The model does the thinking on the service's side, while every file edit and shell command runs locally on your machine, behind an approval layer you control.",
   aboutServicesTitle: "Services",
   aboutServicesIntro:
     "One at a time, switched from the account menu. Each keeps its own sign-in, chats, projects and settings — nothing crosses between them.",
@@ -371,6 +371,8 @@ const en = {
     "Free, with no plan tiers to work around: one model for everything, DeepThink on or off, and image attachments. No projects, and chats it did not start cannot be reopened.",
   aboutServiceQwen:
     "Free, with two models to choose between, and it decides for itself when to think. No projects, no attachments yet, and chats it did not start cannot be reopened.",
+  aboutServiceGemini:
+    "Google's API with a free AI Studio key pasted once in Settings — no browser sign-in at all. The model picker is your key's own list, replies stream straight from the API, and the free tier's rate limits are waited out, never billed. Text only for now, and conversations live only on this machine.",
   aboutAuthorTitle: "Author",
   aboutLicense: "Open source under the MIT license.",
   aboutLimitsTitle: "ChatGPT models & usage limits",
@@ -796,7 +798,7 @@ const ru: Partial<Record<StringKey, string>> = {
   aboutTagline: "Ваш агент для кода и повседневных задач — на аккаунте чата, который у вас уже есть.",
   aboutIdeaTitle: "Как это работает",
   aboutIdea:
-    "OnFlip управляет обычным чатом через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com, chat.deepseek.com или chat.qwen.ai. Без API-ключа и оплаты за токены: агент работает на вашем существующем аккаунте и не добавляет отдельных API-затрат и лимитов. Модель думает на стороне сервиса, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
+    "OnFlip управляет обычным чатом через настоящий браузер — это та же переписка, что вы вели бы на chatgpt.com, chat.deepseek.com или chat.qwen.ai, — а на Gemini работает напрямую через API Google с бесплатным ключом. В любом случае без оплаты за токены: агент работает на вашем существующем аккаунте. Модель думает на стороне сервиса, а все правки файлов и команды выполняются локально на вашем компьютере — под вашим контролем.",
   aboutServicesTitle: "Сервисы",
   aboutServicesIntro:
     "По одному за раз, переключается в меню аккаунта. У каждого свой вход, свои чаты, проекты и настройки — ничего не пересекается.",
@@ -806,6 +808,8 @@ const ru: Partial<Record<StringKey, string>> = {
     "Бесплатно, без тарифов и лимитов: одна модель на всё, DeepThink вкл/выкл и вложения-картинки. Без проектов; чаты, начатые не в OnFlip, открыть нельзя.",
   aboutServiceQwen:
     "Бесплатно, две модели на выбор, а думать ли над вопросом — сервис решает сам. Без проектов и пока без вложений; чаты, начатые не в OnFlip, открыть нельзя.",
+  aboutServiceGemini:
+    "API Google с бесплатным ключом из AI Studio — вставьте его один раз в настройках, вход через браузер не нужен. Список моделей берётся из вашего ключа, ответы идут напрямую из API, а лимиты бесплатного уровня пережидаются, а не оплачиваются. Пока только текст; переписка хранится только на этом компьютере.",
   aboutAuthorTitle: "Автор",
   aboutLicense: "Открытый код по лицензии MIT.",
   aboutLimitsTitle: "Модели и лимиты ChatGPT",
@@ -1229,7 +1233,7 @@ const uz: Partial<Record<StringKey, string>> = {
   aboutTagline: "Kod va kundalik ishlar uchun agentingiz — sizda allaqachon bor chat hisobi asosida.",
   aboutIdeaTitle: "Qanday ishlaydi",
   aboutIdea:
-    "OnFlip haqiqiy brauzer orqali oddiy chatni boshqaradi — bu chatgpt.com, chat.deepseek.com yoki chat.qwen.ai da yozadigan o'sha suhbatingiz. API kaliti ham, token uchun to'lov ham yo'q: agent sizdagi mavjud hisobda ishlaydi, alohida API xarajatlari va limitlari qo'shilmaydi. Model xizmat tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",
+    "OnFlip haqiqiy brauzer orqali oddiy chatni boshqaradi — bu chatgpt.com, chat.deepseek.com yoki chat.qwen.ai da yozadigan o'sha suhbatingiz; Gemini esa Google'ning o'z API'si orqali, bepul kalit bilan ishlaydi. Har qanday holatda token uchun to'lov yo'q: agent sizdagi mavjud hisobda ishlaydi. Model xizmat tomonida o'ylaydi, fayl tahrirlari va buyruqlar esa kompyuteringizda — sizning nazoratingiz ostida bajariladi.",
   aboutServicesTitle: "Xizmatlar",
   aboutServicesIntro:
     "Bir vaqtda bittasi; hisob menyusidan almashtiriladi. Har birining o‘z kirishi, chatlari, loyihalari va sozlamalari bor — hech nima aralashmaydi.",
@@ -1239,6 +1243,8 @@ const uz: Partial<Record<StringKey, string>> = {
     "Bepul, tarif va limitlarsiz: bitta model hamma narsa uchun, DeepThink yoqiq yoki o‘chiq, hamda rasm biriktirish. Loyihalar yo‘q; OnFlip boshlamagan chatlarni ocholmaydi.",
   aboutServiceQwen:
     "Bepul, ikkita model tanlovi bor; o‘ylash kerakmi-yo‘qmi, xizmatning o‘zi hal qiladi. Loyihalar yo‘q, hozircha biriktirish ham yo‘q; OnFlip boshlamagan chatlarni ocholmaydi.",
+  aboutServiceGemini:
+    "Google API — AI Studio'dan bepul kalit sozlamalarga bir marta joylashtiriladi, brauzer orqali kirish kerak emas. Model ro‘yxati kalitingizning o‘zidan olinadi, javoblar to‘g‘ridan-to‘g‘ri API'dan keladi, bepul darajaning limitlari esa kutib o‘tkaziladi — to‘lov yo‘q. Hozircha faqat matn; suhbatlar faqat shu kompyuterda saqlanadi.",
   aboutAuthorTitle: "Muallif",
   aboutLicense: "MIT litsenziyasi ostidagi ochiq kod.",
   aboutLimitsTitle: "ChatGPT modellari va limitlari",
