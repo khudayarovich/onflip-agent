@@ -1587,7 +1587,7 @@ export function App(): React.ReactElement {
             </>
           }
         >
-          <div style={{ fontSize: 13.5 }}>{confirm.message}</div>
+          <div style={{ fontSize: "var(--font-size-body)" }}>{confirm.message}</div>
         </Modal>
       )}
     </div>

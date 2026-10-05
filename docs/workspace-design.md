@@ -9,6 +9,12 @@ wordmark. `desktop/buildResources/logo.svg` is the master artwork. Run
 `npm run icon` in `desktop` after editing it; this regenerates the Windows ICO,
 macOS PNG, and renderer SVG together. Commit all three generated assets.
 
+Shared typography tokens keep conversation text and the composer at 16px,
+controls at 14px, secondary labels at 12px, and dialog headings at 18px. Code
+and terminal output use 14px. Compact layouts hide or wrap secondary content
+instead of shrinking the text. The composer text and its highlight backdrop
+share the same font metrics.
+
 The welcome screen shows the signed-in account and real recent projects.
 Suggestions fill an editable draft. They do not send a message. Project cards
 resume that project's most recent chat, or open its folder if no chat is listed.

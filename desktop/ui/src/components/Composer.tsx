@@ -576,6 +576,7 @@ export function Composer({
           <button
             className={`chip icon-only${planRationed ? " chip-off" : ""}`}
             data-tip={planRationed ? undefined : t("attachTip")}
+            aria-label={t("attachTip")}
             disabled={disabled && !planRationed}
             aria-disabled={planRationed || undefined}
             onClick={() => {
@@ -594,6 +595,7 @@ export function Composer({
           <button
             className="chip"
             data-tip={`${t("menuModel")} — ${modelLabel}`}
+            aria-label={`${t("menuModel")} — ${modelLabel}`}
             onClick={(e) => {
               onLoadModels();
               modelMenu.open(e);
@@ -618,6 +620,7 @@ export function Composer({
             <button
               className={`chip${deepThinkOn ? " chip-on" : ""}`}
               data-tip={t(deepThinkOn ? "thinkDsDeepHint" : "thinkDsOffHint")}
+              aria-label={t("thinkDsDeep")}
               aria-pressed={deepThinkOn}
               onClick={() => onSetThinking(deepThinkOn ? "off" : "high")}
             >
@@ -628,6 +631,7 @@ export function Composer({
             <button
               className={`chip${planRationed ? " chip-off" : ""}`}
               data-tip={planRationed ? undefined : t("menuReasoning")}
+              aria-label={`${t("menuReasoning")} — ${t(thinkingInfo(thinkingShown, onDeepSeek, minimumThinking, defaultThinkingOnly).label)}`}
               aria-disabled={planRationed || undefined}
               onClick={planRationed ? undefined : thinkingMenu.open}
             >
@@ -645,6 +649,7 @@ export function Composer({
           <button
             className="chip"
             data-tip={t(approvalInfo(status?.approvalMode).hint)}
+            aria-label={t(approvalInfo(status?.approvalMode).hint)}
             onClick={approvalMenu.open}
           >
             <ShieldIcon />
@@ -663,6 +668,7 @@ export function Composer({
             <button
               className="chip icon-only"
               data-tip={`${t("contextTip")} — ${contextPct}%`}
+              aria-label={`${t("contextTip")} — ${contextPct}%`}
               onClick={contextMenu.open}
             >
               <ContextRing pct={contextPct} />

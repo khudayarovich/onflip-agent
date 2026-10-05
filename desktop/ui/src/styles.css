@@ -32,6 +32,11 @@
   --term-font: "Ubuntu Mono", "Ubuntu Sans Mono", "Ubuntu", "Cascadia Code", "Consolas",
     "DejaVu Sans Mono", "Courier New", monospace;
   --sans: "Inter", "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --font-size-body: 16px;
+  --font-size-ui: 14px;
+  --font-size-small: 12px;
+  --font-size-heading: 18px;
+  --font-size-code: 14px;
   --radius: 10px;
   --radius-lg: 16px;
   --titlebar-h: 40px;
@@ -78,7 +83,7 @@ body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: var(--font-size-body);
   line-height: 1.55;
   -webkit-font-smoothing: antialiased;
 }
@@ -191,7 +196,7 @@ a:hover {
 .signin-report {
   width: 100%;
   margin: 10px 0 2px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   border-collapse: collapse;
 }
 .signin-report td {
@@ -206,7 +211,7 @@ a:hover {
 
 .modal-note.dim {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
 }
 
 .titlebar.mac {
@@ -224,7 +229,7 @@ a:hover {
   align-items: center;
   gap: 8px;
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   letter-spacing: 0.02em;
 }
 
@@ -238,7 +243,7 @@ a:hover {
 .titlebar .session-title {
   flex: 1;
   text-align: center;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -277,7 +282,7 @@ a:hover {
   height: 28px;
   border-radius: 7px;
   color: var(--text-secondary);
-  font-size: 15px;
+  font-size: var(--font-size-body);
 }
 .icon-btn:hover {
   background: var(--bg-hover);
@@ -338,7 +343,7 @@ a:hover {
   padding: 8px 12px;
   border-radius: var(--radius);
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   text-align: left;
 }
 .project-btn:hover {
@@ -371,7 +376,7 @@ a:hover {
 
 .sidebar .section-label {
   padding: 14px 16px 6px;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -409,7 +414,7 @@ a:hover {
   display: block;
   max-width: 100%;
   min-width: 0;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -419,7 +424,7 @@ a:hover {
   display: block;
   max-width: 100%;
   min-width: 0;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -439,7 +444,7 @@ a:hover {
   height: 22px;
   border-radius: 6px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   align-items: center;
   justify-content: center;
 }
@@ -489,7 +494,7 @@ a:hover {
 }
 .project-group-head .group-name {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   font-weight: 600;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -500,7 +505,7 @@ a:hover {
   color: var(--text);
 }
 .project-group-head .group-count {
-  font-size: 10.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   background: var(--bg);
   border: 1px solid var(--border);
@@ -564,7 +569,7 @@ a:hover {
 
 .conn-label {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -588,14 +593,14 @@ a:hover {
   align-items: center;
   gap: 8px;
   padding: 8px 20px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
   min-height: 35px;
 }
 .context-strip .path {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -607,7 +612,7 @@ a:hover {
   padding: 1px 8px;
   border: 1px solid var(--border);
   border-radius: 999px;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -620,7 +625,7 @@ a:hover {
   gap: 6px;
   padding: 3px 10px;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
   flex-shrink: 0;
 }
@@ -751,10 +756,10 @@ a:hover {
   border: none;
   outline: none;
   color: var(--text);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
 }
 .chat-search .count {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
   min-width: 34px;
@@ -767,7 +772,7 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 10px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
 }
 .chat-search button:hover {
@@ -814,7 +819,7 @@ a:hover {
 }
 .empty-state p {
   color: var(--text-secondary);
-  font-size: 13.5px;
+  font-size: var(--font-size-ui);
   margin-bottom: 20px;
 }
 .empty-state .hints {
@@ -827,7 +832,7 @@ a:hover {
   padding: 10px 14px;
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
@@ -914,7 +919,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 10.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   padding-right: 4px;
 }
@@ -940,7 +945,7 @@ a:hover {
 
 .msg-narration {
   color: var(--text-secondary);
-  font-size: 13.5px;
+  font-size: var(--font-size-body);
   padding: 0 2px;
 }
 
@@ -950,7 +955,7 @@ a:hover {
   word-break: break-word;
 }
 .msg-question-label {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   margin-bottom: 4px;
 }
@@ -980,7 +985,7 @@ a:hover {
   background: var(--bg-raised);
   color: var(--text);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--font-size-ui);
   text-align: left;
   cursor: pointer;
   transition: border-color 0.12s, background 0.12s;
@@ -1015,7 +1020,7 @@ a:hover {
   border-radius: 6px;
   background: var(--bg-active);
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
 }
 .question-choice.recommended .question-choice-n,
 .question-choice.picked .question-choice-n {
@@ -1039,13 +1044,13 @@ a:hover {
   border-radius: 999px;
   background: var(--accent-soft);
   color: var(--accent);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   font-weight: 500;
   vertical-align: 1px;
 }
 .question-choice-desc {
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
 }
 .question-other {
   display: flex;
@@ -1062,7 +1067,7 @@ a:hover {
   background: var(--bg-input);
   color: var(--text);
   font: inherit;
-  font-size: 13.5px;
+  font-size: var(--font-size-ui);
 }
 .question-other input:focus {
   outline: none;
@@ -1091,7 +1096,7 @@ a:hover {
   display: flex;
   gap: 8px;
   align-items: baseline;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   padding: 0 2px;
 }
@@ -1118,7 +1123,7 @@ a:hover {
   gap: 6px;
   padding: 3px 8px;
   border-radius: 999px;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   opacity: 0.75;
   transition: opacity 0.14s ease, background 0.14s ease;
@@ -1160,7 +1165,7 @@ a:hover {
   color: var(--red);
   border-radius: var(--radius);
   padding: 10px 14px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   white-space: pre-wrap;
 }
 
@@ -1173,7 +1178,7 @@ a:hover {
 .markdown h4,
 .markdown h5,
 .markdown h6 {
-  font-size: 14.5px;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   margin-top: 16px;
 }
@@ -1195,7 +1200,7 @@ a:hover {
 }
 .markdown code {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   background: var(--bg-active);
   border-radius: 4px;
   padding: 1.5px 5px;
@@ -1213,14 +1218,14 @@ a:hover {
   position: absolute;
   top: 6px;
   right: 10px;
-  font-size: 10.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   font-family: var(--sans);
 }
 .markdown pre.md-code code {
   background: none;
   padding: 0;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   line-height: 1.6;
   white-space: pre;
 }
@@ -1241,7 +1246,7 @@ a:hover {
   width: 100%;
   padding: 8px 12px;
   text-align: left;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .tool-card .head:hover {
   background: var(--bg-hover);
@@ -1275,13 +1280,13 @@ a:hover {
 .tool-card .tool-name {
   font-weight: 600;
   font-family: var(--sans);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   flex-shrink: 0;
 }
 .tool-card .tool-subject {
   color: var(--text-secondary);
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1289,7 +1294,7 @@ a:hover {
 }
 .tool-card .tool-state {
   flex-shrink: 0;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   display: inline-flex;
   align-items: center;
@@ -1319,7 +1324,7 @@ a:hover {
 }
 .tool-card .body pre {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   line-height: 1.55;
   white-space: pre-wrap;
   word-break: break-word;
@@ -1329,7 +1334,7 @@ a:hover {
   border-top: 1px dashed var(--border);
   padding: 8px 12px;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   white-space: pre-wrap;
   max-height: 120px;
@@ -1360,7 +1365,7 @@ a:hover {
   justify-content: center;
   gap: 14px;
   color: var(--text-secondary);
-  font-size: 13.5px;
+  font-size: var(--font-size-ui);
 }
 @keyframes spin {
   to {
@@ -1372,7 +1377,7 @@ a:hover {
 
 .diff {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--font-size-code);
   line-height: 1.6;
 }
 .diff .file-head {
@@ -1399,7 +1404,7 @@ a:hover {
   padding-right: 10px;
   color: var(--text-muted);
   user-select: none;
-  font-size: 11px;
+  font-size: var(--font-size-small);
 }
 .diff-line .code {
   flex: 1;
@@ -1460,7 +1465,7 @@ a:hover {
   background: transparent;
   color: var(--text);
   font: inherit;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .diff-search input::placeholder {
   color: var(--text-muted);
@@ -1468,7 +1473,7 @@ a:hover {
 .diff-search .diff-count {
   flex-shrink: 0;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   font-variant-numeric: tabular-nums;
 }
 .diff-hit {
@@ -1482,7 +1487,7 @@ a:hover {
 .diff-more {
   padding: 14px 0 6px;
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   text-align: center;
   font-variant-numeric: tabular-nums;
 }
@@ -1493,7 +1498,7 @@ a:hover {
   display: flex;
   flex-direction: column;
   gap: 5px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .todo-item {
   display: flex;
@@ -1539,7 +1544,7 @@ a:hover {
   align-items: center;
   gap: 9px;
   color: var(--text-secondary);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .thinking-row .shimmer {
   background: linear-gradient(90deg, var(--text-muted) 30%, var(--text) 50%, var(--text-muted) 70%);
@@ -1585,7 +1590,7 @@ a:hover {
 }
 .thinking-row .tail {
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-word;
@@ -1605,13 +1610,13 @@ a:hover {
   display: flex;
   gap: 8px;
   align-items: center;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
 }
 .queue-chip .n {
   color: var(--accent-dim);
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--font-size-small);
 }
 
 /* ==========================================================================
@@ -1646,7 +1651,7 @@ a:hover {
   width: 100%;
   padding: 13px 52px 6px 16px;
   font-family: var(--sans);
-  font-size: 14px;
+  font-size: var(--font-size-body);
   line-height: 1.5;
   letter-spacing: normal;
   max-height: 220px;
@@ -1710,7 +1715,7 @@ a:hover {
   container-name: composer;
 }
 
-@container composer (max-width: 560px) {
+@container composer (max-width: 660px) {
   .composer .chips {
     flex-wrap: nowrap;
   }
@@ -1731,7 +1736,7 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   font-weight: 500;
   padding: 4px 11px;
   border-radius: 999px;
@@ -1825,13 +1830,13 @@ a:hover {
 }
 .chip .tip-card-title {
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   font-weight: 600;
   letter-spacing: 0.01em;
 }
 .chip .tip-card-body {
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: var(--font-size-ui);
   font-weight: 400;
   line-height: 1.5;
 }
@@ -1883,7 +1888,7 @@ a:hover {
   animation: pop-in 0.13s ease-out;
 }
 .skill-reveal-head {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   font-weight: 700;
   letter-spacing: 0.05em;
   text-transform: uppercase;
@@ -1894,7 +1899,7 @@ a:hover {
   white-space: pre-wrap;
   word-break: break-word;
   font-family: var(--sans);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   line-height: 1.55;
   color: var(--text-secondary);
 }
@@ -1928,11 +1933,11 @@ a:hover {
   font-size: 16px;
 }
 .skill-name {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   font-weight: 600;
 }
 .skill-desc {
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   line-height: 1.5;
   flex: 1;
@@ -1942,7 +1947,7 @@ a:hover {
   border: 1px solid var(--border);
   border-radius: 8px;
   padding: 6px 9px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text);
   outline: none;
 }
@@ -1952,7 +1957,7 @@ a:hover {
 .skill-use {
   align-self: flex-end;
   padding: 4px 14px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
 }
 
 /* -- about page ------------------------------------------------------------- */
@@ -1973,12 +1978,12 @@ a:hover {
   font-weight: 700;
 }
 .about-version {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   margin-top: 2px;
 }
 .about-tagline {
-  font-size: 13.5px;
+  font-size: var(--font-size-ui);
   color: var(--accent);
   font-weight: 600;
   margin-bottom: 16px;
@@ -1987,7 +1992,7 @@ a:hover {
   margin-bottom: 16px;
 }
 .about-section h3 {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -1995,7 +2000,7 @@ a:hover {
   margin-bottom: 7px;
 }
 .about-section p {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   line-height: 1.65;
   color: var(--text-secondary);
 }
@@ -2017,17 +2022,17 @@ a:hover {
 .limit-plan {
   flex-shrink: 0;
   width: 42px;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   font-weight: 700;
   color: var(--accent);
 }
 .limit-text {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
   line-height: 1.5;
 }
 .about-limits-note {
-  font-size: 11.5px !important;
+  font-size: var(--font-size-small) !important;
   color: var(--text-muted) !important;
   line-height: 1.55 !important;
 }
@@ -2042,17 +2047,17 @@ a:hover {
   padding: 12px 14px;
 }
 .about-author-name {
-  font-size: 13.5px;
+  font-size: var(--font-size-ui);
   font-weight: 600;
 }
 .about-author-line {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   font-family: var(--mono);
   margin-top: 3px;
 }
 .about-footer {
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   border-top: 1px solid var(--border);
   padding-top: 12px;
@@ -2071,7 +2076,7 @@ a:hover {
 .segmented button {
   padding: 5px 12px;
   border-radius: 8px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
   white-space: nowrap;
 }
@@ -2129,7 +2134,7 @@ a:hover {
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   font-weight: 700;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2138,7 +2143,7 @@ a:hover {
 }
 .term-cwd {
   flex: 1;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   font-family: var(--mono, ui-monospace, Consolas, monospace);
   white-space: nowrap;
@@ -2154,7 +2159,7 @@ a:hover {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -2173,7 +2178,7 @@ a:hover {
   padding: 12px 14px;
   background: #0c0d10;
   font-family: var(--term-font);
-  font-size: 13px;
+  font-size: var(--font-size-code);
   line-height: 1.5;
   letter-spacing: 0.01em;
   cursor: text;
@@ -2262,7 +2267,7 @@ a:hover {
   color: #0c0d10;
 }
 .term-hint {
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: #8b949e;
   line-height: 1.6;
   font-family: var(--sans, inherit);
@@ -2292,7 +2297,7 @@ a:hover {
   color: #f2f4f8;
   caret-color: var(--accent);
   font-family: var(--term-font);
-  font-size: 13px;
+  font-size: var(--font-size-code);
 }
 .term-input-row input::placeholder {
   color: #6b7280;
@@ -2324,7 +2329,7 @@ a:hover {
   background: var(--bg-hover);
 }
 .todo-caption {
-  font-size: 10.5px;
+  font-size: var(--font-size-small);
   font-weight: 700;
   letter-spacing: 0.07em;
   text-transform: uppercase;
@@ -2345,7 +2350,7 @@ a:hover {
   transition: width 0.35s ease;
 }
 .todo-counter {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -2363,7 +2368,7 @@ a:hover {
   align-items: baseline;
   gap: 8px;
   padding: 0 13px 9px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
   min-width: 0;
 }
@@ -2418,7 +2423,7 @@ a:hover {
   flex: 1;
 }
 .account-name {
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   font-weight: 600;
   color: var(--text);
   white-space: nowrap;
@@ -2429,7 +2434,7 @@ a:hover {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2482,7 +2487,7 @@ a:hover {
   min-width: 0;
 }
 .account-email {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -2494,7 +2499,7 @@ a:hover {
   margin: 11px -4px;
 }
 .usage-title {
-  font-size: 10.5px;
+  font-size: var(--font-size-small);
   font-weight: 600;
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -2514,20 +2519,20 @@ a:hover {
   text-align: center;
 }
 .usage-value {
-  font-size: 16px;
+  font-size: var(--font-size-body);
   font-weight: 700;
   color: var(--text);
   font-variant-numeric: tabular-nums;
 }
 .usage-label {
-  font-size: 10px;
+  font-size: var(--font-size-small);
   letter-spacing: 0.05em;
   text-transform: uppercase;
   color: var(--text-muted);
   margin-top: 2px;
 }
 .usage-note {
-  font-size: 10.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   line-height: 1.45;
   margin-top: 8px;
@@ -2539,7 +2544,7 @@ a:hover {
   width: 100%;
   padding: 8px 9px;
   border-radius: 8px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text);
   text-align: left;
 }
@@ -2572,7 +2577,7 @@ a:hover {
 /* Pushes the current service and the caret to the right of the row. */
 .pop-item-value {
   margin-left: auto;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
 }
 .pop-caret {
@@ -2600,7 +2605,7 @@ a:hover {
   width: 100%;
   padding: 7px 9px;
   border-radius: 8px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text);
   text-align: left;
 }
@@ -2634,7 +2639,8 @@ a:hover {
 [data-tip] {
   position: relative;
 }
-[data-tip]:hover::after {
+[data-tip]:hover::after,
+[data-tip]:focus-visible::after {
   content: attr(data-tip);
   position: absolute;
   bottom: calc(100% + 9px);
@@ -2645,7 +2651,7 @@ a:hover {
   color: var(--text);
   padding: 6px 11px;
   border-radius: 8px;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   font-weight: 400;
   line-height: 1.4;
   white-space: nowrap;
@@ -2674,7 +2680,7 @@ a:hover {
   border-radius: 9px;
   background: var(--accent);
   color: #131313;
-  font-size: 15px;
+  font-size: var(--font-size-body);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -2695,7 +2701,7 @@ a:hover {
 
 .composer-hint {
   text-align: center;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   padding-top: 8px;
   min-height: 24px;
@@ -2725,7 +2731,7 @@ a:hover {
   text-align: left;
   padding: 7px 10px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .slash-item.selected,
 .slash-item:hover {
@@ -2733,14 +2739,14 @@ a:hover {
 }
 .slash-item .cmd {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--accent);
   flex-shrink: 0;
   min-width: 90px;
 }
 .slash-item .desc {
   color: var(--text-secondary);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
 }
 
 /* ==========================================================================
@@ -2769,7 +2775,7 @@ a:hover {
 }
 .menu .menu-label {
   padding: 7px 10px 4px;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.07em;
@@ -2783,7 +2789,7 @@ a:hover {
   text-align: left;
   padding: 7.5px 10px;
   border-radius: 7px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .menu-item:hover {
   background: var(--bg-hover);
@@ -2792,7 +2798,7 @@ a:hover {
   width: 14px;
   color: var(--accent);
   flex-shrink: 0;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
 }
 .menu-item .label {
   flex: 1;
@@ -2801,7 +2807,7 @@ a:hover {
   white-space: nowrap;
 }
 .menu-item .hint {
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   flex-shrink: 0;
   max-width: 150px;
@@ -2862,7 +2868,7 @@ a:hover {
   border-bottom: 1px solid var(--border);
 }
 .modal .modal-head h2 {
-  font-size: 15px;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   flex: 1;
 }
@@ -2882,7 +2888,7 @@ a:hover {
 .btn {
   padding: 7px 15px;
   border-radius: 8px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   font-weight: 500;
   border: 1px solid var(--border-strong);
   background: var(--bg-input);
@@ -2922,7 +2928,7 @@ a:hover {
   margin-bottom: 12px;
 }
 .approval .kind-badge {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -2937,7 +2943,7 @@ a:hover {
 }
 .approval .subject {
   font-family: var(--mono);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   background: var(--bg);
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -2949,12 +2955,12 @@ a:hover {
   overflow-y: auto;
 }
 .approval .reason {
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
   margin-bottom: 6px;
 }
 .approval .detail {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   margin-bottom: 4px;
 }
@@ -2974,7 +2980,7 @@ a:hover {
   margin-bottom: 22px;
 }
 .settings-section h3 {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   text-transform: uppercase;
   letter-spacing: 0.07em;
   color: var(--text-muted);
@@ -2992,10 +2998,10 @@ a:hover {
   min-width: 0;
 }
 .setting-row .name {
-  font-size: 13.5px;
+  font-size: var(--font-size-ui);
 }
 .setting-row .desc {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
 }
 .setting-row input[type="number"],
@@ -3005,7 +3011,7 @@ a:hover {
   border: 1px solid var(--border-strong);
   border-radius: 7px;
   padding: 6px 10px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   width: 130px;
 }
 .setting-row select {
@@ -3048,7 +3054,7 @@ a:hover {
 .rules-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .rules-table td,
 .rules-table th {
@@ -3057,14 +3063,14 @@ a:hover {
   text-align: left;
 }
 .rules-table th {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   text-transform: uppercase;
   color: var(--text-muted);
   letter-spacing: 0.06em;
 }
 .rules-table .pattern {
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
 }
 .rules-table .x {
   color: var(--text-muted);
@@ -3087,7 +3093,7 @@ a:hover {
   border-radius: 7px;
   padding: 6px 10px;
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
 }
 .rule-add select {
   background: var(--bg-input);
@@ -3119,20 +3125,20 @@ a:hover {
   min-width: 0;
 }
 .pick-row .primary-line .t {
-  font-size: 13.5px;
+  font-size: var(--font-size-ui);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pick-row .primary-line .s {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .pick-row .tail-hint {
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   flex-shrink: 0;
 }
@@ -3146,12 +3152,12 @@ a:hover {
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   padding: 8px 12px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   margin-bottom: 12px;
 }
 
 .modal-note {
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   padding: 8px 0;
 }
@@ -3160,7 +3166,7 @@ a:hover {
   background: var(--red-bg);
   border: 1px solid rgba(229, 72, 87, 0.35);
   color: var(--red);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   padding: 10px 16px;
   display: flex;
   align-items: center;
@@ -3241,7 +3247,7 @@ a:hover {
 .browser-note {
   padding: 4px 8px;
   border-top: 1px solid var(--border);
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   padding: 0 2px;
   word-break: break-word;
@@ -3251,7 +3257,7 @@ a:hover {
   margin: auto;
   text-align: center;
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   padding: 24px 16px;
   line-height: 1.6;
 }
@@ -3281,7 +3287,7 @@ a:hover {
   border: 1px solid var(--border-strong);
   border-radius: 8px;
   background: var(--bg-raised);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
 }
 .attach-name {
@@ -3291,7 +3297,7 @@ a:hover {
 }
 .attach-x {
   color: var(--text-muted);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   line-height: 1;
   padding: 2px;
   border-radius: 4px;
@@ -3328,7 +3334,7 @@ a:hover {
   gap: 10px;
   padding: 7px 10px;
   border-top: 1px solid var(--border);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
 }
 .msg-image-note {
   color: var(--text-muted);
@@ -3343,7 +3349,7 @@ a:hover {
 }
 .msg-image-save {
   color: var(--accent);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   padding: 3px 8px;
   border-radius: 6px;
   border: 1px solid var(--border-strong);
@@ -3363,7 +3369,7 @@ a:hover {
 }
 .msg-files-note {
   padding: 7px 10px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
   border-bottom: 1px solid var(--border);
 }
@@ -3372,7 +3378,7 @@ a:hover {
   align-items: center;
   gap: 10px;
   padding: 7px 10px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .msg-file + .msg-file {
   border-top: 1px solid var(--border);
@@ -3385,7 +3391,7 @@ a:hover {
 }
 .msg-file-size {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
 }
 
 /* ---- interactive browser shot --------------------------------------------- */
@@ -3409,7 +3415,7 @@ a:hover {
 }
 .peek-note {
   flex: 1;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
 }
 
@@ -3418,7 +3424,7 @@ a:hover {
 .thinking-row .elapsed {
   margin-left: 8px;
   font-family: var(--mono);
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   /* Tabular figures so a ticking clock does not shuffle the label beside it. */
   font-variant-numeric: tabular-nums;
@@ -3426,7 +3432,7 @@ a:hover {
 
 .msg-duration {
   margin: 2px 0 10px;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   font-variant-numeric: tabular-nums;
 }
@@ -3459,7 +3465,7 @@ a:hover {
   padding: 9px 16px;
   border-bottom: 1px solid var(--border);
   background: var(--bg-raised);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
 }
 
 .update-text {
@@ -3473,7 +3479,7 @@ a:hover {
   color: var(--text-secondary);
   border-radius: 7px;
   padding: 4px 11px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   cursor: pointer;
 }
 
@@ -3505,7 +3511,7 @@ a:hover {
   color: inherit;
   border-radius: 7px;
   padding: 4px 13px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   font-family: inherit;
   cursor: pointer;
   opacity: 0.85;
@@ -3527,7 +3533,7 @@ a:hover {
   color: var(--text);
   border-radius: 8px;
   padding: 6px 14px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   font-family: inherit;
   cursor: pointer;
 }
@@ -3559,14 +3565,14 @@ a:hover {
 
 .connector-title {
   font-weight: 600;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   margin-bottom: 6px;
 }
 
 .connector-steps {
   margin: 10px 0 12px;
   padding-left: 18px;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
 }
 
@@ -3576,7 +3582,7 @@ a:hover {
 
 .connector-path {
   font-family: ui-monospace, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   word-break: break-all;
   padding: 8px 10px;
   border-radius: 7px;
@@ -3621,7 +3627,7 @@ a:hover {
 
 .update-modal h2 {
   margin: 0 0 16px;
-  font-size: 15px;
+  font-size: var(--font-size-heading);
   font-weight: 600;
   color: var(--text);
 }
@@ -3657,7 +3663,7 @@ a:hover {
    error message itself, and that has to be readable. */
 .update-modal-detail {
   margin: 12px 0 0;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
 }
 
@@ -3674,7 +3680,7 @@ a:hover {
   color: #fff;
   border-radius: 7px;
   padding: 6px 14px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   cursor: pointer;
 }
 
@@ -3705,7 +3711,7 @@ a:hover {
   background: var(--bg);
   color: var(--text);
   font-family: var(--sans);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   line-height: 1.5;
   padding: 9px 11px;
   outline: none;
@@ -3725,7 +3731,7 @@ a:hover {
   background: var(--bg);
   color: var(--text);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   padding: 8px 11px;
   outline: none;
 }
@@ -3741,7 +3747,7 @@ a:hover {
   background: var(--accent);
   color: #1a1204;
   font-weight: 600;
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   flex-shrink: 0;
 }
 .sched-add:disabled {
@@ -3759,7 +3765,7 @@ a:hover {
   border: 1px solid var(--border);
   background: var(--bg);
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
 }
 .sched-preset:hover {
   border-color: var(--border-strong);
@@ -3772,7 +3778,7 @@ a:hover {
 }
 .sched-error {
   color: var(--red);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
 }
 .sched-where {
   margin: 0;
@@ -3825,7 +3831,7 @@ a:hover {
   min-width: 0;
 }
 .sched-text {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   line-height: 1.45;
   word-break: break-word;
 }
@@ -3835,7 +3841,7 @@ a:hover {
   align-items: center;
   gap: 5px;
   margin-top: 4px;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
 }
 .sched-cron-tag {
@@ -3875,7 +3881,7 @@ a:hover {
   background: var(--bg);
   color: var(--text);
   font-family: var(--mono);
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   padding: 8px 11px;
   outline: none;
 }
@@ -3943,7 +3949,7 @@ a:hover {
   border-radius: 999px;
   background: var(--bg);
   color: var(--text);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   outline: none;
   text-overflow: ellipsis;
 }
@@ -4051,7 +4057,7 @@ a:hover {
   flex-wrap: wrap;
   gap: 14px;
   padding: 10px 2px 2px;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
 }
 .indicator-legend span {
@@ -4099,12 +4105,12 @@ a:hover {
 }
 .browser-blocked-text strong {
   color: var(--yellow);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   font-weight: 600;
 }
 .browser-blocked-text span {
   color: var(--text-secondary);
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
   line-height: 1.45;
 }
 .browser-blocked .btn {
@@ -4146,7 +4152,7 @@ a:hover {
 }
 .titlebar .brand-x {
   color: var(--text-muted);
-  font-size: 14px;
+  font-size: var(--font-size-ui);
   line-height: 1;
   font-weight: 400;
 }
@@ -4185,7 +4191,7 @@ a:hover {
 }
 .msg-attachments .attach-chip {
   padding: 3px 8px;
-  font-size: 11.5px;
+  font-size: var(--font-size-small);
 }
 /* A sent attachment is a button: it finds the file again. */
 .attach-reveal {
@@ -4222,12 +4228,12 @@ a:hover {
   border-radius: 5px;
 }
 .service-name {
-  font-size: 12.5px;
+  font-size: var(--font-size-ui);
   font-weight: 600;
   color: var(--text);
 }
 .service-text {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   line-height: 1.5;
   color: var(--text-secondary);
 }
@@ -4250,7 +4256,7 @@ a:hover {
 }
 .queue-files {
   flex: none;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
 }
 .queue-actions {
@@ -4270,7 +4276,7 @@ a:hover {
   align-items: center;
   justify-content: center;
   border-radius: 6px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
 }
 .queue-actions button:hover {
@@ -4289,7 +4295,7 @@ a:hover {
   display: flex;
   align-items: baseline;
   justify-content: space-between;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   font-weight: 600;
   letter-spacing: 0.02em;
   color: var(--text-muted);
@@ -4304,7 +4310,7 @@ a:hover {
 .health-table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 .health-table td {
   padding: 5px 0;
@@ -4315,7 +4321,7 @@ a:hover {
 }
 .health-tool {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
 }
 .health-num {
   text-align: right;
@@ -4358,7 +4364,7 @@ a:hover {
   color: var(--yellow);
 }
 .health-stat-label {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   margin-top: 2px;
 }
@@ -4366,7 +4372,7 @@ a:hover {
   display: flex;
   align-items: baseline;
   gap: 8px;
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   padding: 4px 0;
 }
 .health-dot {
@@ -4387,12 +4393,12 @@ a:hover {
 }
 .health-check-msg {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
 }
 .health-reason {
   display: flex;
   gap: 8px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   padding: 3px 0;
 }
 .health-reason-count {
@@ -4410,7 +4416,7 @@ a:hover {
 .health-empty,
 .health-foot {
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   margin-top: 14px;
 }
 
@@ -4434,14 +4440,14 @@ a:hover {
 
 .approval .remember-scope-head {
   display: block;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   margin-bottom: 5px;
 }
 
 .approval .remember-scope code {
   font-family: var(--mono);
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-all;
@@ -4532,7 +4538,7 @@ a:hover {
 
 .subtask-meta {
   flex: none;
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
 }
 
@@ -4550,7 +4556,7 @@ a:hover {
 }
 
 .subtask-steps li {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-secondary);
 }
 
@@ -4560,7 +4566,7 @@ a:hover {
 
 .subtask-steps code {
   font-family: var(--mono);
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text);
   margin-right: 7px;
 }
@@ -4571,7 +4577,7 @@ a:hover {
 
 .subtask-stopped {
   margin-top: 9px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: #c05656;
 }
 
@@ -4582,13 +4588,13 @@ a:hover {
 }
 
 .subtask-answer-head {
-  font-size: 11px;
+  font-size: var(--font-size-small);
   color: var(--text-muted);
   margin-bottom: 4px;
 }
 
 .subtask-answer-body {
-  font-size: 13px;
+  font-size: var(--font-size-ui);
   white-space: pre-wrap;
   word-break: break-word;
 }
@@ -4596,16 +4602,16 @@ a:hover {
 .subtask-empty,
 .subtask-hint {
   color: var(--text-muted);
-  font-size: 13px;
+  font-size: var(--font-size-ui);
 }
 
 .subtask-hint {
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   line-height: 1.5;
 }
 
 .subtask-live {
   margin-top: 10px;
-  font-size: 12px;
+  font-size: var(--font-size-ui);
   color: var(--text-muted);
 }
