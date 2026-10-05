@@ -1768,14 +1768,19 @@ a:hover {
 }
 .chip.chip-off,
 .chip.chip-off:hover {
-  opacity: 0.45;
+  /* Parent opacity also composites the tooltip and traps it below the
+     textarea. Keep the chip opaque and dim only the control contents. */
+  opacity: 1;
   cursor: default;
   background: var(--bg-raised);
   border-color: var(--border);
   color: var(--text-muted);
 }
-.chip.chip-off:hover svg {
-  opacity: 0.75;
+.chip.chip-off > svg,
+.chip.chip-off:hover > svg,
+.chip.chip-off > .chip-label,
+.chip.chip-off > .chev {
+  opacity: 0.45;
 }
 
 /*
