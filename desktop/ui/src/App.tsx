@@ -37,8 +37,16 @@ import { Modal, baseName } from "./components/common";
 import { Lang, LangContext, loadLang, saveLang, translate, useT, StringKey } from "./i18n";
 import { ChevronDown, CircleHalf } from "./components/icons";
 import { serviceLabel } from "../../shared/providers";
+import { WorkspaceHome } from "./components/WorkspaceHome";
+import { CommandPalette } from "./components/CommandPalette";
+import { ConnectionsModal } from "./components/ConnectionsModal";
+import { StudioIcon } from "./components/StudioIcon";
+import { ChangesPanel, DockView } from "./components/WorkspaceDock";
+import { composing } from "../../shared/escape";
 
 type ModalName =
+  | "commands"
+  | "connections"
   | "settings"
   | "sessions"
   | "chats"
@@ -272,6 +280,12 @@ export function App(): React.ReactElement {
     }
   });
   const [resizingBrowser, setResizingBrowser] = useState(false);
+  const [changesOpen, setChangesOpen] = useState(false);
+  const selectDock = (view: DockView) => {
+    setBrowserOpen(view === "preview");
+    setTerminalOpen(view === "terminal");
+    setChangesOpen(view === "changes");
+  };
 
   // Ctrl+F opens in-chat search wherever focus is.
   useEffect(() => {
@@ -285,6 +299,22 @@ export function App(): React.ReactElement {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
   const [lang, setLang] = useState<Lang>(() => loadLang());
+  const [motion, setMotion] = useState(() => {
+    try { return localStorage.getItem("onflip.motion") !== "off"; } catch { return true; }
+  });
+  useEffect(() => {
+    document.documentElement.dataset.motion = motion ? "on" : "off";
+    try { localStorage.setItem("onflip.motion", motion ? "on" : "off"); } catch { /* cosmetic */ }
+  }, [motion]);
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey) || event.altKey || event.shiftKey || composing(event)) return;
+      if (event.defaultPrevented || document.querySelector(".modal.approval")) return;
+      if (event.key.toLowerCase() === "k") { event.preventDefault(); setModal("commands"); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
   const [theme, setTheme] = useState<"dark" | "light">(() => {
     try {
       return localStorage.getItem("onflip.theme") === "light" ? "light" : "dark";
@@ -586,7 +616,10 @@ export function App(): React.ReactElement {
           setBrowserFrame(frame);
           // The panel opens itself the first time the agent shows a page —
           // the point of it is not having to know in advance to look.
-          if (frame.image) setBrowserOpen(true);
+          if (frame.image) {
+            setChangesOpen(false);
+            setBrowserOpen(true);
+          }
           break;
         }
         case "log":
@@ -993,30 +1026,32 @@ export function App(): React.ReactElement {
     const CHAT_MIN = 420;
     const needed =
       (sidebarHidden ? 0 : sidebarWidth) +
-      (browserOpen ? browserWidth : 0) +
+      (browserOpen || changesOpen ? browserWidth : 0) +
       (terminalOpen ? termWidth : 0) +
       CHAT_MIN;
     void window.onflip.setMinWidth?.(needed).catch(() => {});
-  }, [sidebarHidden, sidebarWidth, browserOpen, browserWidth, terminalOpen, termWidth]);
+  }, [sidebarHidden, sidebarWidth, browserOpen, changesOpen, browserWidth, terminalOpen, termWidth]);
+
+  const welcome = items.length === 0 && !streaming.active && !loading;
 
   return (
     <LangContext.Provider value={lang}>
     <div
       className={`app${sidebarHidden ? " sidebar-hidden" : ""}${
         resizingSidebar || resizingTerm || resizingBrowser ? " resizing" : ""
-      }${terminalOpen ? " term-open" : ""}${browserOpen ? " browser-open" : ""}`}
+      }${terminalOpen ? " term-open" : ""}${browserOpen ? " browser-open" : ""}${changesOpen ? " review-open" : ""}`}
       style={
         {
           "--sidebar-w": `${sidebarWidth}px`,
           "--term-w": terminalOpen ? `${termWidth}px` : "0px",
           // Content keeps its width even while the column animates shut.
           "--term-cw": `${termWidth}px`,
-          "--browser-w": browserOpen ? `${browserWidth}px` : "0px",
+          "--browser-w": browserOpen || changesOpen ? `${browserWidth}px` : "0px",
           "--browser-cw": `${browserWidth}px`,
         } as React.CSSProperties
       }
     >
-      <Titlebar status={status} onToggleSidebar={() => setSidebarHidden((h) => !h)} />
+      <Titlebar status={status} onToggleSidebar={() => setSidebarHidden((h) => !h)} theme={theme} onToggleTheme={() => setTheme((current) => current === "dark" ? "light" : "dark")} onOpenCommands={() => setModal("commands")} />
 
       {!sidebarHidden && (
         <div
@@ -1036,6 +1071,7 @@ export function App(): React.ReactElement {
       )}
 
       <Sidebar
+        hidden={sidebarHidden}
         status={status}
         connect={connect}
         connectDetail={connectDetail}
@@ -1063,6 +1099,10 @@ export function App(): React.ReactElement {
         onOpenHealth={() => setModal("health")}
         onOpenSchedules={() => setModal("schedules")}
         onOpenSubTasks={() => setModal("subtasks")}
+        onOpenConnections={() => setModal("connections")}
+        onOpenCommands={() => setModal("commands")}
+        activeModal={modal}
+        onOpenWorkspace={() => setModal("sessions")}
         onSignOut={() =>
           setConfirm({
             message: t("signOutConfirm", {
@@ -1135,19 +1175,21 @@ export function App(): React.ReactElement {
         )}
 
         <div className="context-strip">
+          <StudioIcon name="folder" size={16} />
           <span className="path" title={status?.cwd}>
-            {shortCwd}
+            {status?.scratch ? t("studioWorkspace") : status ? baseName(status.cwd) : shortCwd}
           </span>
+          <span className="context-divider">/</span><span className="context-title">{welcome ? t("studioOverview") : status?.sessionTitle || t("studioWorkspace")}</span>
           {status?.gitBranch && (
             <span className="branch">
-              ⎇ {status.gitBranch}
+              <StudioIcon name="branch" size={13} />{status.gitBranch}
               {status.gitDirty ? " •" : ""}
             </span>
           )}
           <span className="spacer" />
           <button
             className={`strip-btn${terminalOpen ? " badged" : ""}`}
-            onClick={() => setTerminalOpen((o) => !o)}
+            onClick={() => terminalOpen ? setTerminalOpen(false) : selectDock("terminal")}
             title={t("stripTerminalTip")}
           >
             <TerminalIcon />
@@ -1155,7 +1197,7 @@ export function App(): React.ReactElement {
           </button>
           <button
             className={`strip-btn${browserOpen ? " badged" : ""}`}
-            onClick={() => setBrowserOpen((o) => !o)}
+            onClick={() => browserOpen ? setBrowserOpen(false) : selectDock("preview")}
             title={t("browserTip")}
           >
             <BrowserIcon />
@@ -1163,7 +1205,7 @@ export function App(): React.ReactElement {
           </button>
           <button
             className={`strip-btn${(status?.snapshotCount ?? 0) > 0 ? " badged" : ""}`}
-            onClick={() => setModal("diff")}
+            onClick={() => changesOpen ? setChangesOpen(false) : selectDock("changes")}
             title={t("stripDiffTip")}
           >
             <DiffIcon />
@@ -1296,6 +1338,7 @@ export function App(): React.ReactElement {
           </div>
         )}
 
+        <div className={`conversation-layout${welcome ? " welcome-layout" : ""}`}>
         {loading ? (
           <div className="transcript">
             <div className="content-loading">
@@ -1311,6 +1354,7 @@ export function App(): React.ReactElement {
             toolProgress={toolProgress}
             onSuggest={sendPrompt}
             emptyProject={status ? baseName(status.cwd) : null}
+            accountName={status?.account?.name}
             deliveries={deliveries}
             onRevise={busy || engineDown ? undefined : reviseMessage}
             onUnqueue={engineDown ? undefined : unqueueMessage}
@@ -1328,6 +1372,8 @@ export function App(): React.ReactElement {
           busy={busy}
           models={models}
           draft={draft}
+          welcome={welcome}
+          onPickProject={pickFolder}
           disabled={engineDown || loading !== null}
           onSend={sendPrompt}
           onInterrupt={() => {
@@ -1351,6 +1397,9 @@ export function App(): React.ReactElement {
           }}
           onLoadModels={loadModels}
         />
+        {welcome && <WorkspaceHome projects={projects} sessions={sessions} disabled={engineDown || loading !== null} onDraft={(text) => setDraft({ text, nonce: Date.now() })} onOpenProject={openProject} onResume={resumeSession} onPickFolder={pickFolder} />}
+        </div>
+        <div className="workspace-status"><span><i className={`conn-dot ${connect}`} />{connect !== "ready" ? t(connect === "connecting" ? "connecting" : connect === "signed-out" ? "signedOut" : "engineError") : busy ? t("studioWorking") : status?.snapshotCount ? t("studioReview") : t("studioReady")}</span><span>{serviceLabel(status?.provider) ?? "OnFlip"}</span><button onClick={() => setModal("commands")}>{t("studioCommandSearch")}<kbd>Ctrl K</kbd></button></div>
       </main>
 
       {terminalOpen && (
@@ -1374,9 +1423,10 @@ export function App(): React.ReactElement {
         open={terminalOpen}
         projectCwd={status?.cwd ?? null}
         onClose={() => setTerminalOpen(false)}
+        onSelectDock={selectDock}
       />
 
-      {browserOpen && (
+      {(browserOpen || changesOpen) && (
         <div
           className="browser-resizer"
           style={{ right: browserWidth + (terminalOpen ? termWidth : 0) - 3 }}
@@ -1404,7 +1454,9 @@ export function App(): React.ReactElement {
         covered={modal !== null || approval !== null || confirm !== null || peek !== null || updateRun !== null}
         frame={browserFrame}
         onClose={() => setBrowserOpen(false)}
+        onSelectDock={selectDock}
       />
+      {changesOpen && <ChangesPanel sessionId={status?.sessionId} revision={status?.snapshotCount ?? 0} onClose={() => setChangesOpen(false)} onSelect={selectDock} onExpand={() => setModal("diff")} />}
 
       {approval && (
         <ApprovalModal
@@ -1428,8 +1480,25 @@ export function App(): React.ReactElement {
           onSetLang={setLang}
           notifications={notifications}
           onSetNotifications={setNotifications}
+          motion={motion}
+          onSetMotion={setMotion}
         />
       )}
+      {modal === "connections" && <ConnectionsModal status={status} models={models} connect={connect} onClose={() => setModal(null)} onManage={() => setModal("settings")} />}
+      {modal === "commands" && <CommandPalette onClose={() => setModal(null)} actions={[
+        { id: "new", label: t("studioNewChat"), icon: "workspace", disabled: busy || engineDown, run: () => guard(api.newSession()) },
+        { id: "project", label: t("studioOpenProject"), icon: "folder", disabled: engineDown, run: pickFolder },
+        { id: "sessions", label: t("sessions"), icon: "workspace", run: () => setModal("sessions") },
+        { id: "search", label: t("stripSearch"), icon: "search", shortcut: "Ctrl F", run: () => setSearchOpen(true) },
+        { id: "connections", label: t("studioConnections"), icon: "connections", run: () => setModal("connections") },
+        { id: "schedules", label: t("studioAutomations"), icon: "clock", run: () => setModal("schedules") },
+        { id: "skills", label: t("studioSkills"), icon: "skills", run: () => setModal("skills") },
+        { id: "preview", label: t("studioPreview"), icon: "workspace", run: () => selectDock("preview") },
+        { id: "terminal", label: t("stripTerminal"), icon: "code", run: () => selectDock("terminal") },
+        { id: "changes", label: t("studioChanges"), icon: "code", run: () => selectDock("changes") },
+        { id: "theme", label: t("studioThemeToggle"), icon: theme === "dark" ? "sun" : "moon", run: () => setTheme((current) => current === "dark" ? "light" : "dark") },
+        { id: "settings", label: t("settings"), icon: "settings", run: () => setModal("settings") },
+      ]} />}
       {modal === "diff" && <DiffModal onClose={() => setModal(null)} />}
       {modal === "about" && <AboutModal status={status} onClose={() => setModal(null)} />}
       {peek && (
@@ -1589,4 +1658,3 @@ function TodoPanel({ items }: { items: TodoItemDTO[] }): React.ReactElement | nu
     </div>
   );
 }
-

@@ -3,6 +3,7 @@ import { Modal } from "./common";
 import { LangContext, useT } from "../i18n";
 import { SKILLS, SkillDef } from "../../../shared/skills";
 import { composing } from "../../../shared/escape";
+import { SkillIcon } from "./StudioIcon";
 
 /**
  * The Skill Hub: a gallery of built-in, well-shaped prompts for the jobs a
@@ -42,7 +43,7 @@ export function SkillsModal({
           return (
             <div key={skill.id} className="skill-card">
               <div className="skill-head">
-                <span className="skill-icon">{skill.icon}</span>
+                <span className="skill-icon"><SkillIcon id={skill.id} size={20} /></span>
                 <span className="skill-name">{skill.name[lang]}</span>
               </div>
               <div className="skill-desc">{skill.desc[lang]}</div>

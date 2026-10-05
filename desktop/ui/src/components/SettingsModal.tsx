@@ -23,6 +23,8 @@ export function SettingsModal({
   onSetLang,
   notifications,
   onSetNotifications,
+  motion,
+  onSetMotion,
 }: {
   status: EngineStatus | null;
   onClose: () => void;
@@ -34,6 +36,8 @@ export function SettingsModal({
   onSetLang: (lang: Lang) => void;
   notifications: boolean;
   onSetNotifications: (on: boolean) => void;
+  motion: boolean;
+  onSetMotion: (on: boolean) => void;
 }): React.ReactElement {
   const t = useT();
   const [config, setConfig] = useState<ConfigView | null>(null);
@@ -100,6 +104,21 @@ export function SettingsModal({
 
   return (
     <Modal title={t("settings")} onClose={onClose} wide>
+      <nav className="settings-navigation" aria-label={t("settings")}>
+        {([
+          ["appearance", t("setAppearance")],
+          ["agent", t("setAgent")],
+          ["browser", t("setBrowser")],
+          ["models", t("setModels")],
+          ["rules", t("setRules")],
+        ] as const).map(([id, label]) => <button key={id} onClick={(event) => {
+          const body = event.currentTarget.closest(".modal-body");
+          const section = body?.querySelector<HTMLElement>(`[data-settings="${id}"]`);
+          if (!body || !section) return;
+          body.scrollTo({ top: body.scrollTop + section.getBoundingClientRect().top - body.getBoundingClientRect().top - 54, behavior: motion && !window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "smooth" : "auto" });
+          section.focus({ preventScroll: true });
+        }}>{label}</button>)}
+      </nav>
       <ProviderSection />
       {status?.provider === "gemini" && (
         <GeminiKeySection
@@ -112,7 +131,7 @@ export function SettingsModal({
         />
       )}
 
-      <div className="settings-section">
+      <div className="settings-section" data-settings="appearance" tabIndex={-1}>
         <h3>{t("setAppearance")}</h3>
         <div className="setting-row">
           <div className="info">
@@ -142,6 +161,13 @@ export function SettingsModal({
         </div>
         <div className="setting-row">
           <div className="info">
+            <div className="name">{t("studioMotion")}</div>
+            <div className="desc">{t("studioMotionDesc")}</div>
+          </div>
+          <Toggle on={motion} onChange={onSetMotion} label={t("studioMotion")} />
+        </div>
+        <div className="setting-row">
+          <div className="info">
             <div className="name">{t("setLanguage")}</div>
             <div className="desc">{t("setLanguageDesc")}</div>
           </div>
@@ -166,7 +192,7 @@ export function SettingsModal({
         </div>
       </div>
 
-      <div className="settings-section">
+      <div className="settings-section" data-settings="agent" tabIndex={-1}>
         <h3>{t("setAgent")}</h3>
         <div className="setting-row">
           <div className="info">
@@ -217,7 +243,7 @@ export function SettingsModal({
         </div>
       </div>
 
-      <div className="settings-section">
+      <div className="settings-section" data-settings="browser" tabIndex={-1}>
         <h3>{t("setBrowser")}</h3>
         <div className="setting-row">
           <div className="info">
@@ -257,7 +283,7 @@ export function SettingsModal({
         </div>
       </div>
 
-      <div className="settings-section">
+      <div className="settings-section" data-settings="models" tabIndex={-1}>
         <h3>{t("setModels")}</h3>
         <div className="setting-row">
           <div className="info">
@@ -288,7 +314,7 @@ export function SettingsModal({
         </div>
       </div>
 
-      <div className="settings-section">
+      <div className="settings-section" data-settings="rules" tabIndex={-1}>
         <h3>{t("setRules")}</h3>
         <div className="modal-note">{t("setRulesNote")}</div>
         {config && config.rules.length > 0 && (

@@ -11,7 +11,10 @@ import { SKILLS, canonicaliseSkillMentions, findSkillMention } from "../../../sh
 import { isOffered } from "../../../shared/approval";
 import { LAYER_QUERY, composing, escapeInterrupts } from "../../../shared/escape";
 import { withDraft, withDraftFiles } from "../../../shared/draft";
-import { ChevronDown, Close, fileGlyph } from "./icons";
+import { ChevronDown, Close, fileGlyph, providerMark } from "./icons";
+import { SkillIcon, StudioIcon } from "./StudioIcon";
+import { baseName } from "./common";
+import { serviceLabel } from "../../../shared/providers";
 
 export { SLASH_COMMANDS, slashCommands } from "../../../shared/commands";
 import { slashCommands, slashDecision, type SlashCommand } from "../../../shared/commands";
@@ -185,6 +188,8 @@ export function Composer({
   onNotice,
   disabled,
   draft,
+  welcome,
+  onPickProject,
 }: {
   status: EngineStatus | null;
   busy: boolean;
@@ -202,6 +207,8 @@ export function Composer({
   disabled: boolean;
   /** Text injected by "edit message"; a new nonce applies it again. */
   draft: { text: string; files?: string[]; nonce: number } | null;
+  welcome?: boolean;
+  onPickProject?: () => void;
 }): React.ReactElement {
   const t = useT();
   const [text, setText] = useState("");
@@ -455,10 +462,12 @@ export function Composer({
       ? Math.min(100, Math.round(((status.contextChars ?? 0) / status.contextBudget) * 100))
       : null;
   const placeholder = busy ? t("hintBusy") : t("composerPlaceholder");
+  const ProviderMark = status?.provider ? providerMark(status.provider) : null;
 
   return (
     <div className="composer-wrap">
       <div className="composer">
+        {welcome && <div className="composer-context"><button disabled={disabled} onClick={onPickProject} title={status?.cwd}><StudioIcon name="folder" size={13} /><span>{status && !status.scratch ? baseName(status.cwd) : t("studioOpenProject")}</span><ChevronDown size={12} /></button><span>{t("studioLocal")}</span></div>}
         {slashOpen && (
           <div className="slash-menu">
             {slashMatches.map((c, i) => (
@@ -491,7 +500,7 @@ export function Composer({
                 onClick={() => pickSkill(s.id)}
               >
                 <span className="cmd">
-                  {s.icon} {s.name[lang]}
+                  <SkillIcon id={s.id} size={14} /> {s.name[lang]}
                 </span>
                 <span className="desc">{s.desc[lang]}</span>
               </button>
@@ -533,6 +542,7 @@ export function Composer({
             rows={1}
             value={text}
             placeholder={placeholder}
+            aria-label={placeholder}
             disabled={disabled}
             onChange={(e) => {
               setText(e.target.value);
@@ -547,8 +557,8 @@ export function Composer({
         </div>
 
         {busy ? (
-          <button className="send-btn stop" onClick={onInterrupt} title="Stop (Esc)">
-            ■
+          <button className="send-btn stop" onClick={onInterrupt} title="Stop (Esc)" aria-label="Stop">
+            <svg width="13" height="13" viewBox="0 0 16 16" aria-hidden="true"><rect x="3" y="3" width="10" height="10" rx="2" fill="currentColor" /></svg>
           </button>
         ) : (
           <button
@@ -556,8 +566,9 @@ export function Composer({
             disabled={disabled || (!text.trim() && attached.length === 0)}
             onClick={submit}
             title="Send (Enter)"
+            aria-label="Send"
           >
-            ↑
+            <StudioIcon name="send" size={20} />
           </button>
         )}
 
@@ -588,8 +599,8 @@ export function Composer({
               modelMenu.open(e);
             }}
           >
-            <ModelIcon />
-            <span className="chip-label">{modelLabel}</span>
+            {ProviderMark ? <ProviderMark size={16} /> : <ModelIcon />}
+            <span className="chip-label">{serviceLabel(status?.provider) ? `${serviceLabel(status?.provider)} · ` : ""}{modelLabel}</span>
             <span className="chev">
               <ChevronDown size={12} />
             </span>

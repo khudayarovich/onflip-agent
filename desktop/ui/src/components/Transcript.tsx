@@ -8,6 +8,8 @@ import { SKILL_TOKEN_RE, findSkill, expandSkillToken } from "../../../shared/ski
 import { ArrowRight, Check, ChevronDown, Close, Info, Pencil, Reload, fileGlyph } from "./icons";
 import { CopyButton } from "./CopyButton";
 import { composing } from "../../../shared/escape";
+import { WelcomeIntro } from "./WorkspaceHome";
+import { SkillIcon } from "./StudioIcon";
 
 /**
  * One item that cannot be drawn must not take the window with it.
@@ -90,6 +92,7 @@ export function Transcript({
   toolProgress,
   onSuggest,
   emptyProject,
+  accountName,
   deliveries,
   onRevise,
   onResume,
@@ -106,6 +109,7 @@ export function Transcript({
   toolProgress: Record<string, string>;
   onSuggest: (text: string) => void;
   emptyProject: string | null;
+  accountName?: string;
   /** Delivery badge per user-message id; absent means no badge. */
   deliveries: Record<string, DeliveryState>;
   /** Edit/resend a user message; undefined while a turn is running. */
@@ -235,26 +239,7 @@ export function Transcript({
   if (items.length === 0 && !streaming.active) {
     return (
       <div className="transcript" ref={scrollRef}>
-        <div className="empty-state">
-          <img className="glyph-logo" src={logo} alt="" />
-          <h2>{t("emptyTitle")}</h2>
-          <p>
-            {emptyProject
-              ? t("emptyDescProject", { project: emptyProject })
-              : t("emptyDescNoProject")}
-          </p>
-          <div className="hints">
-            <div className="hint" onClick={() => onSuggest(t("hintExplain"))}>
-              {t("hintExplain")}
-            </div>
-            <div className="hint" onClick={() => onSuggest(t("hintFix"))}>
-              {t("hintFix")}
-            </div>
-            <div className="hint" onClick={() => onSuggest(t("hintTests"))}>
-              {t("hintTests")}
-            </div>
-          </div>
-        </div>
+        <WelcomeIntro accountName={accountName} />
       </div>
     );
   }
@@ -427,7 +412,7 @@ const UserMessage = React.memo(function UserMessage({
       <>
         {text.slice(0, tokenMatch.index)}
         <button className="skill-link" onClick={() => setSkillOpen((v) => !v)}>
-          {skill.icon} {skill.name[lang]}
+          <SkillIcon id={skill.id} size={14} /> {skill.name[lang]}
         </button>
         {text.slice(tokenMatch.index + tokenMatch[0].length)}
       </>
@@ -482,7 +467,7 @@ const UserMessage = React.memo(function UserMessage({
       {skillOpen && skill && (
         <div className="skill-reveal">
           <div className="skill-reveal-head">
-            {skill.icon} {skill.name[lang]}
+            <SkillIcon id={skill.id} size={14} /> {skill.name[lang]}
           </div>
           <pre>{expandSkillToken(text)}</pre>
         </div>
@@ -612,6 +597,7 @@ export const TranscriptItem = React.memo(function TranscriptItem({
     case "assistant":
       return (
         <div className="msg-assistant has-copy">
+          <div className="assistant-identity"><img src={logo} alt="" /><span>OnFlip</span></div>
           <Markdown text={item.text} />
           {/* The whole message, as it was written — Markdown and all, since
               that is what is worth pasting somewhere else. The code blocks

@@ -3,6 +3,7 @@ import { api } from "../api";
 import { useT } from "../i18n";
 import { ArrowLeft, ArrowRight, Close, Reload, StopCircle } from "./icons";
 import { composing } from "../../../shared/escape";
+import { DockTabs, DockView } from "./WorkspaceDock";
 
 /**
  * The browser the agent drives.
@@ -70,6 +71,7 @@ export function BrowserPanel({
   covered,
   frame,
   onClose,
+  onSelectDock,
 }: {
   open: boolean;
   /**
@@ -84,6 +86,7 @@ export function BrowserPanel({
   covered?: boolean;
   frame: BrowserFrameDTO | null;
   onClose: () => void;
+  onSelectDock: (view: DockView) => void;
 }): React.ReactElement {
   const t = useT();
   const [zoom, setZoom] = useState(false);
@@ -267,7 +270,7 @@ export function BrowserPanel({
   })();
 
   return (
-    <div className={`browser-panel${open ? "" : " closed"}`}>
+    <div className={`browser-panel${open ? "" : " closed"}`} ref={(el) => { if (el) el.inert = !open; }} aria-hidden={!open}>
       <div className="term-head">
         <span className="term-title">{t("browserTitle")}</span>
         {!embedded && (
@@ -293,6 +296,7 @@ export function BrowserPanel({
         </button>
       </div>
 
+      <DockTabs active="preview" onSelect={onSelectDock} />
       {/*
         The toolbar a browser is expected to have.
         Only for the docked view: the screencast is a picture of somebody

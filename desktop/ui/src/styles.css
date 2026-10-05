@@ -1,24 +1,26 @@
 /* ==========================================================================
-   OnFlip Desktop — Codex-style dark shell
+   OnFlip Desktop — graphite, mint, and warm white
    ========================================================================== */
 
 :root {
-  --bg: #0d0d0d;
-  --bg-raised: #141414;
-  --bg-sidebar: #111111;
-  --bg-hover: #1d1d1d;
-  --bg-active: #242424;
-  --bg-input: #171717;
-  --border: #262626;
-  --border-strong: #333333;
-  --text: #ececec;
-  --text-secondary: #a8a8a8;
-  --text-muted: #6f6f6f;
-  --accent: #e8963c;
-  --accent-dim: #8a5a26;
-  --accent-soft: rgba(232, 150, 60, 0.12);
-  --green: #4cc38a;
-  --green-bg: rgba(46, 160, 103, 0.14);
+  --bg: #181d20;
+  --bg-raised: #1d2327;
+  --bg-sidebar: #121619;
+  --bg-hover: #252d31;
+  --bg-active: #2a3438;
+  --bg-input: #1d2327;
+  --border: #2a3236;
+  --border-strong: #3b474b;
+  --text: #e9eeeb;
+  --text-secondary: #a4afaa;
+  --text-muted: #89958f;
+  --accent: #b7f5c1;
+  --accent-dim: #83b58b;
+  --accent-soft: #1f3329;
+  --brand: #b7f5c1;
+  --on-brand: #17291d;
+  --green: #b7f5c1;
+  --green-bg: #1f3329;
   --red: #f26d78;
   --red-bg: rgba(229, 72, 87, 0.13);
   --yellow: #f0c000;
@@ -29,7 +31,7 @@
      panel is meant to look like. */
   --term-font: "Ubuntu Mono", "Ubuntu Sans Mono", "Ubuntu", "Cascadia Code", "Consolas",
     "DejaVu Sans Mono", "Courier New", monospace;
-  --sans: "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
+  --sans: "Inter", "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
   --radius: 10px;
   --radius-lg: 16px;
   --titlebar-h: 40px;
@@ -37,22 +39,22 @@
 
 /* Light theme: same tokens, different values — components never know. */
 :root[data-theme="light"] {
-  --bg: #ffffff;
-  --bg-raised: #ffffff;
-  --bg-sidebar: #f6f6f4;
-  --bg-hover: #ececea;
-  --bg-active: #e7e7e4;
-  --bg-input: #f4f4f2;
-  --border: #e4e4e1;
-  --border-strong: #d2d2ce;
-  --text: #1c1c1c;
-  --text-secondary: #56565a;
-  --text-muted: #8b8b88;
-  --accent: #d8720a;
-  --accent-dim: #b25f1d;
-  --accent-soft: rgba(216, 114, 10, 0.1);
-  --green: #1d7d4f;
-  --green-bg: rgba(29, 125, 79, 0.1);
+  --bg: #fafbf8;
+  --bg-raised: #f0f3ef;
+  --bg-sidebar: #eff2ee;
+  --bg-hover: #e3e9e1;
+  --bg-active: #dbe5da;
+  --bg-input: #f0f3ef;
+  --border: #d6ded5;
+  --border-strong: #b7c5b5;
+  --text: #1d2a23;
+  --text-secondary: #526257;
+  --text-muted: #647267;
+  --accent: #25633a;
+  --accent-dim: #357444;
+  --accent-soft: #e1f1e1;
+  --green: #25633a;
+  --green-bg: #e1f1e1;
   --red: #c93a45;
   --red-bg: rgba(201, 58, 69, 0.09);
   --yellow: #9a7b00;

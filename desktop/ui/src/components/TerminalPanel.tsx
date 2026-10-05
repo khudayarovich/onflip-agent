@@ -3,6 +3,7 @@ import { useT } from "../i18n";
 import { Close, Eraser, Stop, Terminal as TerminalIcon } from "./icons";
 import { parseAnsi, isPlain, type AnsiSpan, type AnsiStyle } from "../../../shared/ansi";
 import { composing } from "../../../shared/escape";
+import { DockTabs, DockView } from "./WorkspaceDock";
 
 /**
  * The built-in terminal: a docked panel for running commands without leaving
@@ -52,10 +53,12 @@ export function TerminalPanel({
   open,
   projectCwd,
   onClose,
+  onSelectDock,
 }: {
   open: boolean;
   projectCwd: string | null;
   onClose: () => void;
+  onSelectDock: (view: DockView) => void;
 }): React.ReactElement {
   const t = useT();
   // The IPC listeners below subscribe once and would otherwise keep the
@@ -180,7 +183,7 @@ export function TerminalPanel({
   const shortCwd = cwd.replace(/^.*[\\/](?=[^\\/]+[\\/][^\\/]+$)/, "…\\");
 
   return (
-    <div className="term-panel">
+    <div className="term-panel" ref={(el) => { if (el) el.inert = !open; }} aria-hidden={!open}>
       <div className="term-head">
         <span className="term-title">
           <TerminalIcon size={13} />
@@ -201,6 +204,7 @@ export function TerminalPanel({
           <Close size={13} />
         </button>
       </div>
+      <DockTabs active="terminal" onSelect={onSelectDock} />
       <div className="term-out" ref={scrollRef} onScroll={onScroll} onClick={() => inputRef.current?.focus()}>
         {lines.length === 0 && <div className="term-hint">{t("termHint")}</div>}
         {lines.map((line) => (

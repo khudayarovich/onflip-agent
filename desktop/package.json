@@ -1,6 +1,6 @@
 {
   "name": "onflip-desktop",
-  "version": "0.10.71",
+  "version": "0.10.72",
   "private": true,
   "description": "OnFlip Desktop — your agent for coding and daily tasks, in a native window",
   "author": "Farrukh Khudayarovich Yuldashev",
@@ -10,6 +10,7 @@
     "build:node": "tsc -p tsconfig.json",
     "build:ui": "vite build",
     "build": "npm run build:node && npm run build:ui",
+    "test:ui": "npm run build:ui && node scripts/ui-smoke.cjs",
     "start": "npm run build && electron .",
     "app": "electron .",
     "icon": "node scripts/make-icon.js",

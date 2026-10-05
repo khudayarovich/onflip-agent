@@ -110,6 +110,7 @@ $env:ONFLIP_DESKTOP_DEBUG = "1"
 $failures = @()
 $started = Get-Date
 $p = Start-Process -FilePath $exePath -ArgumentList "--user-data-dir=`"$work\userdata`"" `
+  -WindowStyle Hidden `
   -RedirectStandardOutput "$work\stdout.log" -RedirectStandardError "$work\stderr.log" -PassThru
 try {
   $deadline = (Get-Date).AddSeconds($Seconds)

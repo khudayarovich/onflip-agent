@@ -23,6 +23,7 @@ and [../AGENTS.md](../AGENTS.md).
 npm install     # the engine must be built first: npm install in the repo root
 npm start       # build everything, then launch
 npm run typecheck
+npm run test:ui # production-renderer checks with an isolated bridge fixture
 ```
 
 Environment switches that help while working:
@@ -34,6 +35,9 @@ Environment switches that help while working:
 
 The engine writes one log per run to `~/.onflip/logs/`; the shell mirrors the
 engine's stderr to `engine-stderr.log` in the app's userData directory.
+
+The workspace design, motion settings, dock behavior, and UI checks are
+documented in [../docs/workspace-design.md](../docs/workspace-design.md).
 
 ## Packaging
 

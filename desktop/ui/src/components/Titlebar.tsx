@@ -2,6 +2,8 @@ import React, { useEffect, useState } from "react";
 import type { EngineStatus } from "../../../shared/protocol";
 import logo from "../assets/logo.svg";
 import { providerMark } from "./icons";
+import { StudioIcon } from "./StudioIcon";
+import { useT } from "../i18n";
 
 /** Panel-left glyph — the standard "toggle sidebar" icon. */
 function SidebarToggleIcon(): React.ReactElement {
@@ -88,10 +90,17 @@ function WindowControls(): React.ReactElement {
 export function Titlebar({
   status,
   onToggleSidebar,
+  theme,
+  onToggleTheme,
+  onOpenCommands,
 }: {
   status: EngineStatus | null;
   onToggleSidebar: () => void;
+  theme: "dark" | "light";
+  onToggleTheme: () => void;
+  onOpenCommands: () => void;
 }): React.ReactElement {
+  const t = useT();
   // macOS draws its own window buttons — the app keeps them and only hides
   // the title bar, so the corner looks like every other Mac app rather than
   // like a Windows app that was carried over. Everywhere else the renderer
@@ -115,10 +124,14 @@ export function Titlebar({
       </button>
       <div className="brand">
         <img className="logo" src={logo} alt="" />
-        OnFlip
+        onflip<span className="wordmark-dot">.</span>
         <ProviderBadge />
       </div>
       <div className="session-title">{title}</div>
+      <div className="titlebar-actions">
+        <button className="icon-btn" onClick={onOpenCommands} title={`${t("studioCommandSearch")} (Ctrl K)`} aria-label={t("studioCommandSearch")}><StudioIcon name="search" size={16} /></button>
+        <button className="icon-btn" onClick={onToggleTheme} title={t("studioThemeToggle")} aria-label={t("studioThemeToggle")}><StudioIcon name={theme === "dark" ? "sun" : "moon"} size={16} /></button>
+      </div>
       {!isMac && <WindowControls />}
     </div>
   );

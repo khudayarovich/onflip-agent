@@ -1,8 +1,9 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useId } from "react";
 import type { ApprovalDecisionDTO, ApprovalRequestDTO } from "../../../shared/protocol";
 import { DiffView } from "./DiffView";
 import { useT, type StringKey } from "../i18n";
 import { HOTKEY_ARM_MS, isApprovalHotkey, type ApprovalKey } from "../../../shared/approval";
+import { useDialogFocus } from "./common";
 
 const KIND_LABELS: Record<ApprovalRequestDTO["kind"], StringKey> = {
   read: "kindRead",
@@ -24,6 +25,10 @@ export function ApprovalModal({
   onDecision: (decision: ApprovalDecisionDTO) => void;
 }): React.ReactElement {
   const t = useT();
+  // Focus the dialog itself so a keystroke carried over from typing cannot
+  // activate an approval button through its native Enter/Space behavior.
+  const dialogRef = useDialogFocus("container");
+  const titleId = useId();
   useEffect(() => {
     // A prompt that appears under someone's fingers must not be answered by
     // what they were already typing.
@@ -51,9 +56,9 @@ export function ApprovalModal({
 
   return (
     <div className="modal-backdrop">
-      <div className="modal approval">
+      <div className="modal approval" ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <div className="modal-head">
-          <h2>{t("approvalNeeded")}</h2>
+          <h2 id={titleId}>{t("approvalNeeded")}</h2>
         </div>
         <div className="modal-body">
           <div className="kind-row">

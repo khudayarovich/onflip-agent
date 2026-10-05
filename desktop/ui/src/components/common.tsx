@@ -1,4 +1,4 @@
-import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { Check, Close } from "./icons";
 
 // ---------------------------------------------------------------------------
@@ -8,15 +8,18 @@ import { Check, Close } from "./icons";
 export function Toggle({
   on,
   onChange,
+  label,
 }: {
   on: boolean;
   onChange: (next: boolean) => void;
+  label?: string;
 }): React.ReactElement {
   return (
     <button
       className={`toggle${on ? " on" : ""}`}
       role="switch"
       aria-checked={on}
+      aria-label={label}
       onClick={() => onChange(!on)}
     />
   );
@@ -131,26 +134,68 @@ export function useMenu(): {
 // Modal shell
 // ---------------------------------------------------------------------------
 
+function topDialog(): Element | undefined | null {
+  // Approvals are rendered earlier in App, but own the top visual layer.
+  return document.querySelector(".modal.approval") ?? [...document.querySelectorAll(".modal")].at(-1);
+}
+
+export function useDialogFocus(initial: "first" | "input" | "container" = "first"): React.RefObject<HTMLDivElement> {
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const previous = document.activeElement;
+    const dialog = dialogRef.current;
+    const focusable = () => [...(dialog?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), textarea:not(:disabled), select:not(:disabled), a[href], [tabindex="0"]') ?? [])].filter((el) => !el.closest("[inert]") && el.getClientRects().length > 0);
+    const frame = requestAnimationFrame(() => {
+      if (dialog && topDialog() === dialog && !dialog.contains(document.activeElement)) {
+        const target = initial === "container" ? dialog : initial === "input" ? focusable().find((el) => el.matches("input, textarea")) : focusable()[0];
+        (target ?? dialog).focus();
+      }
+    });
+    const trap = (event: KeyboardEvent) => {
+      if (event.key !== "Tab" || event.defaultPrevented) return;
+      // An approval or a newer dialog owns keyboard focus while it is above us.
+      if (topDialog() !== dialog) return;
+      const controls = focusable();
+      const first = controls[0]; const last = controls.at(-1);
+      if (!first || !last) { event.preventDefault(); dialog?.focus(); return; }
+      if (!dialog?.contains(document.activeElement)) { event.preventDefault(); (event.shiftKey ? last : first).focus(); }
+      else if (event.shiftKey && (document.activeElement === first || document.activeElement === dialog)) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("keydown", trap);
+    return () => {
+      cancelAnimationFrame(frame);
+      document.removeEventListener("keydown", trap);
+      if ((dialog?.contains(document.activeElement) || document.activeElement === document.body) && previous instanceof HTMLElement && previous.isConnected) previous.focus();
+    };
+  }, [initial]);
+  return dialogRef;
+}
+
 export function Modal({
   title,
   wide,
   onClose,
   children,
   footer,
+  focusInput,
 }: {
   title: string;
   wide?: boolean;
   onClose: () => void;
   children: React.ReactNode;
   footer?: React.ReactNode;
+  focusInput?: boolean;
 }): React.ReactElement {
+  const dialogRef = useDialogFocus(focusInput ? "input" : "first");
+  const titleId = useId();
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       // Escape belongs to the topmost layer. The ApprovalModal listens in the
       // capture phase and calls preventDefault when it takes the key, so by
       // the time this bubble-phase listener runs a handled Escape is marked;
       // acting on it too would close this dialog under the prompt.
-      if (e.key === "Escape" && !e.defaultPrevented) onClose();
+      if (e.key === "Escape" && !e.defaultPrevented && topDialog() === dialogRef.current) { e.preventDefault(); onClose(); }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -163,9 +208,9 @@ export function Modal({
         if (e.target === e.currentTarget) onClose();
       }}
     >
-      <div className={`modal${wide ? " wide" : ""}`}>
+      <div className={`modal${wide ? " wide" : ""}`} ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <div className="modal-head">
-          <h2>{title}</h2>
+          <h2 id={titleId}>{title}</h2>
           <button className="icon-btn" onClick={onClose} aria-label="Close">
             <Close size={13} />
           </button>

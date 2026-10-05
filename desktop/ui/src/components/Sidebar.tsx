@@ -18,8 +18,11 @@ import {
 } from "./icons";
 import { useT } from "../i18n";
 import { serviceLabel } from "../../../shared/providers";
+import logo from "../assets/logo.svg";
+import { StudioIcon } from "./StudioIcon";
 
 export function Sidebar({
+  hidden,
   status,
   connect,
   connectDetail,
@@ -41,9 +44,14 @@ export function Sidebar({
   onOpenHealth,
   onOpenSchedules,
   onOpenSubTasks,
+  onOpenConnections,
+  onOpenCommands,
+  activeModal,
+  onOpenWorkspace,
   onSignIn,
   onSignOut,
 }: {
+  hidden: boolean;
   status: EngineStatus | null;
   connect: ConnectState;
   connectDetail?: string;
@@ -69,6 +77,10 @@ export function Sidebar({
   onOpenHealth: () => void;
   onOpenSchedules: () => void;
   onOpenSubTasks: () => void;
+  onOpenConnections: () => void;
+  onOpenCommands: () => void;
+  activeModal?: string | null;
+  onOpenWorkspace: () => void;
   onSignIn: () => void;
   onSignOut: () => void;
 }): React.ReactElement {
@@ -131,14 +143,22 @@ export function Sidebar({
           : (connectDetail ?? t("engineError"));
 
   return (
-    <aside className="sidebar">
+    <aside className="sidebar" ref={(el) => { if (el) el.inert = hidden; }} aria-hidden={hidden}>
       <div className="top">
+        <div className="sidebar-brand"><img src={logo} alt="" /><span>onflip<span className="wordmark-dot">.</span></span></div>
         <button className="new-chat-btn" onClick={onNewSession}>
           <span className="plus">
             <Plus size={14} />
           </span>{" "}
-          {t("newSession")}
+          {t("studioNewChat")}
         </button>
+        <button className="sidebar-search" onClick={onOpenCommands}><StudioIcon name="search" size={16} /><span>{t("studioCommandSearch")}</span><kbd>Ctrl K</kbd></button>
+        <nav className="workspace-navigation" aria-label={t("studioWorkspace")}>
+          <button className={!activeModal || activeModal === "sessions" ? "selected" : ""} onClick={onOpenWorkspace}><StudioIcon name="workspace" />{t("studioWorkspace")}</button>
+          <button className={activeModal === "schedules" ? "selected" : ""} onClick={onOpenSchedules}><StudioIcon name="clock" />{t("studioAutomations")}</button>
+          <button className={activeModal === "skills" ? "selected" : ""} onClick={onOpenSkills}><StudioIcon name="skills" />{t("studioSkills")}</button>
+          <button className={activeModal === "connections" ? "selected" : ""} onClick={onOpenConnections}><StudioIcon name="connections" />{t("studioConnections")}</button>
+        </nav>
         <button className="project-btn" onClick={projectMenu.open} title={status?.cwd}>
           <span className="folder">
             <Folder size={14} />
@@ -593,6 +613,7 @@ function AccountBar({
         onClick={() => setOpen(!open)}
         title={connectDetail ?? connLabel}
       >
+        <span className="account-avatar" aria-hidden="true">{displayName.slice(0, 1).toUpperCase()}</span>
         <span className="account-meta">
           <span className="account-name">{displayName}</span>
           <span className="account-state">

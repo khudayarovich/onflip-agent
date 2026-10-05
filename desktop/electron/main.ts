@@ -989,7 +989,7 @@ function createWindow(cwd?: string): Workspace {
     minHeight: 520,
     show: false,
     icon: path.join(__dirname, "..", "..", "buildResources", "icon.ico"),
-    backgroundColor: "#0d0d0d",
+    backgroundColor: "#181d20",
     // Window controls belong to the platform. On Windows the renderer draws
     // its own minimise/maximise/close over a frameless window, which is what
     // that platform's apps look like. macOS has one shape of window button
