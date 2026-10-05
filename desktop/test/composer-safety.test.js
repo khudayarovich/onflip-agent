@@ -27,7 +27,9 @@ const REPLAY = path.join(__dirname, "..", "dist", "engine", "replay.js");
 const needsBuild = fs.existsSync(ESCAPE) && fs.existsSync(REPLAY)
   ? false
   : "desktop/dist is not built (run: cd desktop && npm run build:node)";
-const ui = (name) => fs.readFileSync(path.join(__dirname, "..", "ui", "src", name), "utf8");
+// Git may check out renderer sources with CRLF on Windows. Line endings are
+// unrelated to the draft behavior these source assertions protect.
+const ui = (name) => fs.readFileSync(path.join(__dirname, "..", "ui", "src", name), "utf8").replace(/\r\n/g, "\n");
 
 test("Escape stops a turn only when nothing is open above the composer", { skip: needsBuild }, () => {
   const { escapeInterrupts } = require(ESCAPE);

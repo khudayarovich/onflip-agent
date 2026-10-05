@@ -4,7 +4,10 @@ The desktop workspace uses graphite surfaces, mint accents, Inter, and a warm
 light theme. Shared colors live in `desktop/ui/src/styles.css`; the workspace
 layout and component styles live in `desktop/ui/src/workspace.css`. Inter is
 bundled locally, with its license included in `ui-dist/licenses/Inter-OFL.txt`.
-The existing symbol remains in use, alongside the lowercase wordmark.
+The flip symbol uses mint and deep green on graphite, alongside the lowercase
+wordmark. `desktop/buildResources/logo.svg` is the master artwork. Run
+`npm run icon` in `desktop` after editing it; this regenerates the Windows ICO,
+macOS PNG, and renderer SVG together. Commit all three generated assets.
 
 The welcome screen shows the signed-in account and real recent projects.
 Suggestions fill an editable draft. They do not send a message. Project cards

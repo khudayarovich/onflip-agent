@@ -1,6 +1,7 @@
 /**
  * Rasterise buildResources/logo.svg into the PNG sizes an app icon needs and
- * pack the Windows sizes into buildResources/icon.ico.
+ * pack the Windows sizes into buildResources/icon.ico. The macOS PNG and
+ * renderer SVG are copied from the same master so branding cannot drift.
  *
  * Playwright (resolved from the repository root's node_modules) does the
  * rendering, so no image tooling has to be installed. ICO entries are stored
@@ -76,7 +77,12 @@ function packIco() {
 }
 
 render()
-  .then(packIco)
+  .then(() => {
+    packIco();
+    fs.copyFileSync(path.join(RES, "icon-1024.png"), path.join(RES, "icon.png"));
+    fs.copyFileSync(SVG, path.join(__dirname, "..", "ui", "src", "assets", "logo.svg"));
+    console.log("updated macOS icon.png and renderer logo.svg");
+  })
   .catch((e) => {
     console.error(e);
     process.exit(1);

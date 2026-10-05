@@ -31,7 +31,7 @@ button:not(:disabled):active { filter: brightness(.96); }
 .sidebar { background: var(--bg-sidebar); }
 .sidebar .top { padding: 23px 15px 7px; border-bottom: 0; }
 .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 0 9px 25px; font-size: 26px; font-weight: 650; letter-spacing: -1.3px; }
-.sidebar-brand img { width: 29px; height: 29px; border-radius: 8px; filter: grayscale(1); }
+.sidebar-brand img { width: 29px; height: 29px; border-radius: 8px; }
 .new-chat-btn { justify-content: flex-start; min-height: 41px; padding: 10px 13px; background: var(--bg-raised); border: 1px solid var(--border); font-size: 12px; font-weight: 500; border-radius: 9px; }
 .new-chat-btn .plus { color: var(--accent); }
 .new-chat-btn:hover { border-color: var(--accent); background: var(--bg-hover); }
@@ -89,7 +89,6 @@ kbd { font-family: var(--sans); font-size: 9px; font-weight: 400; color: var(--t
 .transcript-inner { max-width: 850px; padding: 30px 30px 18px; gap: 18px; }
 .message.user { background: var(--bg-raised); border-color: var(--border); border-radius: 12px 12px 3px 12px; }
 .msg-user { background: var(--bg-raised); border: 1px solid var(--border); border-radius: 12px 12px 3px 12px; }
-.msg-assistant .avatar, .msg-assistant img, .transcript-inner .avatar-logo { filter: grayscale(1); }
 .tool-card { border-radius: 11px; border-color: var(--border); background: var(--bg-sidebar); }
 .tool-card .tool-header { font-size: 11px; }
 .todo-panel-wrap { max-width: 850px; width: 100%; margin: 0 auto; padding-left: 30px; padding-right: 30px; }
@@ -232,7 +231,7 @@ kbd { font-family: var(--sans); font-size: 9px; font-weight: 400; color: var(--t
 .slash-menu { background: var(--bg-raised); border-color: var(--border-strong); border-radius: 12px; box-shadow: 0 14px 40px #0003; }
 .tip-card { background: var(--bg-raised); border-color: var(--border-strong); border-radius: 10px; }
 .assistant-identity { display: flex; gap: 8px; align-items: center; font-size: 11px; font-weight: 500; margin-bottom: 13px; }
-.assistant-identity img { width: 22px; height: 22px; border-radius: 6px; filter: grayscale(1); }
+.assistant-identity img { width: 22px; height: 22px; border-radius: 6px; }
 .workspace-dock-tabs { display: flex; align-items: center; gap: 5px; min-height: 43px; padding: 0 16px; border-bottom: 1px solid var(--border); flex-shrink: 0; }
 .workspace-dock-tabs button { font-size: 10px; padding: 11px 12px; color: var(--text-muted); border-bottom: 2px solid transparent; }
 .workspace-dock-tabs button.selected { color: var(--text); border-bottom-color: var(--accent); }
