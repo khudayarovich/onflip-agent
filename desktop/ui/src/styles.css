@@ -32,11 +32,11 @@
   --term-font: "Ubuntu Mono", "Ubuntu Sans Mono", "Ubuntu", "Cascadia Code", "Consolas",
     "DejaVu Sans Mono", "Courier New", monospace;
   --sans: "Inter", "Segoe UI Variable Text", "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif;
-  --font-size-body: 16px;
-  --font-size-ui: 14px;
+  --font-size-body: 15px;
+  --font-size-ui: 13px;
   --font-size-small: 12px;
-  --font-size-heading: 18px;
-  --font-size-code: 14px;
+  --font-size-heading: 17px;
+  --font-size-code: 13px;
   --radius: 10px;
   --radius-lg: 16px;
   --titlebar-h: 40px;

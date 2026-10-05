@@ -9,11 +9,17 @@ wordmark. `desktop/buildResources/logo.svg` is the master artwork. Run
 `npm run icon` in `desktop` after editing it; this regenerates the Windows ICO,
 macOS PNG, and renderer SVG together. Commit all three generated assets.
 
-Shared typography tokens keep conversation text and the composer at 16px,
-controls at 14px, secondary labels at 12px, and dialog headings at 18px. Code
-and terminal output use 14px. Compact layouts hide or wrap secondary content
+Shared typography tokens keep conversation text and the composer at 15px,
+controls at 13px, secondary labels at 12px, and dialog headings at 17px. Code
+and terminal output use 13px. Compact layouts hide or wrap secondary content
 instead of shrinking the text. The composer text and its highlight backdrop
 share the same font metrics.
+
+Windows workspace windows set their taskbar app ID, relaunch display name,
+icon and command explicitly through `windowAppDetails`. Development relaunches
+carry the checkout path so the taskbar opens OnFlip rather than Electron's
+welcome screen. The app display name changes after userData is resolved,
+preserving the existing storage location.
 
 The welcome screen shows the signed-in account and real recent projects.
 Suggestions fill an editable draft. They do not send a message. Project cards

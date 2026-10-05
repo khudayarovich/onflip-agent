@@ -81,6 +81,7 @@ import type { ApprovalDecisionDTO, EngineStatus } from "../shared/protocol";
 import { writeJsonFile } from "./persistence";
 import { isWebUrl, openableArtifact } from "../shared/open-safety";
 import { engineRuntime, probeSystemNode } from "./engine-runtime";
+import { windowAppDetails } from "./app-identity";
 
 /**
  * The Electron main process is deliberately thin: it owns windows and their
@@ -988,7 +989,8 @@ function createWindow(cwd?: string): Workspace {
     minWidth: 760,
     minHeight: 520,
     show: false,
-    icon: path.join(__dirname, "..", "..", "buildResources", "icon.ico"),
+    title: "OnFlip",
+    icon: appIcon(),
     backgroundColor: "#181d20",
     // Window controls belong to the platform. On Windows the renderer draws
     // its own minimise/maximise/close over a frameless window, which is what
@@ -1006,6 +1008,10 @@ function createWindow(cwd?: string): Workspace {
       spellcheck: false,
     },
   });
+
+  if (process.platform === "win32") {
+    win.setAppDetails(windowAppDetails(process.execPath, app.getAppPath(), app.isPackaged));
+  }
 
   const ws: Workspace = { win, engine: null, peer: null, engineExited: false, termChild: null };
   workspaces.set(win.id, ws);
@@ -1894,6 +1900,11 @@ if (!app.isPackaged) {
   }
   app.setPath("userData", devData);
 }
+
+// Keep the established userData location above; changing the display name
+// must not move existing chats, window state, schedules or sign-in storage.
+app.setPath("userData", app.getPath("userData"));
+app.setName("OnFlip");
 
 // Before anything else touches Chromium: a command-line switch appended
 // after it has initialised is ignored, and this one is what lets the
