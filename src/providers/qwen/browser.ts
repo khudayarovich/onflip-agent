@@ -3,7 +3,7 @@ import { chromium, BrowserContext, Page } from "playwright";
 import { logger } from "../../log";
 import type { FailureCode } from "../../chatgpt/backoff";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
-import { paceNewChat, paceSend, parseRetryAfter, statedWaitSeconds } from "../../chatgpt/backoff";
+import { assertNotCoolingDown, paceNewChat, paceSend, parseRetryAfter, statedWaitSeconds } from "../../chatgpt/backoff";
 import { EXTRACT_REPLY as EXTRACT_REPLY_SCRIPT, normalizeNodes, toMarkdown } from "./extract";
 import {
   QWEN_CHAT_URL,
@@ -1375,6 +1375,8 @@ export async function sendTurn(
   opts: OpenOptions & {
     timeoutMs?: number;
     signal?: AbortSignal;
+    model?: string;
+    fresh?: boolean;
     /** Called with the answer so far, each time it grows. */
     onProgress?: (partial: string) => void;
   } = {}
@@ -1393,17 +1395,18 @@ export async function sendTurn(
   // That is the shape of a service ending a session under load, not of a
   // driver breaking, and pacing is the part of it OnFlip controls.
   await paceSend(opts.signal);
+  if (opts.signal?.aborted) throw new QwenError("interrupted", "interrupted");
   logger.info("qwen", "turn: opening the page", { chars: text.length });
   /** Where the setup time went, for the "sent" line: every step is a guess otherwise. */
   const timing: { newChatMs?: number; readyBy?: "session" | "pause"; prepMs?: number; submitMs?: number } = {};
   let page = await chatPage(opts);
   if (pendingNewChat) {
-    pendingNewChat = false;
     const openedAt = Date.now();
     // Opening a conversation is the expensive request as far as an abuse
     // control is concerned, and the agent opens them far more eagerly than
     // a person does - a compaction, a sub-agent, a recovery each start one.
     await paceNewChat(opts.signal);
+    if (opts.signal?.aborted) throw new QwenError("interrupted", "interrupted");
     // Listening before the navigation, so a quick answer is not missed.
     const settled = sessionSettled(
       page.waitForResponse((response) => response.url().includes(AUTHS_PATH), { timeout: 10_000 }).catch(() => null)
@@ -1423,12 +1426,17 @@ export async function sendTurn(
       .catch(() => logger.warn("qwen", "the composer did not appear on the new chat"));
     timing.readyBy = await firstSendReady(settled);
     timing.newChatMs = Date.now() - openedAt;
+    pendingNewChat = false;
   }
   const prepAt = Date.now();
   // Never begin behind the previous answer. The page is shared between
   // turns and with any sub-agent, so a Stop control left behind by an
   // interrupted one would be read as this turn working.
   await settlePage(page);
+  const requestedLabel = labelFor(opts.model);
+  if (opts.fresh && requestedLabel && !(await setModel(requestedLabel))) {
+    throw new QwenError(`Qwen could not apply ${requestedLabel}. Select an available model and try again.`, "invalid-request");
+  }
   /** This turn's text appends to a live conversation rather than starting one. */
   const continuing = conversationId !== null;
   const before = await readLast(page);
@@ -1445,6 +1453,8 @@ export async function sendTurn(
    * waiting for a reply to a message that had never been sent.
    */
   const submit = async (): Promise<void> => {
+    if (opts.signal?.aborted) throw new QwenError("interrupted", "interrupted");
+    assertNotCoolingDown();
     await page.click(COMPOSER).catch(() => {
       /* focus is a nicety; the fill below is what matters */
     });
@@ -1466,7 +1476,7 @@ export async function sendTurn(
       throw new QwenError("Qwen's composer was not on the page.", "composer-refused");
     }
     if (accepted < text.length) {
-      logger.warn("qwen", "the composer truncated the turn", { sent: text.length, accepted });
+      throw new QwenError(`Qwen's composer accepted only ${accepted} of ${text.length} characters. Nothing was sent; compact the session and try again.`, "message-refused");
     }
     // Until Send has taken the text, rather than a flat 300 ms on every send:
     // Qwen clears the button's `.disabled` class as soon as React has the
@@ -1554,6 +1564,7 @@ export async function sendTurn(
   /** A line every half minute, so a long wait is legible rather than silent. */
   let lastBeat = Date.now();
   let last: string | null = null;
+  let completed = false;
   let quiet = 0;
   let recovered = false;
   let lastChange = Date.now();
@@ -1590,6 +1601,8 @@ export async function sendTurn(
         "chat-lost"
       );
     }
+    await paceNewChat(opts.signal);
+    if (opts.signal?.aborted) throw new QwenError("interrupted", "interrupted");
     await gotoChat(page);
     await page
       .waitForSelector(COMPOSER, { timeout: 20_000 })
@@ -1610,6 +1623,10 @@ export async function sendTurn(
     }
     // The reload emptied the composer, so the turn has to go again - the
     // first attempt never reached the model.
+    if (requestedLabel && !(await setModel(requestedLabel))) {
+      throw new QwenError(`Qwen could not restore ${requestedLabel} after recovery. Select an available model and try again.`, "invalid-request");
+    }
+    await paceSend(opts.signal);
     await submit();
     lastChange = Date.now();
   };
@@ -1845,6 +1862,7 @@ export async function sendTurn(
             opts.onProgress?.(last);
           }
         }
+        completed = true;
         break;
       }
       // Still generating, and the text has not moved for a long time.
@@ -1861,6 +1879,7 @@ export async function sendTurn(
           quietMs: quiet * POLL_MS,
           chars: last.length,
         });
+        completed = true;
         break;
       }
     } catch (e) {
@@ -1885,8 +1904,9 @@ export async function sendTurn(
       quiet = 0;
     }
   }
-  if (last === null) {
-    throw new QwenError("Qwen did not answer before the deadline.");
+  if (!completed || last === null) {
+    await stopGenerating(page);
+    throw new QwenError("Qwen did not finish answering before the reply deadline. No tools from the incomplete reply were executed.", "service-error");
   }
   noteConversation(page.url());
   const ms = Date.now() - started;
@@ -2017,6 +2037,10 @@ export async function checkSelectors(): Promise<{
   const matches: Record<string, number> = {};
   try {
     const page = await chatPage();
+    // The composer mounts before the model picker on a cold page. Count a
+    // settled control, not its streaming placeholder, when checking health.
+    await page.waitForSelector(COMPOSER, { timeout: 10_000, state: "attached" }).catch(() => {});
+    await page.waitForSelector('[aria-label="Select Model"]', { timeout: 5_000, state: "attached" }).catch(() => {});
     for (const rule of QWEN_CONTRACT) {
       matches[rule.key] = (await withTimeout(
         page.$$eval(rule.selector, (els) => els.length),
@@ -2087,9 +2111,8 @@ export function labelFor(slug: string | undefined): string {
 /**
  * Choose a model in Qwen's own picker.
  *
- * Best-effort by design and reported by its return value rather than by an
- * exception: a model that could not be switched is a turn answered by the
- * other model, which is worth a log line and not worth failing a send over.
+ * Report the verified selection to the caller. A fresh turn must not be
+ * silently answered by a different model when the picker refuses a change.
  *
  * Real clicks rather than synthetic ones. Qwen's menus do not open for a
  * dispatched `click()` — measured on the live page, twice — because the
@@ -2100,6 +2123,9 @@ export async function setModel(label: string): Promise<boolean> {
   try {
     const page = await chatPage();
     const trigger = '[aria-label="Select Model"]';
+    // Auth and the textarea can be ready several seconds before the picker.
+    // The live cold-page probe found no chooser at 2.5s, then one at 5s.
+    await page.waitForSelector(trigger, { timeout: 15_000, state: "attached" });
     const current = (await withTimeout(
       page.$eval(trigger, (el) => (el as { innerText?: string }).innerText ?? ""),
       "reading the model picker"
@@ -2110,6 +2136,11 @@ export async function setModel(label: string): Promise<boolean> {
     const option = `.wms-list__item[role="option"]:has-text("${label}")`;
     await page.click(option, { timeout: 5_000 });
     await page.waitForTimeout(400);
+    const applied = await withTimeout(
+      page.$eval(trigger, (el) => (el as { innerText?: string }).innerText ?? ""),
+      "verifying the selected model"
+    );
+    if (!String(applied).trim().startsWith(label)) throw new Error("the picker still shows another model");
     logger.info("qwen", "model chosen", { label });
     return true;
   } catch (e) {

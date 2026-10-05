@@ -534,7 +534,10 @@ export async function runTurn(
     // would call that finished. ChatGPT's own "Continue generating" has
     // already been tried by the transport; this is the fallback, asking the
     // model to send the reply again complete.
-    if (meta.truncated && truncationNudges < MAX_TRUNCATION_NUDGES && totalNudges < MAX_NUDGES_PER_TURN) {
+    if (meta.truncated) {
+      if (truncationNudges >= MAX_TRUNCATION_NUDGES || totalNudges >= MAX_NUDGES_PER_TURN) {
+        throw new Error(`${serviceName()}'s reply remained truncated after the retry budget. No tools from the incomplete reply were executed.`);
+      }
       truncationNudges++;
       totalNudges++;
       logger.warn("protocol", "reply was truncated; asking for it again", {

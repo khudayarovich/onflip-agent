@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { createHash } from "node:crypto";
 import type { FileIdentity, FileRevision } from "../types";
 
 function statIdentity(stat: fs.Stats): string {
@@ -36,7 +37,7 @@ function nearestExistingAncestorIdentity(file: string): string {
 }
 
 /** Capture both the directory entry and followed target, plus its contents. */
-export function captureFileRevision(file: string): FileRevision {
+export function captureFileRevision(file: string, binary = false): FileRevision {
   let entry: fs.Stats;
   try {
     entry = fs.lstatSync(file);
@@ -56,11 +57,47 @@ export function captureFileRevision(file: string): FileRevision {
   if (!target.isFile()) throw new Error("path is not a regular file");
   return {
     exists: true,
-    contents: fs.readFileSync(file, "utf8"),
+    contents: binary ? createHash("sha256").update(fs.readFileSync(file)).digest("hex") : fs.readFileSync(file, "utf8"),
     pathIdentity: statIdentity(entry),
     targetIdentity: statIdentity(target),
     ancestorIdentity: null,
   };
+}
+
+export interface AncestorRevision {
+  file: string;
+  pathIdentity: string | null;
+  targetIdentity: string | null;
+}
+
+/** Directory identities, including every symlink/junction in the path. */
+export function captureAncestorChain(file: string): AncestorRevision[] {
+  const entries: AncestorRevision[] = [];
+  let candidate = path.dirname(file);
+  for (;;) {
+    try {
+      const entry = fs.lstatSync(candidate);
+      const target = fs.statSync(candidate);
+      entries.push({ file: candidate, pathIdentity: objectIdentity(entry), targetIdentity: objectIdentity(target) });
+    } catch (e) {
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+      entries.push({ file: candidate, pathIdentity: null, targetIdentity: null });
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return entries;
+    candidate = parent;
+  }
+}
+
+export function sameAncestorChain(before: AncestorRevision[], after: AncestorRevision[], allowCreated = false): boolean {
+  return before.length === after.length && before.every((entry, index) => {
+    const next = after[index];
+    if (entry.file !== next.file) return false;
+    if (entry.pathIdentity === next.pathIdentity && entry.targetIdentity === next.targetIdentity) return true;
+    // mkdir may add previously missing directories, but cannot replace an
+    // existing ancestor or introduce a symlink/junction in their place.
+    return allowCreated && entry.pathIdentity === null && next.pathIdentity !== null && next.pathIdentity === next.targetIdentity;
+  });
 }
 
 export function sameFileRevision(a: FileRevision, b: FileRevision): boolean {

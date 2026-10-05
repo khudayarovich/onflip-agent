@@ -2,14 +2,13 @@ import { ChatMessage } from "../../types";
 import { buildTurnPrompt } from "../../agent/protocol";
 import { logger } from "../../log";
 import type { SendOptions, Transport, TransportReply } from "../../chatgpt/transport";
+import { replyTimeoutMs } from "../../chatgpt/transport";
 import { assertNotCoolingDown } from "../../chatgpt/backoff";
 import {
   newChat,
   sendTurn,
   currentConversationId,
   confirmConversation,
-  setModel,
-  labelFor,
   checkSelectors,
 } from "./browser";
 
@@ -47,6 +46,7 @@ export class QwenTransport implements Transport {
     // recorded when Qwen said "limit reached", and the very next message
     // went back into it anyway, because only ChatGPT's transport asked.
     assertNotCoolingDown();
+    if (opts.signal.aborted) throw Object.assign(new Error("interrupted"), { code: "interrupted" });
     // A thread that went away — a crash, a reset, a first run — has seen
     // nothing, so the whole transcript goes out again.
     // Asked of the page itself, not of a remembered id: see
@@ -58,14 +58,11 @@ export class QwenTransport implements Transport {
     });
     const body = [turn, opts.reminder].filter((s) => s && s.trim()).join("\n\n");
 
-    // The model can only be chosen while a chat is still empty — the picker
-    // belongs to the thread, not to the request — so it is applied on the
-    // first turn and not attempted after, where it would fail every time for
-    // a reason that is not a fault.
-    if (this.sentThrough === 0) await setModel(labelFor(opts.model));
-
     const { reply, ms } = await sendTurn(body, {
       signal: opts.signal,
+      model: opts.model,
+      fresh: this.sentThrough === 0,
+      timeoutMs: replyTimeoutMs(),
       // The answer as it grows, so the chat fills in rather than sitting on
       // "working" and then appearing all at once.
       onProgress: (partial) => opts.onDelta?.(partial),

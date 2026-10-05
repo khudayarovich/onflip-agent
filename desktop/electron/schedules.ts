@@ -158,17 +158,19 @@ export function updateSchedule(
   const schedule = schedules.find((s) => s.id === id);
   if (!schedule) return { ok: false, error: "That schedule is gone." };
   const previous = { ...schedule };
+  const candidate = { ...schedule };
   if (patch.cron !== undefined) {
     const bad = cronError(patch.cron);
     if (bad) return { ok: false, error: bad };
-    schedule.cron = patch.cron.trim();
+    candidate.cron = patch.cron.trim();
   }
   if (patch.prompt !== undefined) {
     const prompt = patch.prompt.trim();
     if (!prompt) return { ok: false, error: "Enter the prompt to send." };
-    schedule.prompt = prompt;
+    candidate.prompt = prompt;
   }
-  if (patch.enabled !== undefined) schedule.enabled = patch.enabled;
+  if (patch.enabled !== undefined) candidate.enabled = patch.enabled;
+  Object.assign(schedule, candidate);
   if (!persist()) {
     Object.assign(schedule, previous);
     return { ok: false, error: persistenceError ?? "Schedules could not be saved." };
@@ -224,22 +226,22 @@ export function due(
 /**
  * The most recent firing time at or before `now` that comes after `after`.
  *
- * Walked forward from `after` rather than backward from `now`, because
- * "the previous occurrence" has no closed form and stepping forward from a
- * known point is the only way to get it right for every field shape.
+ * Search the grace window first, so a long shutdown cannot hide a recent
+ * run behind thousands of older occurrences. Older occurrences only need
+ * to establish that something was missed; they are never replayed.
  */
 function lastDueBefore(cron: string, after: number, now: number): number | null {
-  let cursor = new Date(after);
+  let cursor = new Date(Math.max(after, now - GRACE_MS - 60_000));
   let found: number | null = null;
-  // A generous ceiling on iterations: a per-minute schedule left alone for a
-  // day is 1,440 steps, and beyond that the answer is "missed" anyway.
-  for (let i = 0; i < 2_000; i++) {
+  for (;;) {
     const next = nextRunOf(cron, cursor);
     if (!next || next.getTime() > now) break;
     found = next.getTime();
     cursor = next;
   }
-  return found;
+  if (found !== null) return found;
+  const first = nextRunOf(cron, new Date(after));
+  return first && first.getTime() <= now ? first.getTime() : null;
 }
 
 /** How a fired schedule turned out, so the list can show it. */

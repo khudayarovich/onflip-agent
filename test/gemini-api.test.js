@@ -164,9 +164,10 @@ test("a 500 carries no code, which is one retry — the right answer for it", ()
   assert.equal(classifyFailure(c.message, c.code).kind, "retry");
 });
 
-test("an unknown model names itself and the way out", () => {
+test("an unknown model names itself and is never automatically resent", () => {
   const c = classifyGeminiHttp(404, JSON.stringify({ error: { status: "NOT_FOUND", message: "models/gemini-x is not found" } }));
-  assert.equal(c.code, undefined);
+  assert.equal(c.code, "invalid-request");
+  assert.equal(classifyFailure(c.message, c.code).kind, "fatal");
   assert.match(c.message, /model/i);
   assert.match(c.message, /chip under the composer/);
 });
@@ -283,10 +284,10 @@ test("the key's model list is filtered to what a chat can run", () => {
 // --- the stream -------------------------------------------------------------
 
 test("SSE events split across reads are reassembled, not lost", () => {
-  const first = drainSseBuffer('data: {"a":1}\ndata: {"b"');
+  const first = drainSseBuffer('data: {"a":1}\n\ndata: {"b"');
   assert.deepEqual(first.events, ['{"a":1}']);
   assert.equal(first.rest, 'data: {"b"');
-  const second = drainSseBuffer(first.rest + ':2}\n');
+  const second = drainSseBuffer(first.rest + ':2}\n\n');
   assert.deepEqual(second.events, ['{"b":2}']);
   assert.equal(second.rest, "");
 });

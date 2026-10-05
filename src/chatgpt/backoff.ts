@@ -1,6 +1,9 @@
-import { loadConfig, saveConfig } from "../config";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { loadConfig, saveConfig, updateConfig, writeFileAtomically } from "../config";
+import { withFileLockSync } from "../file-lock";
 import { logger } from "../log";
-import { providerLabel } from "../providers/id";
+import { providerLabel, providerStateDir } from "../providers/id";
 
 /**
  * Knowing when to stop.
@@ -73,6 +76,8 @@ export type FailureCode =
   | "signed-out"
   /** ChatGPT's own error page came back instead of a reply. */
   | "service-error"
+  /** A request/model/settings problem that requires a change, not a resend. */
+  | "invalid-request"
   /** The user stopped it. */
   | "interrupted";
 
@@ -90,6 +95,15 @@ function minThrottleSeconds(): number {
   return Number.isFinite(override) && override > 0 ? override : 30;
 }
 
+function retryDelay(message: string, fallback: number): number {
+  const after = /retry[- ]after[":\s]+(\d+)(?![\d.e+-])/i.exec(message);
+  const seconds = after ? Number(after[1]) : NaN;
+  // Hours and days are legitimate waits. Reject values that cannot be
+  // represented as a JavaScript date instead of shortening a real throttle.
+  return Number.isFinite(seconds) && seconds <= (8.64e15 - Date.now()) / 1000
+    ? Math.max(minThrottleSeconds(), seconds) : fallback;
+}
+
 /** How each code is treated, when one is present. */
 const BY_CODE: Record<FailureCode, { kind: FailureKind; seconds: number }> = {
   "unusual-activity": { kind: "cooldown", seconds: DEFAULT_COOLDOWN_SECONDS },
@@ -103,6 +117,7 @@ const BY_CODE: Record<FailureCode, { kind: FailureKind; seconds: number }> = {
   "chat-lost": { kind: "retry", seconds: 0 },
   "signed-out": { kind: "fatal", seconds: 0 },
   "service-error": { kind: "retry", seconds: 0 },
+  "invalid-request": { kind: "fatal", seconds: 0 },
   interrupted: { kind: "fatal", seconds: 0 },
 };
 
@@ -142,10 +157,7 @@ export function classifyFailure(message: string, code?: FailureCode): Classifica
     // header: a `Retry-After: 0` would otherwise make the "cooldown" end
     // the moment it began, and the next send would go into the throttle.
     if (code === "throttled") {
-      const after = /retry[- ]after[":\s]+(\d+)/i.exec(m);
-      if (after) {
-        return { kind, seconds: Math.min(3600, Math.max(minThrottleSeconds(), Number(after[1]))), reason: m };
-      }
+      return { kind, seconds: retryDelay(m, seconds), reason: m };
     }
     return { kind, seconds, reason: m };
   }
@@ -184,8 +196,7 @@ export function classifyFailure(message: string, code?: FailureCode): Classifica
 
   if (/HTTP 429|too many requests|rate.?limit/i.test(m)) {
     // Honour a server-supplied delay when there is one.
-    const after = /retry[- ]after[":\s]+(\d+)/i.exec(m);
-    const seconds = after ? Math.min(3600, Number(after[1])) : 5 * 60;
+    const seconds = retryDelay(m, 5 * 60);
     return {
       kind: "cooldown",
       seconds,
@@ -237,7 +248,10 @@ export function classifyFailure(message: string, code?: FailureCode): Classifica
 export function parseRetryAfter(value: string | undefined | null, now = Date.now()): number | null {
   const raw = (value ?? "").trim();
   if (!raw) return null;
-  if (/^\d+$/.test(raw)) return Number(raw);
+  if (/^\d+$/.test(raw)) {
+    const seconds = Number(raw);
+    return Number.isFinite(seconds) && seconds <= (8.64e15 - now) / 1000 ? seconds : null;
+  }
   const at = Date.parse(raw);
   if (!Number.isFinite(at)) return null;
   return Math.max(0, Math.ceil((at - now) / 1000));
@@ -423,11 +437,15 @@ export function serviceMessage(text: string): string | null {
 
 /** Persisted, so a restart cannot walk straight back into the block. */
 export function startCooldown(seconds: number, reason: string, passesByItself = false): void {
+  if (!Number.isFinite(seconds) || seconds <= 0 || seconds > (8.64e15 - Date.now()) / 1000) return;
   const until = Date.now() + seconds * 1_000;
-  const existing = loadConfig().cooldownUntil ?? 0;
-  // Never shorten one that is already running.
-  if (until <= existing) return;
-  saveConfig({ cooldownUntil: until, cooldownPassesByItself: passesByItself || undefined });
+  let extended = false;
+  updateConfig((config) => {
+    if (until <= (config.cooldownUntil ?? 0)) return;
+    extended = true;
+    return { cooldownUntil: until, cooldownPassesByItself: passesByItself || undefined };
+  });
+  if (!extended) return;
   logger.warn("transport", "cooldown started", { seconds, until, reason, passesByItself });
 }
 
@@ -490,23 +508,18 @@ let lastSendAt = 0;
 export function sleepUnlessAborted(ms: number, signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) return Promise.resolve();
   return new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    signal?.addEventListener(
-      "abort",
-      () => {
-        clearTimeout(timer);
-        resolve();
-      },
-      { once: true }
-    );
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
   });
 }
 
-export async function paceSend(signal?: AbortSignal): Promise<void> {
-  const since = Date.now() - lastSendAt;
-  const wait = MIN_SEND_GAP_MS - since;
-  if (lastSendAt && wait > 0) await sleepUnlessAborted(wait, signal);
-  lastSendAt = Date.now();
+export async function paceSend(signal?: AbortSignal, rate?: { limit: number; windowMs: number }): Promise<void> {
+  await pace("send", signal, rate);
 }
 
 /**
@@ -535,45 +548,112 @@ const MAX_NEW_CHAT_GAP_MS = 30_000;
 
 let newChatTimes: number[] = [];
 
+interface PacingState { lastSendAt: number; newChatTimes: number[]; sendTimes: number[] }
+let sendTimes: number[] = [];
+
+function pacingFile(): string {
+  // All engines driving the same provider share its browser/account traffic.
+  return path.join(providerStateDir(), "pacing.json");
+}
+
+function readPacing(file: string): PacingState {
+  try {
+    const state = JSON.parse(fs.readFileSync(file, "utf8"));
+    return {
+      lastSendAt: Number.isFinite(state.lastSendAt) ? state.lastSendAt : 0,
+      newChatTimes: Array.isArray(state.newChatTimes) ? state.newChatTimes.filter(Number.isFinite) : [],
+      sendTimes: Array.isArray(state.sendTimes) ? state.sendTimes.filter(Number.isFinite) : [],
+    };
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+    return { lastSendAt: 0, newChatTimes: [], sendTimes: [] };
+  }
+}
+
+function recentChats(times: number[], now: number): number[] {
+  return times.filter((t) => now - t < NEW_CHAT_WINDOW_MS);
+}
+
+function gapFor(recent: number): number {
+  return Math.min(MAX_NEW_CHAT_GAP_MS, MIN_NEW_CHAT_GAP_MS * (1 + Math.max(0, recent - NEW_CHAT_SOFT_LIMIT)));
+}
+
+/** Claim an immediately available slot under the lock; wait outside it. */
+async function pace(kind: "send" | "chat", signal?: AbortSignal, rate?: { limit: number; windowMs: number }): Promise<void> {
+  while (!signal?.aborted) {
+    assertNotCoolingDown();
+    const file = pacingFile();
+    const claim = (state: PacingState, persist: boolean): number => {
+      const now = Date.now();
+      state.newChatTimes = recentChats(state.newChatTimes, now);
+      state.sendTimes = state.sendTimes.filter((at) => now - at < Math.max(NEW_CHAT_WINDOW_MS, rate?.windowMs ?? 0)).sort((a, b) => a - b);
+      const last = kind === "send" ? state.lastSendAt : state.newChatTimes.at(-1) ?? 0;
+      const gap = kind === "send" ? MIN_SEND_GAP_MS : gapFor(state.newChatTimes.length);
+      let wait = last ? Math.max(0, last + gap - now) : 0;
+      if (kind === "send" && rate) {
+        const recent = state.sendTimes.filter((at) => now - at < rate.windowMs);
+        if (recent.length >= rate.limit) wait = Math.max(wait, recent[recent.length - rate.limit] + rate.windowMs - now);
+      }
+      if (!wait) {
+        if (kind === "send") { state.lastSendAt = now; state.sendTimes.push(now); }
+        else state.newChatTimes.push(now);
+        if (persist) writeFileAtomically(file, JSON.stringify(state));
+      }
+      lastSendAt = state.lastSendAt;
+      newChatTimes = state.newChatTimes;
+      sendTimes = state.sendTimes;
+      return wait;
+    };
+    let wait: number;
+    try {
+      wait = withFileLockSync(file, () => {
+        assertNotCoolingDown();
+        return claim(readPacing(file), true);
+      });
+    } catch (e) {
+      // Keep local pacing on a read-only filesystem. Lock contention or a
+      // corrupt state must not bypass coordination between running engines.
+      if (!["EACCES", "EPERM", "EROFS", "ENOTDIR"].includes((e as NodeJS.ErrnoException).code ?? "")) throw e;
+      wait = claim({ lastSendAt, newChatTimes, sendTimes }, false);
+    }
+    if (!wait) {
+      assertNotCoolingDown();
+      return;
+    }
+    await sleepUnlessAborted(Math.min(wait, 30_000), signal);
+  }
+}
+
 /** How many conversations have been opened in the trailing hour. */
 export function newChatsInWindow(now = Date.now()): number {
-  newChatTimes = newChatTimes.filter((t) => now - t < NEW_CHAT_WINDOW_MS);
+  try { newChatTimes = readPacing(pacingFile()).newChatTimes; }
+  catch { /* diagnostics can still show local history */ }
+  newChatTimes = recentChats(newChatTimes, now);
   return newChatTimes.length;
 }
 
 /** The gap a new chat should wait for, given how many came before it. */
 export function newChatGapMs(now = Date.now()): number {
-  const recent = newChatsInWindow(now);
-  if (recent <= NEW_CHAT_SOFT_LIMIT) return MIN_NEW_CHAT_GAP_MS;
-  const over = recent - NEW_CHAT_SOFT_LIMIT;
-  return Math.min(MAX_NEW_CHAT_GAP_MS, MIN_NEW_CHAT_GAP_MS * (1 + over));
+  return gapFor(newChatsInWindow(now));
 }
 
 /**
  * Wait, if need be, before opening a conversation — and record that one was.
  *
- * Deliberately not a throw: a chat that has to be opened has to be opened,
- * and refusing would turn a slow recovery into a failed one. Slowing the
- * burst is the whole point.
+ * The gap slows recovery bursts. A cooldown or an unavailable shared lock
+ * still stops the send rather than allowing another engine to bypass it.
  */
 export async function paceNewChat(signal?: AbortSignal): Promise<void> {
-  const now = Date.now();
-  const last = newChatTimes.length ? newChatTimes[newChatTimes.length - 1] : 0;
-  const wait = last ? newChatGapMs(now) - (now - last) : 0;
-  if (wait > 0) {
-    logger.info("transport", "pacing a new conversation", {
-      waitMs: wait,
-      openedInLastHour: newChatsInWindow(now),
-    });
-    await sleepUnlessAborted(wait, signal);
-  }
-  newChatTimes.push(Date.now());
+  await pace("chat", signal);
 }
 
 /** For tests, which must not inherit another test's burst history. */
 export function __resetPacingForTest(): void {
   newChatTimes = [];
   lastSendAt = 0;
+  sendTimes = [];
+  const file = pacingFile();
+  withFileLockSync(file, () => fs.rmSync(file, { force: true }));
 }
 
 /** Throw rather than send while a cooldown is running. */

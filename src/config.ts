@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { withFileLockSync } from "./file-lock";
 // log.ts imports `configDir` from here, so this is a cycle. It is safe because
 // neither side touches the other at load time — the logger is only called
 // from inside functions, by which point both modules are complete.
@@ -588,10 +589,25 @@ function writeConfig(config: OnFlipConfig, action: string): void {
 }
 
 export function saveConfig(patch: OnFlipConfig): void {
-  // Load first: it is what decides whether the file may be written at all.
-  // `readRaw` cannot answer that — it swallows a parse failure and returns an
-  // empty object, and merging a patch into that empties the file.
-  loadConfig();
+  updateConfig(() => patch);
+}
+
+/** Compute a provider-scoped patch against the latest config under its lock. */
+export function updateConfig(update: (current: OnFlipConfig) => OnFlipConfig | undefined): void {
+  try {
+    withFileLockSync(CONFIG_PATH, () => {
+      const current = loadConfig();
+      if (lastLoadFailed) return;
+      const patch = update(current);
+      if (patch) mergeConfigPatch(patch);
+    });
+  } catch {
+    // Persistence is best effort on read-only homes or unavailable locks.
+  }
+}
+
+function mergeConfigPatch(patch: OnFlipConfig): void {
+  // updateConfig already checked readability while holding this file's lock.
   const stored = readRaw();
   const scope = scopeOf(stored);
   if (scope === DEFAULT_PROVIDER) {
@@ -636,6 +652,12 @@ function readRaw(): OnFlipConfig & { providers?: Record<string, OnFlipConfig> } 
  * other's saved session with it.
  */
 export function clearConfigKeys(keys: (keyof OnFlipConfig)[]): void {
+  try {
+    withFileLockSync(CONFIG_PATH, () => clearConfigKeysLocked(keys));
+  } catch { /* a read-only home must not end the session */ }
+}
+
+function clearConfigKeysLocked(keys: (keyof OnFlipConfig)[]): void {
   loadConfig(); // for the refusal check on an unreadable file
   const stored = readRaw();
   const scope = scopeOf(stored);

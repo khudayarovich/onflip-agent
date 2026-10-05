@@ -66,6 +66,35 @@ test("a schedule whose time has come is due", { skip: needsBuild }, () => {
   assert.equal(missed.length, 0);
 });
 
+test("a per-minute schedule still runs after several days offline", { skip: needsBuild }, () => {
+  const { due } = load();
+  const item = schedule({ cron: "* * * * *", lastRunAt: NINE - 3 * 24 * 60 * MINUTE });
+  const { run, missed } = due([item], NINE + 15_000, new Map());
+  assert.deepEqual(run, [item]);
+  assert.deepEqual(missed, []);
+  assert.equal(due([item], NINE + 15_000, new Map([[item.id, NINE]])).run.length, 0);
+});
+
+test("a rejected mixed update changes neither memory nor disk", { skip: needsBuild }, () => {
+  const dir = fs.mkdtempSync(path.join(require("node:os").tmpdir(), "onflip-schedule-update-"));
+  try {
+    const scheduler = load(dir);
+    const created = scheduler.createSchedule({ prompt: "run the tests", cron: "0 9 * * *", cwd: dir });
+    assert.equal(created.ok, true);
+    const before = scheduler.listSchedules();
+    const bytes = fs.readFileSync(path.join(dir, "schedules.json"), "utf8");
+    const rejected = scheduler.updateSchedule(created.schedule.id, { cron: "0 10 * * *", prompt: "  ", enabled: false });
+    assert.equal(rejected.ok, false);
+    assert.deepEqual(scheduler.listSchedules(), before);
+    assert.equal(fs.readFileSync(path.join(dir, "schedules.json"), "utf8"), bytes);
+    const accepted = scheduler.updateSchedule(created.schedule.id, { cron: "0 10 * * *", prompt: "new task", enabled: false });
+    assert.equal(accepted.ok, true);
+    assert.equal(accepted.schedule.cron, "0 10 * * *");
+    assert.equal(accepted.schedule.prompt, "new task");
+    assert.equal(accepted.schedule.enabled, false);
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
 test("a schedule whose time has not come is not", { skip: needsBuild }, () => {
   const { due } = load();
   const { run } = due([schedule()], NINE - 60 * MINUTE, new Map());

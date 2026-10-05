@@ -12,6 +12,13 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
+const os = require("node:os");
+const path = require("node:path");
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-backoff-"));
+process.env.ONFLIP_CONFIG_DIR = scratch;
+process.env.ONFLIP_PROVIDER = "chatgpt";
+test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
 const {
   classifyFailure,
@@ -42,8 +49,12 @@ test("a throttle code still honours a server-supplied retry-after", () => {
   assert.equal(named.kind, "cooldown");
   assert.equal(named.seconds, 42);
 
-  // Absurd values are clamped rather than trusted.
-  assert.equal(classifyFailure("retry-after 99999", "throttled").seconds, 3600);
+  // A server may require a wait lasting hours or days.
+  for (const seconds of [14400, 86400, 99999]) {
+    assert.equal(classifyFailure(`retry-after ${seconds}`, "throttled").seconds, seconds);
+    assert.equal(classifyFailure(`HTTP 429 retry-after ${seconds}`).seconds, seconds);
+  }
+  assert.equal(classifyFailure(`retry-after ${"9".repeat(400)}`, "throttled").seconds, 300);
 
   // With no delay named, the code's own default applies.
   assert.equal(classifyFailure("too fast", "throttled").seconds, 5 * 60);
@@ -197,16 +208,21 @@ test("new chats are paced, and the gap grows once the rate is unreasonable", asy
   assert.ok(base > 0, "there should always be some gap between conversations");
 
   // Ten is already past what a person does; the gap holds until then.
-  for (let i = 0; i < 10; i++) await paceNewChat(abortedSignal());
-  assert.equal(newChatsInWindow(), 10);
-  assert.equal(newChatGapMs(), base);
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    for (let i = 0; i < 10; i++) { now += 30_000; await paceNewChat(); }
+    assert.equal(newChatsInWindow(), 10);
+    assert.equal(newChatGapMs(), base);
 
-  // Past the soft limit it climbs, which is what breaks a recovery loop.
-  for (let i = 0; i < 5; i++) await paceNewChat(abortedSignal());
-  assert.ok(
-    newChatGapMs() > base,
-    "the gap should widen once conversations are being opened in bursts"
-  );
+    // Past the soft limit it climbs, which is what breaks a recovery loop.
+    for (let i = 0; i < 5; i++) { now += 30_000; await paceNewChat(); }
+    assert.ok(
+      newChatGapMs() > base,
+      "the gap should widen once conversations are being opened in bursts"
+    );
+  } finally { Date.now = realNow; }
 
   __resetPacingForTest();
   assert.equal(newChatsInWindow(), 0);
@@ -220,6 +236,7 @@ test("pacing gives up its wait when the turn is aborted", async () => {
   const started = Date.now();
   await paceNewChat(abortedSignal());
   assert.ok(Date.now() - started < 1_000, "an aborted wait should return promptly");
+  assert.equal(newChatsInWindow(), 1, "cancelled work must not count as an opened chat");
   __resetPacingForTest();
 });
 

@@ -1,8 +1,8 @@
 # Architecture
 
 OnFlip is three processes with one job between them: turn a sentence typed by a
-person into work done on their computer, using a chat session — ChatGPT or
-DeepSeek — rather than an API.
+person into work done on their computer. ChatGPT, DeepSeek and Qwen use web
+chat sessions; Gemini uses Google's API with a saved API key.
 
 ```
   Electron renderer            Electron main               engine (plain Node)
@@ -12,17 +12,17 @@ DeepSeek — rather than an API.
                                                         stdio     approval policy
                                                                   provider seam
                                                                         │
-                                                                  Playwright
+                                                          Playwright / Gemini API
                                                                         ▼
-                                                          chatgpt.com · deepseek.com
+                                                     ChatGPT · DeepSeek · Qwen · Gemini
 ```
 
 ## Providers
 
-Two services, one agent. `src/providers/index.ts` is the only seam: everything
+Four services, one agent. `src/providers/index.ts` is the only seam: everything
 above it — the loop, the tools, the approval policy, the sessions — is the same
-code whichever service is answering. Below it sit two drivers, one per service,
-each with its own browser profile.
+code whichever service is answering. Below it sit three browser drivers, each
+with its own profile, and Gemini's stateless streaming API transport.
 
 The seam answers rather than throws for anything a service does not have:
 DeepSeek has no projects and no conversation list, so those come back empty and
@@ -58,12 +58,11 @@ turn. What must be shared — the account session, the send cooldown — lives i
 
 ## The transport
 
-There is no API key, so there is no API. The engine drives a real browser
-session:
+The browser transports drive real chat sessions:
 
-- A message is typed into the composer, or — on ChatGPT, when it is too large
-  to type — handed over as an uploaded file with a short pointer message.
-  DeepSeek has no such upload path, so its ceiling is what the composer takes.
+- A message is put into the composer and verified before sending. Truncated
+  composer input is rejected. ChatGPT's optional upload path is used only when
+  enabled; DeepSeek and Qwen must fit the composer.
 - The reply is read back out of the page and re-serialised to Markdown, because
   the rendered DOM has already eaten characters the agent needs (`$_` becomes
   emphasis, and the command no longer runs).
@@ -74,6 +73,16 @@ session:
 
 `src/chatgpt/backoff.ts` is where that classification lives, and its comments
 carry the incidents that shaped it.
+
+Gemini sends the complete transcript with every request, streams SSE events,
+and requires a confirmed finish before handing text to the tool parser.
+`MAX_TOKENS` replies are marked truncated; blocked or broken replies fail.
+Thinking settings follow the model family: budgets for 2.5, levels for 3, and
+service defaults for aliases or unknown families. Quotas remain Google's.
+
+Send pacing is coordinated in each provider's `pacing.json`, under a file lock.
+DeepSeek's rolling send window and conversation creation history survive engine
+restarts. Gemini's short quota pauses are persisted so other windows wait too.
 
 ## The tool protocol
 

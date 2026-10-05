@@ -13,6 +13,11 @@
 
 const test = require("node:test");
 const assert = require("node:assert/strict");
+const fs = require("node:fs"), os = require("node:os"), path = require("node:path");
+const scratch = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-deepseek-rate-"));
+process.env.ONFLIP_CONFIG_DIR = scratch;
+process.env.ONFLIP_PROVIDER = "deepseek";
+test.after(() => fs.rmSync(scratch, { recursive: true, force: true }));
 
 const { parseTurn } = require("../dist/agent/protocol");
 const { answerStillOpen, answerSettled, ANSWER_REQUEST } = require("../dist/providers/deepseek/browser");
@@ -130,7 +135,12 @@ test("a stopped turn does not sit out DeepSeek's rate", { timeout: 10_000 }, asy
   // The same trap `paceSend` fell into: an abort that has already happened
   // never fires its event, and the wait ran its full course.
   const { keepToRate } = require("../dist/providers/deepseek/browser");
-  for (let i = 0; i < DEEPSEEK_SENDS_PER_WINDOW; i++) await keepToRate();
+  const realNow = Date.now;
+  let now = realNow();
+  Date.now = () => now;
+  try {
+    for (let i = 0; i < DEEPSEEK_SENDS_PER_WINDOW; i++) { now += 2000; await keepToRate(); }
+  } finally { Date.now = realNow; }
   const stopped = new AbortController();
   stopped.abort();
   let began = Date.now();

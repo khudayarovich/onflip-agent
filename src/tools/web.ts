@@ -1,8 +1,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import { randomUUID } from "node:crypto";
 import { ToolDefinition } from "../types";
 import { err, denied, asBool, asNumber, clip, resolveIn } from "./util";
 import { fetchPublic } from "./net-guard";
+import { captureAncestorChain, captureFileRevision, sameAncestorChain, sameFileRevision } from "./revision";
 
 const FETCH_TIMEOUT = 30_000;
 const MAX_BYTES = 2_000_000;
@@ -396,6 +398,15 @@ export const downloadFileTool: ToolDefinition = {
     // Resolved like the file tools do, so `~/Downloads/x.zip` lands in the
     // home directory rather than in a folder literally named `~`.
     const target = resolveIn(ctx.cwd, rawPath);
+    if (ctx.signal.aborted) return err("Download interrupted by the user.");
+    let before;
+    let ancestors;
+    try {
+      before = captureFileRevision(target, true);
+      ancestors = captureAncestorChain(target);
+    } catch (e) {
+      return err(`Cannot inspect download destination: ${e instanceof Error ? e.message : String(e)}`);
+    }
 
     // A download is a request first: the URL goes out, query string and all,
     // before anything is written. Asked only as a write, it slipped past the
@@ -417,11 +428,13 @@ export const downloadFileTool: ToolDefinition = {
       detail: [`to: ${target}`],
     });
     if (!decision.allow) return denied("Download", decision.reason);
+    if (ctx.signal.aborted) return err("Download interrupted by the user.");
 
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT * 4);
     const onAbort = () => controller.abort();
     ctx.signal.addEventListener("abort", onAbort, { once: true });
+    let temporary: string | undefined;
 
     try {
       const res = await fetchPublic(url, {
@@ -437,8 +450,27 @@ export const downloadFileTool: ToolDefinition = {
         );
       }
       const { buf } = body;
+      if (controller.signal.aborted) throw new Error("Download interrupted");
+      if (!sameFileRevision(before, captureFileRevision(target, true)) || !sameAncestorChain(ancestors, captureAncestorChain(target))) {
+        return err("Download destination changed while approval or download was pending. Nothing was saved; try again to approve the current destination.");
+      }
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      fs.writeFileSync(target, buf);
+      // Stage beside the destination so a failed write leaves its old bytes
+      // intact. Check again before replacing it, including parent junctions.
+      const stagedRevision = captureFileRevision(target, true);
+      const stagedAncestors = captureAncestorChain(target);
+      if (!sameFileRevision({ ...before, ancestorIdentity: stagedRevision.ancestorIdentity }, stagedRevision) ||
+          !sameAncestorChain(ancestors, stagedAncestors, true)) {
+        return err("Download destination changed while preparing its directory. Nothing was replaced; try again.");
+      }
+      temporary = path.join(path.dirname(target), `.onflip-download-${randomUUID()}.tmp`);
+      fs.writeFileSync(temporary, buf, { flag: "wx", mode: 0o600 });
+      if (!sameFileRevision(stagedRevision, captureFileRevision(target, true)) || !sameAncestorChain(stagedAncestors, captureAncestorChain(target))) {
+        return err("Download destination changed before saving. Nothing was replaced; try again.");
+      }
+      if (controller.signal.aborted) throw new Error("Download interrupted");
+      fs.renameSync(temporary, target);
+      temporary = undefined;
       const kb = Math.max(1, Math.round(buf.length / 1024));
       return {
         output: `Saved ${kb}KB to ${target} (${res.headers.get("content-type") ?? "unknown type"}). Note: downloads are not covered by /undo.`,
@@ -450,6 +482,9 @@ export const downloadFileTool: ToolDefinition = {
       }
       return err(`Download failed: ${e instanceof Error ? e.message : String(e)}`);
     } finally {
+      if (temporary) {
+        try { fs.rmSync(temporary, { force: true }); } catch { /* best effort */ }
+      }
       clearTimeout(timer);
       ctx.signal.removeEventListener("abort", onAbort);
     }

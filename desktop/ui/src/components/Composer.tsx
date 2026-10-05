@@ -62,12 +62,15 @@ const DEEPSEEK_THINKING: typeof THINKING_LEVELS = [
   { level: "high", label: "thinkDsDeep", hint: "thinkDsDeepHint" },
 ];
 
-function thinkingLevels(deepseek: boolean): typeof THINKING_LEVELS {
-  return deepseek ? DEEPSEEK_THINKING : THINKING_LEVELS;
+function thinkingLevels(deepseek: boolean, minimumOnly = false, defaultOnly = false): typeof THINKING_LEVELS {
+  if (deepseek) return DEEPSEEK_THINKING;
+  if (defaultOnly) return [THINKING_LEVELS[0]];
+  return minimumOnly ? THINKING_LEVELS.map((entry) => entry.level === "off"
+    ? { ...entry, label: "thinkMinimum", hint: "thinkMinimumHint" } : entry) : THINKING_LEVELS;
 }
 
-function thinkingInfo(level: ThinkingLevel | null | undefined, deepseek = false) {
-  const levels = thinkingLevels(deepseek);
+function thinkingInfo(level: ThinkingLevel | null | undefined, deepseek = false, minimumOnly = false, defaultOnly = false) {
+  const levels = thinkingLevels(deepseek, minimumOnly, defaultOnly);
   // On DeepSeek an unset level is off — the toggle's own resting state, and
   // what the driver applies when nothing was chosen.
   if (deepseek) return levels.find((t) => t.level === (level ?? "off")) ?? levels[0];
@@ -409,6 +412,9 @@ export function Composer({
   // engine enforces this either way; these two only make it visible.
   // Which service is answering decides what the reasoning chip can offer.
   const onDeepSeek = status?.provider === "deepseek";
+  const minimumThinking = status?.provider === "gemini" && /^gemini-(?:3(?:\.|-)|2\.5-pro(?:-|$))/i.test(modelSlug);
+  // An alias or an unknown future family has no verified effort mapping.
+  const defaultThinkingOnly = status?.provider === "gemini" && !/^gemini-(?:3(?:\.|-)|2\.5-(?:flash|pro)(?:-|$))/i.test(modelSlug);
   // Qwen thinks on its own. Its page carries no toggle and no effort
   // setting - the reasoning arrives as a "Thinking completed" card above
   // the answer, decided per question - so there is nothing here for a chip
@@ -615,7 +621,7 @@ export function Composer({
               onClick={planRationed ? undefined : thinkingMenu.open}
             >
               <ThinkingIcon />
-              <span className="chip-label">{t(thinkingInfo(thinkingShown, onDeepSeek).label)}</span>
+              <span className="chip-label">{t(thinkingInfo(thinkingShown, onDeepSeek, minimumThinking, defaultThinkingOnly).label)}</span>
               {planRationed ? (
                 planCard
               ) : (
@@ -722,11 +728,11 @@ export function Composer({
           openUp
           entries={[
             { key: "_h", heading: t("menuReasoning"), label: "" },
-            ...thinkingLevels(onDeepSeek).map((entry) => ({
+            ...thinkingLevels(onDeepSeek, minimumThinking, defaultThinkingOnly).map((entry) => ({
               key: entry.level ?? "default",
               label: t(entry.label),
               hint: t(entry.hint),
-              checked: thinkingInfo(status?.thinking, onDeepSeek).level === entry.level,
+              checked: thinkingInfo(status?.thinking, onDeepSeek, minimumThinking, defaultThinkingOnly).level === entry.level,
               onPick: () => onSetThinking(entry.level),
             })),
           ]}

@@ -1,6 +1,6 @@
 import { loadConfig } from "../../config";
 import { logger } from "../../log";
-import type { FailureCode } from "../../chatgpt/backoff";
+import { parseRetryAfter, type FailureCode } from "../../chatgpt/backoff";
 import type { ChatMessage } from "../../types";
 
 /**
@@ -96,7 +96,7 @@ export function cleanGeminiKeyPaste(value: string): string {
 
 export interface GeminiKeyCheck {
   signedIn: boolean;
-  /** False only when Google could not be reached at all. */
+  /** False when a network/service failure prevents a key verdict. */
   reachable: boolean;
   detail: string;
 }
@@ -128,7 +128,7 @@ export async function checkGeminiKey(key: string | null = storedGeminiKey()): Pr
     return {
       // A throttle is a working key being slowed down, not a missing one.
       signedIn: classified.code === "throttled",
-      reachable: true,
+      reachable: classified.code === "signed-out" || classified.code === "throttled" || res.status < 500,
       detail: classified.message,
     };
   } catch (e) {
@@ -244,7 +244,7 @@ export async function probeGeminiModel(
 }
 
 /**
- * Ask the key which models it can run. One GET; the caller caches it.
+ * Ask the key which models it can run. Paginated GETs; the caller caches it.
  *
  * This exists because the built-in list went stale by a whole generation
  * within a day of shipping: the first real turn was Google's 404 saying the
@@ -257,16 +257,28 @@ export async function discoverGeminiModels(
   key: string | null = storedGeminiKey()
 ): Promise<GeminiModelEntry[]> {
   if (!key) return [];
-  const res = await fetch(`${GEMINI_BASE}/models?pageSize=200`, {
-    headers: { "x-goog-api-key": key },
-    signal: AbortSignal.timeout(20_000),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new GeminiError(classifyGeminiHttp(res.status, body, res.headers.get("retry-after")).message);
+  const models: RawGeminiModel[] = [];
+  const seen = new Set<string>();
+  let token: string | undefined;
+  const signal = AbortSignal.timeout(20_000);
+  for (let page = 0; page < 20; page++) {
+    const url = new URL(`${GEMINI_BASE}/models`);
+    url.searchParams.set("pageSize", "200");
+    if (token) url.searchParams.set("pageToken", token);
+    const res = await fetch(url.href, { headers: { "x-goog-api-key": key }, signal });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      const failure = classifyGeminiHttp(res.status, body, res.headers.get("retry-after"));
+      throw new GeminiError(failure.message, failure.code, failure.retryAfterSeconds);
+    }
+    const parsed = (await res.json()) as { models?: RawGeminiModel[]; nextPageToken?: string };
+    models.push(...(parsed.models ?? []));
+    token = parsed.nextPageToken;
+    if (!token) return usableGeminiModels(models);
+    if (seen.has(token)) throw new GeminiError("Google returned a repeated model-list page token.", "service-error");
+    seen.add(token);
   }
-  const parsed = (await res.json()) as { models?: RawGeminiModel[] };
-  return usableGeminiModels(parsed.models ?? []);
+  throw new GeminiError("Google's model catalogue exceeded the page limit. The existing model list was retained.", "service-error");
 }
 
 /** A failure the transport can throw with the code already decided. */
@@ -316,7 +328,10 @@ export function classifyGeminiHttp(
     for (const d of parsed.error?.details ?? []) {
       if (d.reason === "API_KEY_INVALID") apiStatus = "API_KEY_INVALID";
       const delay = /^(\d+(?:\.\d+)?)s$/.exec(d.retryDelay ?? "");
-      if (delay) retryDelaySeconds = Math.ceil(Number(delay[1]));
+      if (delay) {
+        const seconds = Math.ceil(Number(delay[1]));
+        if (Number.isFinite(seconds)) retryDelaySeconds = Math.max(retryDelaySeconds ?? 0, seconds);
+      }
     }
   } catch {
     apiMessage = body.trim().slice(0, 200);
@@ -335,26 +350,27 @@ export function classifyGeminiHttp(
   }
 
   if (status === 429) {
-    const fromHeader = /^\d+$/.test((retryAfterHeader ?? "").trim())
-      ? Number((retryAfterHeader ?? "").trim())
-      : undefined;
-    const seconds = retryDelaySeconds ?? fromHeader;
+    const fromHeader = parseRetryAfter(retryAfterHeader);
+    const seconds = retryDelaySeconds === undefined && fromHeader === null ? undefined
+      : Math.max(retryDelaySeconds ?? 0, fromHeader ?? 0);
     return {
       code: "throttled",
       retryAfterSeconds: seconds,
       message:
         `The Gemini API is rate-limiting this key (HTTP 429${apiMessage ? `: ${apiMessage.slice(0, 160)}` : ""}).` +
-        (seconds ? ` retry-after: ${seconds}` : ""),
+        (seconds !== undefined ? ` retry-after: ${seconds}` : ""),
     };
   }
 
   if (status === 404) {
     return {
+      code: "invalid-request",
       message: `The Gemini API does not know this model (HTTP 404${apiMessage ? `: ${apiMessage.slice(0, 160)}` : ""}). Pick another model in the chip under the composer.`,
     };
   }
 
   return {
+    ...(status >= 400 && status < 500 ? { code: "invalid-request" as const } : {}),
     message: `The Gemini API answered HTTP ${status}${apiStatus ? ` ${apiStatus}` : ""}${apiMessage ? `: ${apiMessage.slice(0, 200)}` : ""}.`,
   };
 }
@@ -424,7 +440,7 @@ interface GeminiContent {
 export interface GeminiRequest {
   contents: GeminiContent[];
   systemInstruction?: { parts: { text: string }[] };
-  generationConfig?: { thinkingConfig?: { thinkingBudget: number } };
+  generationConfig?: { thinkingConfig?: { thinkingBudget: number } | { thinkingLevel: "minimal" | "low" | "medium" | "high" } };
 }
 
 /**
@@ -441,9 +457,21 @@ export interface GeminiRequest {
 export function thinkingBudgetFor(model: string, level: string | undefined): number | undefined {
   const budgets: Record<string, number> = { off: 0, low: 2048, medium: 8192, high: 24576 };
   if (!level || !Object.hasOwn(budgets, level)) return undefined;
+  if (!/^gemini-2\.5-(?:flash|pro)(?:-|$)/i.test(model)) return undefined;
   let budget = budgets[level];
   if (budget === 0 && /pro/i.test(model)) budget = 128;
   return budget;
+}
+
+/** Gemini 3 uses levels; unknown future families keep their own defaults. */
+export function thinkingConfigFor(model: string, level: string | undefined): NonNullable<GeminiRequest["generationConfig"]>["thinkingConfig"] {
+  const budget = thinkingBudgetFor(model, level);
+  if (budget !== undefined) return { thinkingBudget: budget };
+  if (!/^gemini-3(?:\.|-)/i.test(model) || !level || !["off", "low", "medium", "high"].includes(level)) return;
+  const version = geminiSlugVersion(model);
+  const supportsMinimal = /flash/i.test(model) && (version < 3.7 || /flash-lite/i.test(model));
+  const wanted = level === "off" ? (supportsMinimal ? "minimal" : "low") : level;
+  return { thinkingLevel: wanted as "minimal" | "low" | "medium" | "high" };
 }
 
 /**
@@ -491,11 +519,11 @@ export function buildGeminiRequest(
     contents.push({ role: "user", parts: [{ text: "Continue." }] });
   }
 
-  const budget = thinkingBudgetFor(opts.model, opts.thinking);
+  const thinkingConfig = thinkingConfigFor(opts.model, opts.thinking);
   return {
     contents,
     ...(system ? { systemInstruction: { parts: [{ text: system }] } } : {}),
-    ...(budget !== undefined ? { generationConfig: { thinkingConfig: { thinkingBudget: budget } } } : {}),
+    ...(thinkingConfig ? { generationConfig: { thinkingConfig } } : {}),
   };
 }
 
@@ -504,6 +532,7 @@ export function buildGeminiRequest(
 // ---------------------------------------------------------------------------
 
 interface StreamEvent {
+  error?: { code?: number; message?: string; status?: string; details?: unknown[] };
   candidates?: {
     content?: { parts?: { text?: string; thought?: boolean }[] };
     finishReason?: string;
@@ -527,14 +556,17 @@ export function eventText(event: StreamEvent): string {
  * last newline stays in the buffer for the next read.
  */
 export function drainSseBuffer(buffer: string): { events: string[]; rest: string } {
-  const cut = buffer.lastIndexOf("\n");
-  if (cut < 0) return { events: [], rest: buffer };
   const events: string[] = [];
-  for (const line of buffer.slice(0, cut).split("\n")) {
-    const t = line.trim();
-    if (t.startsWith("data:")) events.push(t.slice(5).trim());
+  let rest = buffer;
+  for (;;) {
+    const separator = /\r?\n\r?\n/.exec(rest);
+    if (!separator) return { events, rest };
+    const frame = rest.slice(0, separator.index);
+    rest = rest.slice(separator.index + separator[0].length);
+    const data = frame.split(/\r?\n/).filter((line) => line.startsWith("data:"))
+      .map((line) => line.slice(5).replace(/^ /, "")).join("\n");
+    if (data) events.push(data);
   }
-  return { events, rest: buffer.slice(cut + 1) };
 }
 
 export interface GeminiReply {
@@ -564,12 +596,21 @@ export async function generateStream(args: {
   onDelta?: (fullText: string) => void;
 }): Promise<GeminiReply> {
   const url = `${GEMINI_BASE}/models/${encodeURIComponent(args.model)}:streamGenerateContent?alt=sse`;
-  const res = await fetch(url, {
-    method: "POST",
-    headers: { "x-goog-api-key": args.key, "content-type": "application/json" },
-    body: JSON.stringify(args.request),
-    signal: AbortSignal.any([args.signal, AbortSignal.timeout(args.timeoutMs)]),
-  });
+  if (args.signal.aborted) throw new GeminiError("interrupted", "interrupted");
+  const signal = AbortSignal.any([args.signal, AbortSignal.timeout(args.timeoutMs)]);
+  const aborted = () => new GeminiError(args.signal.aborted ? "interrupted" : "Gemini did not finish before the reply deadline.", args.signal.aborted ? "interrupted" : "service-error");
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: "POST",
+      headers: { "x-goog-api-key": args.key, "content-type": "application/json" },
+      body: JSON.stringify(args.request),
+      signal,
+    });
+  } catch (e) {
+    if (signal.aborted) throw aborted();
+    throw e;
+  }
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
@@ -581,16 +622,22 @@ export async function generateStream(args: {
   const decoder = new TextDecoder();
   let buffer = "";
   const take = (payload: string) => {
+    if (payload.trim() === "[DONE]") return;
     let event: StreamEvent;
     try {
       event = JSON.parse(payload) as StreamEvent;
     } catch {
-      return; // half an event can only reach here through a server fault; skip it
+      throw new GeminiError("Google returned a malformed reply-stream event. Nothing from this reply was executed.", "service-error");
+    }
+    if (!event || typeof event !== "object" || Array.isArray(event)) throw new GeminiError("Google returned an invalid reply-stream event.", "service-error");
+    if (event.error) {
+      const failure = classifyGeminiHttp(event.error.code ?? 500, JSON.stringify({ error: event.error }));
+      throw new GeminiError(failure.message, failure.code, failure.retryAfterSeconds);
     }
     const blocked = event.promptFeedback?.blockReason;
     if (blocked) {
       throw new GeminiError(
-        `Gemini declined to answer this prompt (${blocked}). Rewording the request is what clears it; nothing was generated.`
+        `Gemini declined to answer this prompt (${blocked}). Reword the request before trying again.`, "invalid-request"
       );
     }
     const text = eventText(event);
@@ -610,7 +657,10 @@ export async function generateStream(args: {
 
   const reader = res.body?.getReader();
   if (!reader) throw new GeminiError("The Gemini API answered with an empty body.");
+  const onAbort = () => { void reader.cancel().catch(() => {}); };
+  signal.addEventListener("abort", onAbort, { once: true });
   try {
+    if (signal.aborted) onAbort();
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -620,12 +670,23 @@ export async function generateStream(args: {
       for (const payload of events) take(payload);
     }
     buffer += decoder.decode();
-    for (const payload of drainSseBuffer(`${buffer}\n`).events) take(payload);
+    for (const payload of drainSseBuffer(`${buffer}\n\n`).events) take(payload);
+    if (signal.aborted) throw aborted();
+    if (!reply.finishReason || reply.finishReason === "FINISH_REASON_UNSPECIFIED") {
+      throw new GeminiError("The Gemini reply stream ended without a confirmed finish. No tools from the incomplete reply were executed.", "service-error");
+    }
+    if (!["STOP", "MAX_TOKENS"].includes(reply.finishReason)) {
+      throw new GeminiError(`Gemini stopped the reply with ${reply.finishReason}. No tools from that reply were executed. Review the request before trying again.`, "invalid-request");
+    }
   } catch (e) {
     // A throw mid-stream — a blocked prompt, an abort — must not leave the
     // connection open behind it.
     await reader.cancel().catch(() => {});
+    if (signal.aborted) throw aborted();
     throw e;
+  } finally {
+    signal.removeEventListener("abort", onAbort);
+    reader.releaseLock();
   }
 
   return reply;

@@ -58,7 +58,17 @@ export function openLog(id: string, opts?: { level?: LogLevel; echo?: boolean })
     fs.mkdirSync(logsDir(), { recursive: true });
     pruneOldLogs();
     filePath = path.join(logsDir(), `${id}.jsonl`);
-    stream = fs.createWriteStream(filePath, { flags: "a", mode: 0o600 });
+    const opened = fs.createWriteStream(filePath, { flags: "a", mode: 0o600 });
+    opened.on("error", () => {
+      // Opening and flushing fail asynchronously too. An old stream must
+      // never clear a newer log opened after closeLog().
+      if (stream === opened) {
+        stream = null;
+        filePath = null;
+      }
+      opened.destroy();
+    });
+    stream = opened;
   } catch {
     // Logging must never be the reason a session fails to start.
     stream = null;

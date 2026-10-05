@@ -2,16 +2,13 @@ import { ChatMessage } from "../../types";
 import { buildTurnPrompt } from "../../agent/protocol";
 import { logger } from "../../log";
 import type { SendOptions, Transport, TransportReply } from "../../chatgpt/transport";
+import { replyTimeoutMs } from "../../chatgpt/transport";
 import { assertNotCoolingDown } from "../../chatgpt/backoff";
 import {
   newChat,
   sendTurn,
   currentConversationId,
   confirmConversation,
-  setDeepThink,
-  wantsDeepThink,
-  setMode,
-  modeFor,
   checkSelectors,
 } from "./browser";
 
@@ -54,6 +51,7 @@ export class DeepSeekTransport implements Transport {
     // transport has always refused to send during one; this one recorded
     // the cooldown and then sent the very next message into the throttle.
     assertNotCoolingDown();
+    if (opts.signal.aborted) throw Object.assign(new Error("interrupted"), { code: "interrupted" });
     // A thread that went away — a crash, a reset, a closed browser, a first
     // run — has seen nothing, so the whole transcript goes out again. Asked
     // of the page itself, not of a remembered id: see `confirmConversation`.
@@ -64,23 +62,23 @@ export class DeepSeekTransport implements Transport {
     });
     const body = [turn, opts.reminder].filter((s) => s && s.trim()).join("\n\n");
 
-    // The mode — Instant, Expert or Vision — can only be chosen while a chat
-    // is still empty; the control disappears once anything has been sent. So
-    // it is applied on the first turn of a thread and not attempted after,
-    // where it would fail every time for a reason that is not a fault.
-    if (this.sentThrough === 0) await setMode(modeFor(opts.model));
-
-    // The reasoning toggle is part of the page, not of the request, so it is
-    // set before each turn rather than carried with one — and a turn sent at
-    // the wrong effort cannot be taken back.
-    await setDeepThink(wantsDeepThink(opts.thinking));
+    const { reply, ms } = await sendTurn(body, {
+      signal: opts.signal,
+      model: opts.model,
+      thinking: opts.thinking,
+      configureThinking: true,
+      fresh: this.sentThrough === 0,
+      timeoutMs: replyTimeoutMs(),
+      onProgress: (partial) => opts.onDelta?.(partial),
+    });
+    this.sentThrough = history.length;
+    logger.info("deepseek", "transport turn", { chars: body.length, replyChars: reply.length, ms });
 
     if (!contractChecked) {
       contractChecked = true;
-      // Deliberately not awaited into the turn's critical path, and
-      // deliberately never allowed to fail a send: this is a report, not
-      // a gate. Someone whose turn works has no business being stopped by
-      // a census of the page it worked on.
+      // Read a settled page after the turn, as Qwen does. Before the send
+      // this races new-chat navigation and reports controls that have not
+      // mounted yet as a service redesign.
       void checkSelectors()
         .then((r) => {
           if (r.ok) return;
@@ -91,15 +89,6 @@ export class DeepSeekTransport implements Transport {
         })
         .catch(() => {});
     }
-
-    const { reply, ms } = await sendTurn(body, {
-      signal: opts.signal,
-      // The answer as it grows, so the chat fills in rather than sitting on
-      // "working" and then appearing all at once.
-      onProgress: (partial) => opts.onDelta?.(partial),
-    });
-    this.sentThrough = history.length;
-    logger.info("deepseek", "transport turn", { chars: body.length, replyChars: reply.length, ms });
 
     // The final text, after the partials above: the last poll only confirms
     // the answer stopped changing, so the caller may not have seen it yet.

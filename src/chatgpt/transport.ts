@@ -33,7 +33,7 @@ import {
  * broken selector rather than a short budget. Esc ends a turn at any moment,
  * so waiting longer is only ever the user's choice to make.
  */
-function replyTimeoutMs(): number {
+export function replyTimeoutMs(): number {
   const seconds = firstPositiveInt(
     [process.env.ONFLIP_REPLY_TIMEOUT, loadConfig().replyTimeout],
     600

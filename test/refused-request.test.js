@@ -58,8 +58,8 @@ test("a 429 waits as long as the server said, not a flat five minutes", () => {
   assert.equal(said(900), 900);
   // No figure from the server: the default stands.
   assert.equal(said(null), 5 * 60);
-  // A figure past an hour is still capped, as before.
-  assert.equal(said(86_400), 3600);
+  // A daily limit must remain a daily wait.
+  assert.equal(said(86_400), 86_400);
 });
 
 test("Retry-After is read as seconds or as a date", () => {
@@ -70,4 +70,5 @@ test("Retry-After is read as seconds or as a date", () => {
   // A date already past asks for no wait, not a negative one.
   assert.equal(parseRetryAfter("Fri, 25 Sep 2026 09:00:00 GMT", now), 0);
   for (const junk of ["", "soon", undefined, null]) assert.equal(parseRetryAfter(junk, now), null, String(junk));
+  assert.equal(parseRetryAfter("9".repeat(400), now), null);
 });

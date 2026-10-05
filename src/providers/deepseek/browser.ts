@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { chromium, BrowserContext, Page } from "playwright";
 import { logger } from "../../log";
-import { paceNewChat, paceSend, sleepUnlessAborted, statedWaitSeconds, type FailureCode } from "../../chatgpt/backoff";
+import { assertNotCoolingDown, paceNewChat, paceSend, parseRetryAfter, sleepUnlessAborted, statedWaitSeconds, type FailureCode } from "../../chatgpt/backoff";
 import { pickSignInBrowser } from "../../chatgpt/browser-client";
 import { EXTRACT_REPLY as EXTRACT_REPLY_SCRIPT, toMarkdown } from "./extract";
 import {
@@ -305,9 +305,20 @@ let answersOpen = 0;
 let answerStartedAt = 0;
 /** Answer requests seen since launch: proof the watcher sees them at all. */
 let answersSeen = 0;
+let lastApiFailure: { at: number; error: DeepSeekError } | null = null;
+
+export function answerHttpFailure(status: number, body: string, retryAfter?: string): DeepSeekError {
+  const code: FailureCode = status === 429 ? "throttled" : status === 401 ? "signed-out" :
+    status === 403 ? "refused" : status >= 500 ? "service-error" : "invalid-request";
+  const wait = parseRetryAfter(retryAfter) ?? statedWaitSeconds(body);
+  return new DeepSeekError(`DeepSeek refused the answer request (HTTP ${status}).` +
+    (wait !== null ? ` retry-after: ${wait}` : "") +
+    (status === 401 ? " Sign in again from the account menu." : ""), code);
+}
 
 function watchAnswers(ctx: BrowserContext): void {
   answersOpen = 0;
+  lastApiFailure = null;
   const ended = (url: string, how: string, detail?: string) => {
     if (!ANSWER_REQUEST.test(url)) return;
     answersOpen = Math.max(0, answersOpen - 1);
@@ -320,6 +331,7 @@ function watchAnswers(ctx: BrowserContext): void {
   ctx.on("request", (req) => {
     if (!ANSWER_REQUEST.test(req.url())) return;
     answersOpen += 1;
+    lastApiFailure = null;
     answersSeen += 1;
     answerStartedAt = Date.now();
     logger.info("deepseek", "answer request started", { open: answersOpen });
@@ -333,6 +345,15 @@ function watchAnswers(ctx: BrowserContext): void {
     }
     if (!ANSWER_REQUEST.test(res.url()) || res.status() < 400) return;
     logger.warn("deepseek", "the answer request was refused", { status: res.status() });
+    const at = Date.now();
+    // Status and headers already prove the refusal. A body that never
+    // finishes must not hide a 429 until the whole reply budget expires.
+    const retryAfter = res.headers()["retry-after"];
+    const failure = { at, error: answerHttpFailure(res.status(), "", retryAfter) };
+    lastApiFailure = failure;
+    void res.text().catch(() => "").then((body) => {
+      if (lastApiFailure === failure) failure.error = answerHttpFailure(res.status(), body, retryAfter);
+    });
   });
   ctx.on("requestfinished", (req) => ended(req.url(), "finished"));
   ctx.on("requestfailed", (req) => ended(req.url(), "failed", req.failure()?.errorText));
@@ -353,8 +374,6 @@ function watchAnswers(ctx: BrowserContext): void {
  */
 export const DEEPSEEK_SENDS_PER_WINDOW = 9;
 export const DEEPSEEK_WINDOW_MS = 65_000;
-
-let recentSends: number[] = [];
 
 /** How long a send must wait to stay inside DeepSeek's rate, given when the others went. */
 export function rateWaitMs(
@@ -378,17 +397,8 @@ export function rateWaitMs(
  */
 export async function keepToRate(signal?: AbortSignal): Promise<void> {
   if (signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
-  const wait = rateWaitMs(recentSends);
-  if (wait > 0) {
-    logger.info("deepseek", "keeping to DeepSeek's rate", {
-      waitMs: wait,
-      inLastMinute: recentSends.filter((at) => Date.now() - at < DEEPSEEK_WINDOW_MS).length,
-    });
-    await sleepUnlessAborted(wait, signal);
-    if (signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
-  }
-  const now = Date.now();
-  recentSends = [...recentSends.filter((at) => now - at < DEEPSEEK_WINDOW_MS), now];
+  await paceSend(signal, { limit: DEEPSEEK_SENDS_PER_WINDOW, windowMs: DEEPSEEK_WINDOW_MS });
+  if (signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
 }
 
 /**
@@ -873,6 +883,10 @@ export async function sendTurn(
   opts: OpenOptions & {
     timeoutMs?: number;
     signal?: AbortSignal;
+    model?: string;
+    thinking?: string;
+    configureThinking?: boolean;
+    fresh?: boolean;
     /**
      * Called with the answer so far, each time it grows.
      *
@@ -890,20 +904,27 @@ export async function sendTurn(
   // since an account was told it was sending too quickly. This driver had
   // none: a tool loop that finished in milliseconds sent its next message in
   // milliseconds, which is a rate no person reaches and a limiter notices.
-  await paceSend(opts.signal);
   // And the rate DeepSeek enforces without saying so: see `rateWaitMs`.
   await keepToRate(opts.signal);
   let page = await chatPage(opts);
   if (pendingNewChat) {
-    pendingNewChat = false;
     // Opening a conversation is the expensive request, and a compaction, a
     // lost thread or a recovery each open one — paced like the others.
     await paceNewChat(opts.signal);
+    if (opts.signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
     await gotoChat(page);
     await page.waitForTimeout(2_000);
+    pendingNewChat = false;
   }
   // Never type into a page that is still writing the last answer.
   await waitForAnswerToEnd(page, opts.signal);
+  if (opts.signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
+  // Apply settings to the page that will actually receive the message,
+  // after any reset navigation has replaced the previous conversation.
+  if (opts.fresh && modeFor(opts.model) !== "default") await setMode(modeFor(opts.model));
+  if ((opts.configureThinking || opts.thinking !== undefined) && !(await setDeepThink(wantsDeepThink(opts.thinking)))) {
+    throw new DeepSeekError("DeepSeek's thinking setting could not be verified. Refresh the chat and try again.", "composer-refused");
+  }
   // Both signals, because neither is sufficient alone. The node count is not
   // monotonic — DeepSeek renders the transcript into a virtual list and
   // unmounts what scrolls out of view, measured at four visible nodes after
@@ -937,17 +958,17 @@ export async function sendTurn(
     throw new DeepSeekError("DeepSeek's composer was not on the page.", "composer-refused");
   }
   if (accepted < text.length) {
-    logger.warn("deepseek", "the composer truncated the turn", {
-      sent: text.length,
-      accepted,
-    });
+    throw new DeepSeekError(`DeepSeek's composer accepted only ${accepted} of ${text.length} characters. Nothing was sent; compact the session and try again.`, "message-refused");
   }
   await page.waitForTimeout(300);
-  await page.keyboard.press("Enter");
+  if (opts.signal?.aborted) throw new DeepSeekError("interrupted", "interrupted");
+  assertNotCoolingDown();
   const sentAt = Date.now();
+  await page.keyboard.press("Enter");
   await confirmSent(
     page,
     async () => {
+      if (lastApiFailure && lastApiFailure.at >= sentAt) return lastApiFailure.error;
       const said = await serviceMessage(page, pageBefore, text);
       return said ? serviceError(said) : null;
     },
@@ -958,6 +979,7 @@ export async function sendTurn(
   /** When the reply's text last changed, as opposed to when it last differed from before the send. */
   let textChangedAt = Date.now();
   let last: string | null = null;
+  let completed = false;
   let quiet = 0;
   let recovered = false;
   let lastChange = Date.now();
@@ -975,6 +997,7 @@ export async function sendTurn(
         throw new DeepSeekError("interrupted", "interrupted");
       }
       await page.waitForTimeout(POLL_MS);
+      if (lastApiFailure && lastApiFailure.at >= sentAt) throw lastApiFailure.error;
       const now = await readLast(page);
       const fresh = now.count > before.count || now.text !== before.text;
       if (!fresh || !now.text) {
@@ -1043,6 +1066,7 @@ export async function sendTurn(
       const answered = answerStartedAt >= sentAt - 1_000 && !answerStillOpen(answersOpen, answerStartedAt);
       const need = answered ? SETTLE_POLLS_ANSWERED : SETTLE_POLLS;
       if (quiet >= need && answerSettled(answersOpen, answerStartedAt, Date.now() - textChangedAt)) {
+        completed = true;
         break;
       }
     } catch (e) {
@@ -1068,13 +1092,10 @@ export async function sendTurn(
       quiet = 0;
     }
   }
-  // Deliberately uncoded: the reply budget running out is classified by the
-  // default, which is a retry. That is what both drivers have always done
-  // with a budget timeout and it was not changed here - but it is a
-  // DeepSeekError like the rest, so the rule that every failure from this
-  // driver is one type holds, and giving it a code later is a one-line change.
-  if (last === null) {
-    throw new DeepSeekError("DeepSeek did not answer before the deadline.");
+  // Only a confirmed finish may reach the tool parser.
+  if (!completed || last === null) {
+    await stopGenerating(page);
+    throw new DeepSeekError("DeepSeek did not finish answering before the reply deadline. No tools from the incomplete reply were executed.", "service-error");
   }
   noteConversation(page.url());
   const ms = Date.now() - started;

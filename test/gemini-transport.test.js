@@ -16,6 +16,7 @@ const os = require("node:os");
 const path = require("node:path");
 
 const HOME = fs.mkdtempSync(path.join(os.tmpdir(), "onflip-gemini-tr-"));
+process.env.ONFLIP_CONFIG_DIR = path.join(HOME, ".onflip");
 process.env.USERPROFILE = HOME;
 process.env.HOME = HOME;
 process.env.ONFLIP_PROVIDER = "gemini";

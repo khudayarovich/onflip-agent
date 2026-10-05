@@ -1,8 +1,8 @@
 import { ChatMessage } from "../../types";
 import { logger } from "../../log";
-import { firstPositiveInt, loadConfig } from "../../config";
 import type { SendOptions, Transport, TransportReply } from "../../chatgpt/transport";
-import { assertNotCoolingDown, paceSend, sleepUnlessAborted } from "../../chatgpt/backoff";
+import { replyTimeoutMs } from "../../chatgpt/transport";
+import { assertNotCoolingDown, classifyFailure, paceSend, sleepUnlessAborted, startCooldown } from "../../chatgpt/backoff";
 import {
   buildGeminiRequest,
   generateStream,
@@ -24,8 +24,7 @@ import {
  *
  * What replaces them is quota. A free AI Studio key is limited per minute
  * and per day, and a tool loop that answers in two seconds reaches a
- * per-minute limit a person never would. Google is well-behaved about it —
- * every 429 carries the wait it wants — so a short stated wait is honoured
+ * per-minute limit a person never would. When Google supplies a wait, a short one is honoured
  * once, inside the turn, and anything longer is thrown as a `throttled`
  * failure for the engine's cooldown machinery, which already knows how to
  * pause, say so, and carry on by itself.
@@ -33,14 +32,6 @@ import {
 
 /** A stated wait this long is a pause in the turn, not the end of it. */
 const RETRY_INLINE_MAX_SECONDS = 65;
-
-function replyTimeoutMs(): number {
-  const seconds = firstPositiveInt(
-    [process.env.ONFLIP_REPLY_TIMEOUT, loadConfig().replyTimeout],
-    600
-  );
-  return seconds * 1_000;
-}
 
 export class GeminiTransport implements Transport {
   readonly name = "gemini" as const;
@@ -50,6 +41,7 @@ export class GeminiTransport implements Transport {
     // transport follows since 0.10.58.
     assertNotCoolingDown();
     await paceSend(opts.signal);
+    if (opts.signal.aborted) throw new GeminiError("interrupted", "interrupted");
 
     const key = storedGeminiKey();
     if (!key) {
@@ -85,9 +77,12 @@ export class GeminiTransport implements Transport {
       const throttled = e instanceof GeminiError && e.code === "throttled";
       const wait = throttled ? (e as GeminiError).retryAfterSeconds : undefined;
       if (!throttled || !wait || wait > RETRY_INLINE_MAX_SECONDS || opts.signal.aborted) throw e;
-      logger.info("gemini", "rate-limited; waiting the stated delay once", { seconds: wait });
-      await sleepUnlessAborted((wait + 1) * 1_000, opts.signal);
-      if (opts.signal.aborted) throw e;
+      const delay = Math.max(wait, classifyFailure((e as GeminiError).message, "throttled").seconds) + 1;
+      startCooldown(delay, (e as GeminiError).message, true);
+      logger.info("gemini", "rate-limited; waiting the stated delay once", { seconds: delay });
+      await sleepUnlessAborted(delay * 1_000, opts.signal);
+      if (opts.signal.aborted) throw new GeminiError("interrupted", "interrupted");
+      await paceSend(opts.signal);
       reply = await generateStream({
         key,
         model: opts.model,

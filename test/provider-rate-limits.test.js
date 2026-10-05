@@ -43,10 +43,10 @@ test("a wait the service states is read in the languages its pages use", () => {
   }
 });
 
-test("a stated wait becomes the cooldown, capped as before", () => {
+test("a stated wait becomes the full cooldown", () => {
   const four = classifyFailure("Qwen says: daily limit (retry-after 14400)", "throttled");
   assert.equal(four.kind, "cooldown");
-  assert.equal(four.seconds, 3600);
+  assert.equal(four.seconds, 14400);
   assert.equal(classifyFailure("DeepSeek says: slow down (retry-after 600)", "throttled").seconds, 600);
 });
 

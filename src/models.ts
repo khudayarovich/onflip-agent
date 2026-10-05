@@ -43,7 +43,7 @@ export function isWorkOnlySlug(slug: string): boolean {
  * the tiers every plan has; the real list replaces this on first contact.
  */
 const BUILTIN_MODELS: ModelInfo[] = [
-  { slug: "gpt-5-6-mini", label: "GPT-5.6 Luna", description: "fast and light — unlimited text chat on every plan" },
+  { slug: "gpt-5-6-mini", label: "GPT-5.6 Luna", description: "fast and light — text chat subject to plan terms and abuse safeguards" },
   { slug: "gpt-5-6", label: "GPT-5.6 Sol", description: "the full model; the thinking setting picks how hard it reasons" },
 ];
 
