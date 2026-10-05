@@ -45,7 +45,8 @@ import {
  * A turn ends structurally, not by reading the prose. The model closes it
  * with a `done` block (the final answer) or an `ask_user` block (a question
  * only the user can settle); a reply with neither and no tool call is a
- * protocol error, answered with an automated nudge and then — so nothing the
+ * protocol error, except a whole greeting or acknowledgement with no open
+ * work. Errors are answered with an automated nudge and then — so nothing the
  * model wrote is ever lost — accepted as the answer. The loop also ends when
  * the step budget runs out or the user interrupts.
  *
@@ -945,6 +946,23 @@ export async function runTurn(
     const variant = classifySlip(text, executedCalls, deniedCalls);
     const open = openTodoCount(opts.session.todos);
 
+    // A greeting is already answered by a greeting. Live, "hello" cost two
+    // sends solely to wrap the same answer in done. Keep this exception on
+    // the user's whole request, not on the model's words: "hello, fix…" must
+    // still follow the work protocol, as must a greeting with an open plan.
+    if (
+      variant === null &&
+      open === 0 &&
+      executedCalls === 0 &&
+      text.trim() &&
+      isSocialRequest(lastUserRequest(history))
+    ) {
+      const final = composeFinal(pendingProse, text);
+      logger.info("protocol", "social reply accepted without a closing-block retry");
+      events.onFinal?.(final, { kind: "prose", openTodos: 0 });
+      return finish("prose", final, iteration);
+    }
+
     if (!repeated && protocolCorrections < MAX_NO_BLOCK_NUDGES && totalNudges < MAX_NUDGES_PER_TURN) {
       protocolCorrections++;
       totalNudges++;
@@ -1479,6 +1497,13 @@ export function composeFinal(...parts: Array<string | undefined>): string {
     kept.push(part);
   }
   return kept.join("\n\n");
+}
+
+/** Whole greetings and acknowledgements only; never a request for work. */
+export function isSocialRequest(request: string | null): boolean {
+  if (!request || request.length > 100) return false;
+  const text = straighten(request.trim()).replace(/[.!?,…]+$/u, "").trim();
+  return /^(?:hello|hi|hey|good (?:morning|afternoon|evening)|thanks|thank you|thanks a lot|okay(?: nice)?|ok|nice|great|привет|здравствуйте|добрый (?:день|вечер)|доброе утро|спасибо|спасибо большое|хорошо|отлично|salom|assalomu alaykum|rahmat|katta rahmat|yaxshi|xo'p)$/iu.test(text);
 }
 
 /**

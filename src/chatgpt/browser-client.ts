@@ -29,6 +29,7 @@ import {
 } from "./selectors";
 import { paceNewChat, parseRetryAfter, secondsUntilClock, statedWaitSeconds } from "./backoff";
 import { logger, shapeOf } from "../log";
+import { parseTurn } from "../agent/protocol";
 
 /**
  * Drives a real ChatGPT web session through Playwright.
@@ -379,6 +380,38 @@ export function sameReplyText(page: string, stream: string): boolean {
   if (Math.min(a.length, b.length) < 12) return a === b;
   const k = Math.min(a.length, b.length, 80);
   return a.slice(0, k) === b.slice(0, k);
+}
+
+/**
+ * The watcher can miss the tail while the page receives it: measured, 383
+ * characters on the wire and a complete 555-character done block on the
+ * page after a web lookup. An idle page's closed, non-executing answer can
+ * settle that mismatch. Never use this to trust file changes or commands,
+ * an explicit length limit, or a stream that is still working.
+ */
+export function pageCompletesStreamReply(view: StreamView | null, text: string): boolean {
+  const visible = view?.visible;
+  if (
+    !view || view.state !== "done" || view.error || !visible ||
+    visible.status !== "in_progress" || visible.finishType || !visible.text.trim()
+  ) return false;
+  const key = (value: string) =>
+    value
+      .replace(/^([ \t]*`{3,}[ \t]*)([^\s`]+)[^\n]*$/gm, "$1$2")
+      .normalize("NFKC")
+      .replace(/[^\p{L}\p{N}]+/gu, "");
+  const partial = key(visible.text);
+  const complete = key(text);
+  if (partial.length < 20 || complete.length <= partial.length || !complete.startsWith(partial)) return false;
+  // parseTurn deliberately recovers some unclosed blocks. That recovery is
+  // useful elsewhere, but only a real closing fence proves a tail arrived.
+  const fence = /^(`{3,}|~{3,})onflip\b[^\n]*\n[\s\S]*\n\1\s*$/u.exec(text.trim());
+  if (!fence) return false;
+  const parsed = parseTurn(text);
+  return (
+    !parsed.malformed && parsed.calls.length === 1 &&
+    (parsed.calls[0].tool === "done" || parsed.calls[0].tool === "ask_user")
+  );
 }
 
 /** Stand a finished (or live) reply stream up for a test that has no browser to watch. */
@@ -882,7 +915,7 @@ function streamToolCalls(after: number): string[] {
  * What goes up with a reply: how the wait accepted it, and what its stream
  * said — cut off, continued, and which of ChatGPT's own tools it called.
  */
-export function replyMetaFor(after: number, accepted: ReplyMeta | null, continued: number): ReplyMeta {
+export function replyMetaFor(after: number, accepted: ReplyMeta | null, continued: number, pageText = ""): ReplyMeta {
   const view = streamView(after);
   const ownTools = streamToolCalls(after);
   // The model's own markdown, for when the page's rendering of it lost part
@@ -895,7 +928,9 @@ export function replyMetaFor(after: number, accepted: ReplyMeta | null, continue
   return {
     ...(accepted ?? {}),
     hookSeen: Boolean(accepted?.hookSeen || view),
-    truncated: Boolean(view?.truncated),
+    truncated: Boolean(view?.truncated && !(
+      accepted?.generatingAtAccept === false && pageCompletesStreamReply(view, pageText)
+    )),
     continued,
     ...(ownTools.length ? { chatgptTools: ownTools } : {}),
     ...(streamText ? { streamText } : {}),
@@ -4058,7 +4093,11 @@ async function sendOnce(
   // agent loop asks the model to resend rather than run a half-written call.
   let continued = 0;
   let view = streamView(streamSeqBefore);
-  while (view?.truncated && continued < MAX_CONTINUATIONS && !opts?.signal?.aborted) {
+  while (
+    view?.truncated &&
+    !(currentReplyMeta()?.generatingAtAccept === false && pageCompletesStreamReply(view, reply)) &&
+    continued < MAX_CONTINUATIONS && !opts?.signal?.aborted
+  ) {
     const seqBefore = streamSeq();
     if (!(await clickContinueGenerating(p))) {
       logger.warn("browser", "reply hit the length limit and no continue control was found", {
@@ -4084,7 +4123,13 @@ async function sendOnce(
   // Read back through a function: the assignment at the top of this one
   // narrows the module variable to null for the rest of the body, and
   // `waitForReply` has set it since.
-  const meta = replyMetaFor(streamSeqBefore, currentReplyMeta(), continued);
+  const meta = replyMetaFor(streamSeqBefore, currentReplyMeta(), continued, reply);
+  if (view?.truncated && !meta.truncated) {
+    logger.info("browser", "complete closing answer on the page resolved an unfinished stream capture", {
+      pageChars: reply.length,
+      streamChars: view.visible?.textLen ?? 0,
+    });
+  }
   lastReplyMeta = meta;
 
   // Pick up anything the model drew, before the next send overwrites the turn.

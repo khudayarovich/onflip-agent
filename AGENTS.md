@@ -435,6 +435,8 @@ A test harness that stubs `process.exit` must not then call anything that exits 
 
 ## Gotchas
 
+- **A whole greeting needs no closing-block retry.** The October 5 log recorded two Luna sends for "hello": a complete greeting followed by a protocol correction solely to wrap it in `done`. `isSocialRequest` accepts only whole greetings and acknowledgements in the supported languages. A no-block answer to one can finish immediately when there is no detected slip, no executed tool and no open task. "Hello, fix the app" still follows the full work protocol; this exception must never depend on the model calling its own answer a greeting.
+- **An incomplete stream capture can coexist with a complete page answer.** The same run captured 383 characters with `in_progress` after a web lookup, while the idle page held a complete 555-character `done` block. `pageCompletesStreamReply` reconciles only a closed `done` or `ask_user` block that extends the captured text, without any machine tool calls. Explicit `max_tokens`, a live/error stream, an unclosed fence, a different answer, and every reply carrying file changes or commands retain the truncation guard. Logging this reconciliation separately avoids calling a missing capture tail a model length limit.
 - Windows is a first-class target: `bash` shells out to PowerShell, and cookie decryption uses DPAPI.
 - Chrome's app-bound cookie encryption (`v20`) cannot be decrypted. The fallback is `onflip login --headed` with a persistent Playwright profile.
 - The browser transport's selectors are best-effort lists tried in order.

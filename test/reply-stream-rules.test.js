@@ -46,6 +46,55 @@ test("the next message waits only while frames are still arriving", () => {
 
 const { cutByStream } = require("../dist/chatgpt/browser-client");
 
+const { pageCompletesStreamReply, replyMetaFor, __setStreamFromSseForTest } = require("../dist/chatgpt/browser-client");
+const closingAnswer = "```onflip\ntool: done\nsummary: |\n  Everyday text chat has its own allowance. Other features can have separate limits.\n```";
+const partialAnswer = closingAnswer.slice(0, 75);
+const unfinishedView = (text = partialAnswer, extra = {}) => ({
+  state: "done", error: null,
+  visible: { status: "in_progress", finishType: null, text, textLen: text.length },
+  ...extra,
+});
+
+test("a complete closing answer on the page can resolve a missing stream tail", () => {
+  assert.equal(pageCompletesStreamReply(unfinishedView(), closingAnswer), true);
+  const question = "````onflip\ntool: ask_user\nquestion: |\n  Which of these two designs do you prefer for your project?\n````";
+  assert.equal(pageCompletesStreamReply(unfinishedView(question.slice(0, 75)), question), true);
+  assert.equal(pageCompletesStreamReply(unfinishedView(), closingAnswer.replace("done", "ask_user")), false, "it must extend this reply");
+});
+
+test("missing-tail reconciliation never trusts an unfinished fence, a different reply, or a live stream", () => {
+  assert.equal(pageCompletesStreamReply(unfinishedView(), closingAnswer.slice(0, -4)), false);
+  assert.equal(pageCompletesStreamReply(unfinishedView(), "```onflip\ntool: done\nsummary: Another answer.\n```"), false);
+  assert.equal(pageCompletesStreamReply(unfinishedView(), partialAnswer), false);
+  assert.equal(pageCompletesStreamReply(unfinishedView(partialAnswer, { state: "streaming" }), closingAnswer), false);
+  assert.equal(pageCompletesStreamReply(unfinishedView(partialAnswer, { state: "error" }), closingAnswer), false);
+});
+
+test("a closed fence never overrides explicit max_tokens or permits executable calls", () => {
+  const limited = unfinishedView(); limited.visible.finishType = "max_tokens";
+  assert.equal(pageCompletesStreamReply(limited, closingAnswer), false);
+  const write = "```onflip\ntool: write\npath: app.css\ncontent: |\n  .player.top{\n```";
+  assert.equal(pageCompletesStreamReply(unfinishedView(write.slice(0, 50)), write), false);
+  assert.equal(pageCompletesStreamReply(unfinishedView(write.slice(0, 50)), `${write}\n${closingAnswer}`), false);
+});
+
+test("transport metadata clears inferred truncation only for an idle complete closing answer", () => {
+  const frames = [
+    { message: { id: "m", author: { role: "assistant" }, status: "in_progress", content: { content_type: "text", parts: [partialAnswer] } } },
+    "[DONE]",
+  ];
+  const sse = frames.map(frame => `data: ${typeof frame === "string" ? frame : JSON.stringify(frame)}\n\n`).join("");
+  // Establish that this watcher ordinarily receives finished statuses.
+  __setStreamFromSseForTest('data: {"message":{"id":"prior","author":{"role":"assistant"},"status":"finished_successfully","content":{"parts":["Done."]}}}\n\ndata: [DONE]\n\n');
+  const after = __setStreamFromSseForTest(sse) - 1;
+  assert.equal(replyMetaFor(after, { generatingAtAccept: false }, 0, partialAnswer).truncated, true);
+  assert.equal(replyMetaFor(after, { generatingAtAccept: true }, 0, closingAnswer).truncated, true);
+  assert.equal(replyMetaFor(after, { generatingAtAccept: false }, 0, closingAnswer).truncated, false);
+  const explicitlyLimited = sse.replace('"status":"in_progress"', '"status":"in_progress","metadata":{"finish_details":{"type":"max_tokens"}}');
+  const limitedAfter = __setStreamFromSseForTest(explicitlyLimited) - 1;
+  assert.equal(replyMetaFor(limitedAfter, { generatingAtAccept: false }, 0, closingAnswer).truncated, true);
+});
+
 test("the status rule is only trusted once the stream has shown it reports one", () => {
   // Were ChatGPT to stop sending a message's final status, every reply would
   // end "in progress" — and every reply would be sent back as cut.
