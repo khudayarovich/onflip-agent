@@ -594,6 +594,17 @@ export class Engine {
     // model list to learn, only a probe, and are not held for it.
     const warming = (async () => {
       await this.checkSignInState().catch(() => {});
+      // A probe that found no session has already said everything the plan
+      // and model list could: both need a token, and reading them anyway
+      // hunted for one four more times — five tries and a reload each, 23
+      // seconds on a machine that had never signed in — while the first
+      // message waited the whole warming ceiling on it. A sign-in reads
+      // them again (`relearnAccount`), which is the next thing that can
+      // make them readable.
+      if (this.probeSignedIn === false) {
+        logger.info("engine", "not signed in; skipping the plan and model list until a sign-in");
+        return;
+      }
       await this.learnAccountModels().catch(() => {});
     })();
     this.warming = isBrowserProvider() || isApiKeyProvider() ? null : warming;

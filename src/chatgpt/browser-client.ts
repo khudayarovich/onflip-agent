@@ -1616,9 +1616,126 @@ async function capturePageState(p: Page): Promise<PageState | null> {
  * Only a signed-in page links to conversations of its own, so a page with
  * any such link is not the wall, whatever its titles say.
  */
+/**
+ * The words of ChatGPT's anonymous page, in the first few hundred characters
+ * of its text.
+ *
+ * Two shapes so far. The login wall of 2025 read "Log in … Sign up". The page
+ * of October 2026 has no wall: a composer, a sidebar, and a promo — "Log in to
+ * get answers based on saved chats, plus create images and upload files. Log
+ * in" — with "Sign up" nowhere in it. Measured on this project's machine with
+ * a profile that had never signed in: the old pattern matched nothing, so the
+ * whole 25,000-character prompt was typed into an anonymous chat and the
+ * turn spent 135 seconds learning what the page had said on arrival. Every
+ * reader of this text shares the pattern, so the next rewording is fixed in
+ * one place; `pageIsAnonymous` pairs it with the profile's own cookies,
+ * which need no words at all.
+ */
+export const ANONYMOUS_WALL = /\bLog in\b[\s\S]{0,120}\bSign up\b|\bLog in to get answers\b/i;
+
 export function looksSignedOut(state: Pick<PageState, "text" | "matches">): boolean {
   if ((state.matches?.history ?? 0) > 0) return false;
-  return /\bLog in\b[\s\S]{0,120}\bSign up\b/i.test(state.text);
+  return ANONYMOUS_WALL.test(state.text);
+}
+
+/** What to do with a page that is anonymous, or looks it. */
+export type AnonymousPageRecovery =
+  /** ChatGPT says the session is live: the look is a moment's rendering, and a reload is the remedy. */
+  | "reload"
+  /** The stored jar has not been tried yet: put it into the profile and reload. */
+  | "inject"
+  /** The jar was tried and the page stayed anonymous: only a newer session helps. */
+  | "jar-spent"
+  /** Nothing stored and nothing in the profile: there is no session to send with. */
+  | "no-session"
+  /** Only the words looked anonymous, and the profile holds a session: leave it to the send. */
+  | "proceed";
+
+/**
+ * Pure, because the wrong answer is expensive in both directions. Sending
+ * into an anonymous page costs the whole prompt, ninety seconds of silence
+ * and a retry (measured: 135 seconds to the first honest error, three times
+ * over with the automatic retries). Refusing a page that is in fact signed
+ * in tells a person to sign in to an account they are signed in to — which
+ * is what the session endpoint is asked first to prevent, and why words
+ * alone never refuse: a page whose profile still holds a session token is
+ * left to the send path, where a silence will say so with the page's census.
+ */
+export function anonymousPageRecovery(state: {
+  /** ChatGPT's session endpoint answered with a token, asked from the page. */
+  sessionLive: boolean;
+  /** Session-token cookies in the profile; negative when they could not be read. */
+  profileSessionCookies: number;
+  /** Cookies in the stored jar. */
+  storedCookies: number;
+  /** The jar has been put back once already and the page stayed anonymous. */
+  storedJarSpent: boolean;
+}): AnonymousPageRecovery {
+  if (state.sessionLive) return "reload";
+  if (state.storedCookies > 0) return state.storedJarSpent ? "jar-spent" : "inject";
+  if (state.profileSessionCookies === 0) return "no-session";
+  return "proceed";
+}
+
+const NO_SESSION_MESSAGE =
+  "OnFlip is not signed in to ChatGPT, so the page is in anonymous mode and a message sent there goes nowhere. " +
+  "Open the account menu (bottom left) and choose \"Sign in\", then send again.";
+const JAR_SPENT_MESSAGE =
+  "ChatGPT is signed out and the stored session did not restore it. That session has expired — " +
+  "sign in again from the account menu, or use “Use my Firefox session” if you are signed in there.";
+
+/**
+ * The page is anonymous: by its words, or because the profile driving it
+ * holds no session token at all. The second test is the one that needs no
+ * wording and cannot be out of date — ChatGPT's session is that cookie — and
+ * a profile whose cookies cannot be read counts as holding one, as it does
+ * for `shouldInjectStoredSession`.
+ */
+async function pageIsAnonymous(p: Page): Promise<boolean> {
+  if (await looksAnonymous(p).catch(() => false)) return true;
+  return context ? (await profileSessionCookies(context)) === 0 : false;
+}
+
+/**
+ * Settle an anonymous page before anything is typed into it.
+ *
+ * Reloads on a live session, puts the stored jar back when it has not been
+ * tried, and otherwise refuses with the one message that helps — a fatal
+ * `signed-out`, so nothing retries into it and the engine saves the
+ * message for after the sign-in. Answers whether the page was acted on.
+ */
+async function settleAnonymousPage(p: Page, model: string | undefined, where: string): Promise<boolean> {
+  if (!context) return false;
+  if (!(await pageIsAnonymous(p))) return false;
+  const verdict = anonymousPageRecovery({
+    sessionLive: await sessionAnswers(p),
+    profileSessionCookies: await profileSessionCookies(context),
+    storedCookies: injectedCookies.length,
+    storedJarSpent,
+  });
+  logger.info("browser", "the page is anonymous", { where, verdict, url: p.url() });
+  switch (verdict) {
+    case "reload":
+      logger.warn("browser", "the page looked signed out on a live session; reloading it", { url: p.url() });
+      await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 });
+      await assertLoggedIn(p);
+      return true;
+    case "inject":
+      logger.warn("browser", "the page came up logged out; putting the session back and reloading", {
+        url: p.url(),
+        cookies: injectedCookies.length,
+      });
+      await injectCookies(context, injectedCookies);
+      await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 });
+      await assertLoggedIn(p);
+      return true;
+    case "jar-spent":
+      throw new ChatGPTBrowserError(JAR_SPENT_MESSAGE, "signed-out");
+    case "no-session":
+      throw new ChatGPTBrowserError(NO_SESSION_MESSAGE, "signed-out");
+    case "proceed":
+      return false;
+  }
 }
 
 /** The census, without the page's own words, for a log line. */
@@ -1678,7 +1795,7 @@ const SIGNED_OUT_MESSAGE =
 export const CHALLENGE_PROBE = `(() => {
   const text = ((document.body && document.body.innerText) || "").slice(0, 400);
   const worded = /just a moment|checking your browser|verify you are human|проверка браузера|подтвердите, что вы человек|минуточку/i.test(text);
-  const app = document.querySelector("nav, #prompt-textarea, [data-message-author-role]");
+  const app = document.querySelector("nav, #prompt-textarea, form [role='textbox'], [data-message-author-role], [data-user-message-bubble]");
   return worded && !app;
 })()`;
 
@@ -1812,24 +1929,14 @@ async function openNewChat(p: Page, model?: string, signal?: AbortSignal): Promi
   // the same doomed write, and running it on every new chat is half of what
   // made the seventeen-minute loop. Leaving it alone lets the send path
   // reach its one honest error instead.
-  if (context && (await looksAnonymous(p).catch(() => false))) {
-    // ChatGPT's own answer first (see `sessionAnswers`): on a live session
-    // the look is a moment's rendering, and a reload is the whole remedy —
-    // writing a stored copy over that session was how a fresh sign-in got
-    // undone.
-    if (await sessionAnswers(p)) {
-      logger.warn("browser", "new chat looked signed out on a live session; reloading it", { url: p.url() });
-      await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 });
-      await assertLoggedIn(p);
-    } else if (injectedCookies.length > 0 && !storedJarSpent) {
-      logger.warn("browser", "new chat came up logged out; putting the session back and reloading", {
-        url: p.url(),
-      });
-      await injectCookies(context, injectedCookies);
-      await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 });
-      await assertLoggedIn(p);
-    }
-  }
+  //
+  // And a profile with no session at all is refused here, before the prompt
+  // is typed. Reported as "ChatGPT never finishes loading": on a machine that
+  // had never signed in, the anonymous page of October 2026 passed the old
+  // wording check, the whole prompt went into an anonymous chat, and the turn
+  // sat on "Still working" until the silence guard read the page 135 seconds
+  // later — with the start-up probe having said "not signed in" all along.
+  await settleAnonymousPage(p, model, "new chat");
 
   const composer = await firstVisible(p, COMPOSER_SELECTORS, 30_000);
   if (!composer) {
@@ -1903,7 +2010,10 @@ async function verifyPageModel(p: Page, model?: string): Promise<void> {
     return;
   }
   logger.warn("browser", "page opened on a different model", { requested: model, shown });
-  lastComposerWarning = `ChatGPT opened this chat on "${shown}" instead of the selected model — the page's own preference overrode the request, so replies may come from a different model. Selecting the model again with /model re-asserts it.`;
+  // Measured on 2026-10-16: the frontend of October 2026 ignores `?model=`
+  // and opens every chat on the model its own picker has selected, so the
+  // remedy is in ChatGPT's picker, not in OnFlip's.
+  lastComposerWarning = `ChatGPT opened this chat on "${shown}" instead of the selected model — the page no longer takes the model from the request, so replies come from the model chosen in ChatGPT's own picker. Pick the one you want there (it is remembered for the account) and send again.`;
 }
 
 /** The conversation id in a `/c/<id>` URL, when the page is on one. */
@@ -2699,7 +2809,7 @@ const IS_COMPOSER_FOCUSED = new Function(
 /** How many user turns the conversation shows. */
 async function userTurnCount(p: Page): Promise<number> {
   try {
-    return await p.locator("[data-message-author-role='user']").count();
+    return await p.locator(USER_TURN_QUERY).count();
   } catch {
     return 0;
   }
@@ -2824,7 +2934,15 @@ export const EXTRACT_MESSAGE = new Function(
     if (node.nodeType !== 1) return "";
     const tag = node.tagName.toLowerCase();
 
-    if (tag === "pre") {
+    // A fenced block. ChatGPT rendered one as <pre><code> until October
+    // 2026; the page since then has no <pre> at all — a div carrying
+    // data-code-block="true" holds a header (the language label and a copy
+    // button) and a div[data-code-block-source] whose <code> keeps each line
+    // in a span with a newline text node between. Walked generically, that
+    // <code> read as inline code and the padding rule above dropped every
+    // newline between the spans — "tool: done" and "summary: |" ran together
+    // into one line, and every closing block came back as prose (issue #1).
+    if (tag === "pre" || node.getAttribute("data-code-block") === "true") {
       const code = node.querySelector("code");
       const cls = (code && code.className) || "";
       const m = /language-([\\w+#.-]+)/.exec(cls);
@@ -2997,6 +3115,10 @@ export const OBSERVE_REVISION = new Function(
 /** The attributes worth waking the counter for: the ones this file reads. */
 export const REVISION_ATTRIBUTES = [
   "data-message-author-role",
+  // The frontend of October 2026 (see ASSISTANT_SELECTORS).
+  "data-conversation-role",
+  "data-markdown-text-style",
+  "data-user-message-bubble",
   "data-testid",
   "data-turn",
   "data-streaming-response-status",
@@ -3620,11 +3742,15 @@ async function looksAnonymous(p: Page): Promise<boolean> {
   // "sign up" too, and acting on that would tell a signed-in user they are
   // signed out. So the text rule is paired with a structural one — a page
   // showing a conversation has message nodes, a login wall has none.
+  // The pattern is pasted in as the regex prints itself, so its backslashes
+  // reach the page intact — a template literal would halve them (see the
+  // note on `new Function` in AGENTS.md), and "Log in" is the half of this
+  // that has already gone stale once.
   const WALL =
     `(() => {` +
     `  var text = ((document.body && document.body.innerText) || "").slice(0, 400);` +
-    `  var wall = /\\bLog in\\b[\\s\\S]{0,120}\\bSign up\\b/i.test(text);` +
-    `  var messages = document.querySelectorAll("[data-message-author-role]").length;` +
+    `  var wall = ${ANONYMOUS_WALL.toString()}.test(text);` +
+    `  var messages = document.querySelectorAll(${JSON.stringify(ANY_MESSAGE_QUERY)}).length;` +
     `  return wall && messages === 0;` +
     `})()`;
   return Boolean(await p.evaluate(WALL).catch(() => false));
@@ -3730,7 +3856,7 @@ export async function readSessionFacts(
 
 /** Signed out by the page's look, and by ChatGPT's own account of the session. */
 async function signedOutForSure(p: Page): Promise<boolean> {
-  if (!(await looksAnonymous(p).catch(() => false))) return false;
+  if (!(await pageIsAnonymous(p))) return false;
   return !(await sessionAnswers(p));
 }
 
@@ -3754,12 +3880,19 @@ async function recoverAnonymousPage(
   midConversation: boolean
 ): Promise<void> {
   if (!context) return;
-  if (!(await looksAnonymous(p).catch(() => false))) return;
+  if (!(await pageIsAnonymous(p))) return;
 
   // ChatGPT's own answer first (see `sessionAnswers`). A live session only
   // needs the page reloaded; nothing stored goes over it, and nobody is told
   // to sign in to an account they are signed in to.
-  if (await sessionAnswers(p)) {
+  const verdict = anonymousPageRecovery({
+    sessionLive: await sessionAnswers(p),
+    profileSessionCookies: await profileSessionCookies(context),
+    storedCookies: cookies.length,
+    storedJarSpent,
+  });
+  logger.info("browser", "the page is anonymous", { where: "before sending", verdict, url: p.url() });
+  if (verdict === "reload") {
     logger.warn("browser", "the page looked signed out on a live session; reloading it", { url: p.url() });
     await p.goto(newChatUrl(model), { waitUntil: "domcontentloaded", timeout: 45_000 }).catch(() => {});
     await p.waitForTimeout(1_200);
@@ -3775,18 +3908,19 @@ async function recoverAnonymousPage(
     }
     return;
   }
-  if (cookies.length === 0) return;
+  // Only the words looked anonymous while the profile holds a session and
+  // there is nothing stored to compare it with: the send decides, and a
+  // silence afterwards reads the page's census.
+  if (verdict === "proceed") return;
+  // Nothing stored and nothing in the profile. Sending would type the whole
+  // prompt into an anonymous chat and wait out the silence guard for the
+  // same answer this gives at once.
+  if (verdict === "no-session") throw new ChatGPTBrowserError(NO_SESSION_MESSAGE, "signed-out");
 
   // The jar has already been tried against an anonymous page and lost. It is
   // the same bytes it was a minute ago, so a second go is not a recovery —
   // it is the loop this guard exists to end. Say what actually fixes it.
-  if (storedJarSpent) {
-    throw new ChatGPTBrowserError(
-      "ChatGPT is signed out and the stored session did not restore it. That session has expired — " +
-        "sign in again from the account menu, or use “Use my Firefox session” if you are signed in there.",
-      "signed-out"
-    );
-  }
+  if (verdict === "jar-spent") throw new ChatGPTBrowserError(JAR_SPENT_MESSAGE, "signed-out");
 
   logger.warn("browser", "page came up logged out; re-injecting the session", {
     url: p.url(),
@@ -4651,9 +4785,12 @@ export async function waitForReply(
     // a signed-out profile still shows a composer (anonymous mode), accepts
     // the message into a /uc/ chat, and answers nothing our reader can see.
     // Retrying into that is pointless; only signing in fixes it.
+    // The profile's own cookies are the test that needs no wording: the
+    // anonymous page has been reworded once already (see `ANONYMOUS_WALL`).
+    const noSessionCookie = context ? (await profileSessionCookies(context)) === 0 : false;
     if (
       pageState &&
-      (/\/uc\//.test(pageState.url) || looksSignedOut(pageState)) &&
+      (/\/uc\//.test(pageState.url) || looksSignedOut(pageState) || noSessionCookie) &&
       !(await sessionAnswers(p))
     ) {
       throw new ChatGPTBrowserError(

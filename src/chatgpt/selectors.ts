@@ -31,6 +31,10 @@ export function joined(selectors: readonly string[]): string {
 export const COMPOSER_SELECTORS = [
   "#prompt-textarea",
   "div[contenteditable='true'][id='prompt-textarea']",
+  // The frontend of October 2026: no id, a ProseMirror textbox labelled
+  // "Ask ChatGPT" inside the form. Measured on a Free and a Pro Lite
+  // account on 2026-10-16.
+  "form div[role='textbox'][contenteditable='true']",
   "textarea[data-id='root']",
   "div.ProseMirror[contenteditable='true']",
   "form textarea",
@@ -47,6 +51,12 @@ export const COMPOSER_QUERY = joined(COMPOSER_SELECTORS);
  */
 export const ASSISTANT_SELECTORS = [
   "[data-message-author-role='assistant']",
+  // The frontend of October 2026 dropped `data-message-author-role`
+  // altogether. A reply is an `h4[data-conversation-role='assistant']`
+  // heading ("ChatGPT said:") followed by a markdown root carrying this
+  // attribute; the user's bubble has no markdown root, so this cannot read
+  // the sent message back as the reply. Measured 2026-10-16 (issue #1).
+  "[data-markdown-text-style='assistant-message']",
   "article[data-testid^='conversation-turn'] [data-message-author-role='assistant']",
   ".agent-turn [data-message-author-role='assistant']",
   ".agent-turn .markdown",
@@ -54,7 +64,12 @@ export const ASSISTANT_SELECTORS = [
 export const ASSISTANT_QUERY = joined(ASSISTANT_SELECTORS);
 
 /** The user's own turns, for proving a send actually landed. */
-export const USER_TURN_SELECTORS = ["[data-message-author-role='user']"] as const;
+export const USER_TURN_SELECTORS = [
+  "[data-message-author-role='user']",
+  // October 2026: the user's turn is a bubble with this attribute and no
+  // role attribute at all.
+  "[data-user-message-bubble='true']",
+] as const;
 export const USER_TURN_QUERY = joined(USER_TURN_SELECTORS);
 
 /**
@@ -69,6 +84,10 @@ export const STOP_SELECTORS = [
   // The newer composer folds send and stop into one control and tells them
   // apart by label.
   "#composer-submit-button[aria-label='Stop streaming']",
+  // October 2026: the form's send control becomes a plain button labelled
+  // "Stop" while the reply is written, and lingers a while after the text
+  // has landed — which is why a stop control may only shorten a wait.
+  "form button[aria-label='Stop']",
   "button[aria-label*='Stop']",
   "button[aria-label*='stop']",
 ] as const;
@@ -78,6 +97,8 @@ export const STOP_QUERY = joined(STOP_SELECTORS);
 export const SEND_SELECTORS = [
   "button[data-testid='send-button']",
   "button[data-testid='composer-send-button']",
+  // October 2026: the form's submit button, labelled "Send", no test id.
+  "form button[type='submit'][aria-label='Send']",
   "button[aria-label*='Send']",
 ] as const;
 export const SEND_QUERY = joined(SEND_SELECTORS);
@@ -99,6 +120,10 @@ export const SEND_QUERY = joined(SEND_SELECTORS);
  * `aria-haspopup="menu"` alone is a shape plenty of other controls share.
  */
 export const MODEL_SWITCHER_SELECTORS = [
+  // October 2026: the pill is labelled, at last. A Free account has no pill
+  // at all on this frontend, which `verifyPageModel` reads as nothing to
+  // verify.
+  "form button[aria-haspopup='menu'][aria-label='Select ChatGPT model']",
   "form button[aria-haspopup='menu'][data-tone='neutral']",
   "form button.__composer-pill--neutral[aria-haspopup='menu']",
   "[data-testid='model-switcher-dropdown-button']",
@@ -118,7 +143,8 @@ export const FILE_INPUT_QUERY = joined(FILE_INPUT_SELECTORS);
 export const TOAST_QUERY = "[role='alert'], [role='status'], [data-sonner-toast], .toast";
 
 /** A message node of either role, used to tell a thread from a login wall. */
-export const ANY_MESSAGE_QUERY = "[data-message-author-role]";
+export const ANY_MESSAGE_QUERY =
+  "[data-message-author-role], [data-user-message-bubble='true'], [data-markdown-text-style='assistant-message'], [data-conversation-role]";
 
 /**
  * A link to one of the account's own conversations. Only a signed-in page
