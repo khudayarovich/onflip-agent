@@ -36,9 +36,10 @@ account already costs:
 > [62% fewer factual errors than Instant](https://openai.com/index/improving-gpt-5-6-sol-in-chatgpt/).
 > An agent's dozens-of-messages-per-task appetite stops being a cost at all.
 >
-> **On Plus and Pro**, the same app runs on **GPT-5.6 Sol** and its far larger
-> context window — OnFlip reads your plan and the model's window and sizes its
-> own context budget to match, so long sessions summarise themselves far less
+> **On Plus and Pro**, the same app runs on the larger models your plan
+> unlocks, picked in ChatGPT's own model menu, and their far larger context
+> windows — OnFlip reads your plan and the model's window and sizes its own
+> context budget to match, so long sessions summarise themselves far less
 > often.
 
 The honest caveat: unlimited covers *text*. Free accounts still have limits on
@@ -61,7 +62,7 @@ produces documents — asking your approval before anything risky.
 
 Everything happens on your machine. There is no OnFlip server, no telemetry, and
 no account to create: the app talks to the chat service through your own browser
-session and to nothing else.
+session (on Gemini, to Google's API with your own key) and to nothing else.
 
 ## Four services, one app
 
@@ -73,10 +74,10 @@ settings, and nothing crosses between them.
 | --- | --- | --- | --- | --- |
 | Sign-in | Browser session | Browser session | Browser session | A free API key, pasted once |
 | Cost | Free plan upward | Free | Free | Free tier upward |
-| Models | Whatever your plan offers | One model | Qwen3 Plus · Qwen3 Max | Whatever your key offers, newest first |
-| Reasoning | Off · low · medium · high | DeepThink on or off | Decides for itself | Off · low · medium · high (thinking budget) |
+| Models | Whatever your plan offers, picked in ChatGPT's own model menu | One model | Qwen3 Plus · Qwen3 Max | Whatever your key offers, newest first |
+| Reasoning | Comes with the model picked in ChatGPT | DeepThink on or off | Decides for itself | Off · low · medium · high (thinking budget) |
 | Attachments | Yes (upload limits by plan) | Yes | Not yet | Not yet |
-| Projects | Yes — chats filed into an "OnFlip" project | No | No | No |
+| Your chat list | Left alone — OnFlip's chats are Temporary Chats | OnFlip's chats appear in it | OnFlip's chats appear in it | None — chats live on your machine |
 | Reopen earlier chats | Yes | Only ones OnFlip started | Only ones OnFlip started | Chats live only on your machine |
 | Usage caps | Per plan, as above | None to work around | A daily allowance | Free-tier rate limits, waited out |
 
@@ -111,16 +112,20 @@ Apple or Microsoft works at all.
 
 ## What it can do
 
-- **Work in a project folder.** Open a directory and describe a change. OnFlip reads the code, edits it, runs your build or tests, and reports what actually happened — never what it imagines happened.
+- **Work in a project folder.** Open a directory and describe a change. OnFlip reads the code, edits it, runs your build or tests, and reports what actually happened — never what it imagines happened. A map of the project's folders is there from the first message, and definitions are looked up by name, so a session starts on the work instead of surveying the code.
+- **Check its work before calling it done.** OnFlip remembers which build, test or typecheck passed in a project. When the agent says it has finished a change that nothing has checked, OnFlip runs that check first and sends any failure back to the agent to fix, not to you. A web page it built is checked in the browser's console (errors, warnings and logs), not only by its markup.
 - **Work with no folder at all.** Start a chat without a project and ask for a document, a spreadsheet, a script. Files it produces appear in the transcript with **Save** and **Open** buttons.
 - **Run commands.** A real shell, behind an approval layer you control — from read-only through to unrestricted.
 - **Browse.** A real browser you can watch *and touch*: click, scroll and type into the page the agent is driving, then hand it back.
 - **Two sessions at once.** Each window runs its own agent with its own browser, the way two chat tabs are two conversations.
 - **Four services.** ChatGPT, DeepSeek, Qwen or Gemini API, switched from the account menu, each with its own sign-in and its own chats.
+- **Ask you properly.** When the agent needs a decision, its options arrive as buttons, with the one it recommends marked. Click one, or type an answer of your own.
+- **Scheduled prompts.** Save a prompt and a schedule (hourly, daily, weekdays, weekly, monthly, or any cron expression), and OnFlip sends it to that project's chat as if you had typed it.
 - **Sub-tasks.** Hand a self-contained job to a second agent with a conversation of its own, and watch what it did in the Sub-tasks panel. Off by default — it spends more of your allowance — and one switch away in Settings.
 - **Telegram.** Add a bot token and drive the same agent from your phone: send tasks, approve actions, switch models and services.
-- **Look after itself.** A turn that goes silent is restarted automatically (three attempts, then it tells you); a service's own errors are quoted in the chat rather than spun on; updates install in place, checksum-verified.
+- **Look after itself.** A turn that goes silent is restarted automatically (three attempts, then it tells you). A service's own errors and usage limits are quoted in the chat, never spun on: a short pause is waited out, and a long one is left for you to decide. A signed-out session is reported within seconds, before anything is typed. On DeepSeek and Qwen, an app left open stops checking in with the service after twenty minutes and closes its browser after two hours. Updates install in place, checksum-verified.
 - **Undo and inspect.** Every file change is snapshotted: see the diff for the session, revert the last change, export the transcript.
+- **Your language, your theme.** English, Russian or Uzbek, in a dark or a light theme.
 
 ## Support the project
 
@@ -189,7 +194,7 @@ There is no OnFlip server. Nothing is sent anywhere except to the chat service y
 - **Your sessions** — one per service — are stored on your machine (`~/.onflip`) and used only to talk to that service. They are kept apart on disk, and none can read another's. The Gemini key is stored the same way, sent only to Google, and never shown back once pasted.
 - **Conversations** are plain JSON on disk, readable and deletable by hand.
 - **Files** are read and written where you point the agent; nothing is uploaded anywhere else.
-- **Chats OnFlip creates** on chatgpt.com are filed into an "OnFlip" project so they stay out of your main list, and deleting a session offers to delete them too. DeepSeek has no projects, so its chats stay in its own list.
+- **Chats OnFlip creates** on chatgpt.com are Temporary Chats, so they stay out of your ChatGPT history, sidebar and memory. (`"temporaryChats": false` in `~/.onflip/config.json` keeps them instead, filed into an "OnFlip" project.) DeepSeek and Qwen have no such mode, so their chats stay in their own lists.
 
 ## Frequently asked
 
@@ -197,7 +202,7 @@ There is no OnFlip server. Nothing is sent anywhere except to the chat service y
 
 **Why can't it just read my Chrome session?** Chrome and Edge encrypt their cookies with a key bound to the browser itself, and recent Chrome refuses to be driven with its own profile. Both are deliberate anti-theft protections, and the ways around them are the ways malware gets in — so OnFlip does not go around them. Instead it signs in inside the real browser on a profile of its own, and drives that profile afterwards with the same browser, which can read its own cookies. Firefox sessions can still be imported directly.
 
-**Which model does it use?** On ChatGPT, whatever your account offers, chosen from the model chip: Free and Go accounts default to GPT-5.6 Luna, the plan with unlimited text chats; Plus and Pro run GPT-5.6 Sol in regular chat. On DeepSeek there is one model, with DeepThink on or off. On Qwen, two models that decide for themselves when to think. On Gemini, the chip lists what your own key reports, newest generation first, and defaults to the current Flash. OnFlip sizes its context budget from whichever service and model you are on.
+**Which model does it use?** On ChatGPT, the model selected in ChatGPT's own model menu. Since ChatGPT redesigned its page in October 2026, every chat opens on that model, whatever OnFlip asks for. OnFlip tells you when the two differ, so pick the one you want in ChatGPT and it is remembered for the account. A Free account has no menu and runs GPT-5.6 Luna, the model with unlimited text chats. On DeepSeek there is one model, with DeepThink on or off. On Qwen, two models that decide for themselves when to think. On Gemini, the chip lists what your own key reports, newest generation first, and defaults to the current Flash. OnFlip sizes its context budget from whichever service and model you are on.
 
 **Can I use several accounts?** Yes, one at a time. Switching restarts the app on the service you pick; every sign-in stays valid, so switching back needs no new login.
 
